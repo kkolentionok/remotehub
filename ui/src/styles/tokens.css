@@ -1,0 +1,106 @@
+/* =====================================================================
+ * Design tokens.
+ *
+ * Single source of truth for colors, spacing, radii, typography.
+ * Components reference `var(--color-...)` etc. Never hardcode hex.
+ *
+ * Stage 1.7 visual pass: lighter dark background (#1a1a1f instead of
+ * near-black), Inter + JetBrains Mono fonts, tighter density, rounded
+ * sidebar items. Termius-influenced.
+ * ===================================================================== */
+
+:root {
+    /* Surfaces (dark by default) — slightly warmer / lighter than before
+     * so the UI feels less "void". Termius uses ~#1a1d24; we go a touch
+     * darker to keep our blue accent visually distinct on it. */
+    --color-canvas: #15171c;
+    --color-surface: #1a1d24;
+    --color-subtle: rgba(255, 255, 255, 0.04);
+    --color-elevated: #232730;
+    --color-border: #2c303a;
+    --color-border-strong: #3a3f4c;
+
+    /* Foreground */
+    --color-fg: #e8eaed;
+    --color-fg-muted: #9aa0ac;
+    --color-fg-faint: #5d6373;
+
+    /* Accent — one color for selection, focus, primary actions */
+    --color-accent: #4c8eff;
+    --color-accent-hover: #3a7ae8;
+    --color-accent-fg: #ffffff;
+
+    /* Status */
+    --color-danger: #f87171;
+    --color-danger-bg: rgba(248, 113, 113, 0.1);
+    --color-success: #4ade80;
+    --color-warning: #fbbf24;
+
+    /* Protocol indicators */
+    --color-ssh: #4ade80;
+    --color-rdp: #60a5fa;
+
+    /* Typography — Inter for UI, JetBrains Mono for IDs/addresses.
+     * Loaded via Google Fonts in index.html. Fallback stack stays so
+     * the app remains usable if fonts fail to load. */
+    --font-sans:
+        "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable",
+        "Segoe UI", Roboto, sans-serif;
+    --font-mono:
+        "JetBrains Mono", ui-monospace, "Cascadia Mono", "SF Mono", "Consolas",
+        "Liberation Mono", monospace;
+
+    /* Slightly bumped scale — Inter reads small. */
+    --text-xs: 11px;
+    --text-sm: 13px;
+    --text-base: 14px;
+    --text-md: 15px;
+    --text-lg: 17px;
+    --text-xl: 22px;
+
+    /* Spacing — 4px grid */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 24px;
+    --space-8: 32px;
+
+    /* Radius — Termius uses generous corners on rows + cards. */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 10px;
+
+    /* Sidebar width */
+    --sidebar-width: 280px;
+
+    /* Z-layers */
+    --z-dialog: 100;
+    --z-toast: 200;
+}
+
+/* Light mode overrides — kept restrained, same accent. */
+@media (prefers-color-scheme: light) {
+    :root {
+        --color-canvas: #fafafa;
+        --color-surface: #ffffff;
+        --color-subtle: rgba(0, 0, 0, 0.04);
+        --color-elevated: #ffffff;
+        --color-border: #e4e4e7;
+        --color-border-strong: #d4d4d8;
+
+        --color-fg: #18181b;
+        --color-fg-muted: #52525b;
+        --color-fg-faint: #a1a1aa;
+
+        --color-danger: #dc2626;
+        --color-danger-bg: rgba(220, 38, 38, 0.08);
+        --color-success: #16a34a;
+        --color-warning: #d97706;
+
+        --color-ssh: #16a34a;
+        --color-rdp: #2563eb;
+    }
+}

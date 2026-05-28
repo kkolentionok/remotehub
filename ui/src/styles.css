@@ -1,0 +1,58 @@
+@import "./styles/tokens.css";
+
+/* =====================================================================
+ * Reset + base.
+ * ===================================================================== */
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+    height: 100%;
+    margin: 0;
+}
+
+body {
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: 1.45;
+    color: var(--color-fg);
+    background: var(--color-canvas);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;       /* App owns its own scroll regions */
+}
+
+button {
+    font-family: inherit;
+    font-size: inherit;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    color: inherit;
+    padding: 0;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+}
+
+input,
+textarea,
+select {
+    font-family: inherit;
+    font-size: inherit;
+    color: inherit;
+}
+
+code,
+kbd,
+.mono {
+    font-family: var(--font-mono);
+}

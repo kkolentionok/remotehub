@@ -1,0 +1,199 @@
+/**
+ * English translations. Source of truth for the message catalogue —
+ * RU mirrors keys 1:1.
+ *
+ * Conventions:
+ * - Keys are dot.separated and grouped by feature: `sidebar.*`, `host.*`,
+ *   `credential.*`, `dialog.*`, `error.*`.
+ * - Interpolation uses `{name}` placeholders, resolved by the `t()` helper.
+ * - Singular/plural pairs use `{count}` and a `_one`/`_other` suffix on
+ *   the key. Caller passes `count`; helper picks the right variant.
+ */
+
+export const messages = {
+    // ------------------------------------------------------------------
+    // Common verbs / actions
+    // ------------------------------------------------------------------
+    "common.cancel": "Cancel",
+    "common.save": "Save",
+    "common.create": "Create",
+    "common.delete": "Delete",
+    "common.edit": "Edit",
+    "common.duplicate": "Duplicate",
+    "common.done": "Done",
+    "common.add": "Add",
+    "common.close": "Close",
+    "common.search": "Search",
+    "common.optional": "Optional",
+    "common.none": "None",
+    "common.loading": "Loading…",
+    "common.working": "Working…",
+    "common.saving": "Saving…",
+    "common.copy": "Copy",
+    "common.copied": "Copied",
+    "common.show": "Show",
+    "common.hide": "Hide",
+
+    // ------------------------------------------------------------------
+    // Sidebar
+    // ------------------------------------------------------------------
+    "sidebar.searchPlaceholder": "Search hosts…",
+    "sidebar.newHost": "Host",
+    "sidebar.newGroup": "Group",
+    "sidebar.credentials": "Credentials",
+    "sidebar.settings": "Settings",
+    "sidebar.settingsComingSoon": "Settings (coming in Stage 1.6)",
+    "sidebar.ungrouped": "Ungrouped",
+    "sidebar.empty": "No hosts yet. Click + below to add one.",
+    "sidebar.emptySearch": "No hosts match",
+    "sidebar.addHostInGroup": "Add host in this group",
+    "sidebar.editGroup": "Edit group",
+    "sidebar.draft": "Draft",
+
+    // ------------------------------------------------------------------
+    // Host detail (main pane)
+    // ------------------------------------------------------------------
+    "host.welcome.title": "Welcome to RemoteHub",
+    "host.welcome.description": "Select a host from the sidebar, or create a new one with the + button.",
+    "host.error.loadFailed": "Could not load host",
+    "host.connect": "Connect",
+    "host.connectDisabled": "SSH sessions arrive in Stage 2",
+    "host.tags": "Tags",
+    "host.group": "Group",
+    "host.credential": "Credential",
+    "host.noCredential": "No credential",
+    "host.showDetails": "Details",
+    "host.hideDetails": "Hide details",
+    "host.created": "Created",
+    "host.updated": "Updated",
+    "host.id": "ID",
+    "host.notes": "Notes",
+    "host.reveal.show": "Show password",
+    "host.reveal.hide": "Hide password",
+    "host.reveal.timeLeft": "{seconds}s",
+    "host.sshKeyLabel": "SSH key",
+    "host.newHost": "New host",
+    "host.technicalInfo": "Technical info",
+    "host.credentialLinked": "Linked to: {name}",
+    "host.save.pending": "Pending save",
+    "host.save.saving": "Saving",
+    "host.save.saved": "Saved",
+    "host.save.error": "Save failed",
+
+    // ------------------------------------------------------------------
+    // Dialogs
+    // ------------------------------------------------------------------
+    "dialog.host.newTitle": "New host",
+    "dialog.host.editTitle": "Edit host",
+    "dialog.host.address": "Address",
+    "dialog.host.addressPlaceholder": "IP or hostname",
+    "dialog.host.port": "Port",
+    "dialog.host.portHint": "default {port}",
+    "dialog.host.label": "Label",
+    "dialog.host.labelPlaceholder": "Friendly name",
+    "dialog.host.protocol": "Protocol",
+    "dialog.host.groupField": "Group",
+    "dialog.host.groupNone": "— ungrouped —",
+    "dialog.host.tags": "Tags",
+    "dialog.host.tagsHint": "Comma-separated. Max 32 tags.",
+    "dialog.host.tagsPlaceholder": "prod, database, eu-west",
+    "dialog.host.notes": "Notes",
+    "dialog.host.notesHint": "Optional",
+    "dialog.host.notesPlaceholder": "Anything worth remembering about this host…",
+    "dialog.host.credentialsSection": "Credentials",
+    "dialog.host.credentialUseSaved": "Use existing (SSH key, saved login...)",
+    "dialog.host.credentialNoSaved": "No saved credentials yet",
+    "dialog.host.credentialUnlink": "Unlink credential",
+    "dialog.host.credentialUsername": "Username",
+    "dialog.host.credentialUsernamePlaceholder": "alice",
+    "dialog.host.credentialPassword": "Password",
+    "dialog.host.credentialPasswordPlaceholder": "Password",
+    "dialog.host.credentialInlineHint": "Saved automatically when you connect.",
+    "dialog.host.createGroup": "Create group",
+
+    "dialog.group.newTitle": "New group",
+    "dialog.group.editTitle": "Edit group",
+    "dialog.group.namePlaceholder": "Servers",
+
+    "dialog.confirm.deleteHost.title": "Delete host?",
+    "dialog.confirm.deleteHost.description": "The host and its credential links will be removed. Credentials themselves remain available.",
+    "dialog.confirm.deleteGroup.title": "Delete group?",
+    "dialog.confirm.deleteGroup.description": "The group will be removed. Contained hosts will be moved to Ungrouped.",
+    "dialog.confirm.deleteCredential.title": "Delete credential?",
+    "dialog.confirm.deleteCredential.description": "The credential and its secret in the OS keychain will both be removed. Any host links will be cleared.",
+    "dialog.confirm.discardChanges.title": "Discard changes?",
+    "dialog.confirm.discardChanges.description": "Not all required fields are filled. Do you want to finish editing and discard all changes?",
+    "dialog.confirm.discardChanges.action": "Discard changes",
+
+    "dialog.credentials.title": "Credentials",
+    "dialog.credentials.empty.title": "No credentials yet",
+    "dialog.credentials.empty.description": "Credentials are reusable logins: passwords or SSH keys. They live in the OS keychain — only metadata is stored in the app.",
+    "dialog.credentials.add": "Add credential",
+    "dialog.credentials.new": "New credential",
+
+    "dialog.credential.name": "Name",
+    "dialog.credential.nameHint": "A label you'll recognize. Must be unique.",
+    "dialog.credential.namePlaceholder": "root-key",
+    "dialog.credential.type": "Type",
+    "dialog.credential.username": "Username",
+    "dialog.credential.usernamePlaceholder": "alice",
+    "dialog.credential.password": "Password",
+    "dialog.credential.privateKey": "Private key",
+    "dialog.credential.privateKeyHint": "Paste the entire PEM block, including BEGIN/END lines.",
+    "dialog.credential.passphrase": "Passphrase",
+    "dialog.credential.passphraseHint": "Leave empty if the key is unencrypted.",
+    "dialog.credential.passphrasePlaceholder": "optional",
+    "dialog.credential.kind.password": "Password",
+    "dialog.credential.kind.ssh_key": "SSH key",
+    "dialog.credential.kind.ssh_key_agent": "SSH agent (post-MVP)",
+
+    // ------------------------------------------------------------------
+    // Settings dialog
+    // ------------------------------------------------------------------
+    "settings.title": "Settings",
+    "settings.tab.profile": "Profile",
+    "settings.tab.appearance": "Appearance",
+    "settings.tab.connections": "Connections",
+    "settings.tab.terminal": "Terminal",
+    "settings.tab.import-export": "Import / Export",
+    "settings.tab.about": "About",
+
+    "settings.profile.placeholderTitle": "Profile and sync",
+    "settings.profile.placeholderDescription": "Account, login, and cloud sync land with Stage 5 — Personal Vault and Team Vault via S3.",
+
+    "settings.appearance.title": "Appearance",
+    "settings.appearance.description": "Interface language and color theme. Changes apply instantly.",
+    "settings.appearance.language": "Language",
+    "settings.appearance.theme": "Theme",
+    "settings.appearance.themeSystem": "System",
+    "settings.appearance.themeLight": "Light",
+    "settings.appearance.themeDark": "Dark",
+    "settings.appearance.themeHint": "System follows your OS setting.",
+
+    "settings.connections.title": "Connections",
+    "settings.connections.description": "Default ports used when creating new hosts.",
+    "settings.connections.defaultSshPort": "Default SSH port",
+    "settings.connections.defaultRdpPort": "Default RDP port",
+
+    "settings.terminal.placeholderTitle": "Terminal settings",
+    "settings.terminal.placeholderDescription": "Font, color scheme, cursor, scrollback, and other terminal options land alongside the SSH client.",
+
+    "settings.importExport.placeholderTitle": "Import and export",
+    "settings.importExport.placeholderDescription": "Import .rdp files in Stage 1.10; JSON backup/restore in Stage 1.12.",
+
+    "settings.about.title": "About RemoteHub",
+    "settings.about.description": "A cross-platform SSH and RDP client. Termius-style, local-first.",
+    "settings.about.version": "Version",
+    "settings.about.links": "Links",
+    "settings.about.linksPlaceholder": "Documentation and changelog coming soon.",
+
+    // ------------------------------------------------------------------
+    // Errors (rendered for `formatApiError` shortcut)
+    // ------------------------------------------------------------------
+    "error.unknown": "Unknown error",
+    "error.notFound": "{entity} not found",
+    "error.notImplemented": "Not implemented yet: {feature}",
+    "error.duplicateName": "A record with this name already exists.",
+} as const;
+
+export type MessageKey = keyof typeof messages;

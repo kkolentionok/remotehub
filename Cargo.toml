@@ -1,0 +1,86 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rh-core",
+    "crates/rh-ssh",
+    "crates/rh-rdp",
+    "crates/rh-storage",
+    "crates/rh-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourname/remotehub"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+tokio-util = "0.7"
+async-trait = "0.1"
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Errors
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# IDs
+ulid = { version = "1.1", features = ["serde"] }
+
+# Secrets
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt", "chrono"] }
+tracing-appender = "0.2"
+
+# Bytes
+bytes = "1.7"
+
+# Storage
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+    "chrono",
+    "macros",
+    "migrate",
+] }
+keyring = { version = "3.6", features = [
+    "apple-native",                       # macOS Keychain
+    "windows-native",                     # Windows Credential Manager
+    "sync-secret-service",                # Linux Secret Service (libsecret/gnome-keyring/KWallet)
+] }
+
+# Tauri (only in rh-app)
+tauri = { version = "2.1", features = [] }
+tauri-build = { version = "2.0", features = [] }
+
+# Testing
+tokio-test = "0.4"
+
+# Internal crates
+rh-core = { path = "crates/rh-core" }
+rh-storage = { path = "crates/rh-storage" }
+rh-ssh = { path = "crates/rh-ssh" }
+rh-rdp = { path = "crates/rh-rdp" }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
+
+[profile.dev]
+# Tauri dev iteration speed
+incremental = true

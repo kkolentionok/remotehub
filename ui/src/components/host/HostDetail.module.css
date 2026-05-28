@@ -1,0 +1,428 @@
+.main {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-6) var(--space-8);
+    max-width: 720px;
+}
+
+.loading {
+    color: var(--color-fg-muted);
+    font-size: var(--text-sm);
+}
+
+/* --- Header --- */
+
+.header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-4);
+    margin-bottom: var(--space-5);
+    padding-bottom: var(--space-4);
+    border-bottom: 1px solid var(--color-border);
+}
+
+.headerLeft {
+    flex: 1;
+    min-width: 0;
+}
+
+.titleRow {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
+}
+
+.title {
+    font-size: var(--text-xl);
+    font-weight: 600;
+    margin: 0;
+    color: var(--color-fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.connection {
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    font-size: var(--text-base);
+}
+
+.address {
+    color: var(--color-fg);
+}
+
+.port {
+    color: var(--color-fg-faint);
+}
+
+.headerActions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-shrink: 0;
+}
+
+.headerIconButton {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.headerIconButton:hover {
+    background: var(--color-subtle);
+    color: var(--color-fg);
+    border-color: var(--color-border-strong);
+}
+
+.infoWrap {
+    position: relative;
+}
+
+.infoPopover {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    background: var(--color-elevated);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+    z-index: 20;
+    width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.infoRow {
+    display: flex;
+    gap: var(--space-3);
+    font-size: var(--text-sm);
+    align-items: baseline;
+}
+
+.infoLabel {
+    color: var(--color-fg-muted);
+    flex-shrink: 0;
+    width: 80px;
+}
+
+.infoValue {
+    color: var(--color-fg);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    word-break: break-all;
+}
+
+/* --- Save error banner --- */
+
+.saveError {
+    padding: var(--space-2) var(--space-3);
+    background: var(--color-danger-bg);
+    border: 1px solid var(--color-danger);
+    border-radius: var(--radius-md);
+    color: var(--color-danger);
+    font-size: var(--text-sm);
+    margin-bottom: var(--space-4);
+}
+
+/* --- Sections --- */
+
+.section {
+    margin-bottom: var(--space-5);
+}
+
+.sectionTitle {
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--color-fg-faint);
+    font-weight: 600;
+    margin-bottom: var(--space-2);
+}
+
+.fieldLabel {
+    font-size: var(--text-sm);
+    color: var(--color-fg-muted);
+    font-weight: 500;
+    margin-bottom: var(--space-2);
+}
+
+/* --- Address row: hostname + protocol + port inline --- */
+
+.addressRow {
+    display: grid;
+    grid-template-columns: 1fr 90px 90px;
+    gap: var(--space-2);
+}
+
+.protocolSelect {
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-fg);
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-base);
+    font-family: inherit;
+    transition: border-color 0.1s;
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--color-fg-muted) 50%),
+        linear-gradient(135deg, var(--color-fg-muted) 50%, transparent 50%);
+    background-position: calc(100% - 16px) 50%, calc(100% - 11px) 50%;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+    padding-right: var(--space-6);
+}
+
+.protocolSelect:hover {
+    border-color: var(--color-border-strong);
+}
+
+.protocolSelect:focus {
+    border-color: var(--color-accent);
+    outline: none;
+}
+
+.portInput {
+    text-align: center;
+}
+
+/* --- Credentials inline panel --- */
+
+.credentialPanel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    position: relative;
+}
+
+.passwordWrap {
+    position: relative;
+}
+
+.passwordEye {
+    position: absolute;
+    right: var(--space-2);
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    border-radius: var(--radius-sm);
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+}
+
+.passwordEye:hover {
+    color: var(--color-fg);
+    background: var(--color-subtle);
+}
+
+.linkedChip {
+    font-size: var(--text-xs);
+    color: var(--color-fg-muted);
+    padding: 2px 8px;
+    background: var(--color-subtle);
+    border-radius: var(--radius-sm);
+    font-style: italic;
+}
+
+.useSavedRow {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-top: var(--space-1);
+}
+
+.useSavedButton {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    color: var(--color-accent);
+    font-size: var(--text-sm);
+    cursor: pointer;
+    transition: background 0.1s, opacity 0.1s;
+}
+
+.useSavedButton:hover:not(:disabled) {
+    background: var(--color-subtle);
+}
+
+.useSavedButton:disabled {
+    color: var(--color-fg-faint);
+    cursor: not-allowed;
+}
+
+.inlineHint {
+    font-size: var(--text-xs);
+    color: var(--color-fg-faint);
+}
+
+/* --- Saved credential picker (popover) --- */
+
+.savedPicker {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: var(--color-elevated);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-md);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+    z-index: 15;
+    max-height: 240px;
+    overflow-y: auto;
+    padding: 4px;
+}
+
+.savedPickerRow {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    width: 100%;
+    text-align: left;
+    padding: var(--space-2);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.savedPickerRow:hover {
+    background: var(--color-subtle);
+}
+
+.savedPickerName {
+    color: var(--color-fg);
+    font-size: var(--text-base);
+    font-weight: 500;
+}
+
+.savedPickerMeta {
+    color: var(--color-fg-muted);
+    font-size: var(--text-xs);
+}
+
+/* --- Linked credential view --- */
+
+.linkedCredential {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.linkedCredentialHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-3);
+}
+
+.linkedCredentialName {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    color: var(--color-fg);
+    font-weight: 500;
+}
+
+.linkedCredentialKind {
+    font-size: var(--text-xs);
+    color: var(--color-fg-faint);
+    text-transform: capitalize;
+}
+
+.linkedCredentialUsername {
+    color: var(--color-fg-muted);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    margin-top: 2px;
+}
+
+.linkedSecretRow {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.unlinkButton {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    color: var(--color-fg-muted);
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+    flex-shrink: 0;
+}
+
+.unlinkButton:hover {
+    background: var(--color-subtle);
+    color: var(--color-fg);
+}
+
+.credentialMask {
+    font-family: var(--font-mono);
+    letter-spacing: 0.15em;
+    color: var(--color-fg-muted);
+    user-select: none;
+}
+
+.credentialReveal {
+    font-family: var(--font-mono);
+    color: var(--color-fg);
+    user-select: all;
+}
+
+.revealButton,
+.copyButton {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 6px;
+    border-radius: var(--radius-sm);
+    color: var(--color-fg-muted);
+    transition: background 0.1s, color 0.1s;
+    cursor: pointer;
+}
+
+.revealButton:hover,
+.copyButton:hover {
+    background: var(--color-subtle);
+    color: var(--color-fg);
+}
+
+.revealTimer {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+}
+
+.credentialError {
+    font-size: var(--text-xs);
+    color: var(--color-danger);
+}
+
+.empty {
+    color: var(--color-fg-faint);
+}

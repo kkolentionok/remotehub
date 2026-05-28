@@ -1,0 +1,106 @@
+.form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+}
+
+.section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.sectionTitle {
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--color-fg-faint);
+    font-weight: 600;
+}
+
+/* Address row: hostname (wide) + protocol/port (narrow stack) */
+.row {
+    display: grid;
+    grid-template-columns: 1fr 200px;
+    gap: var(--space-2);
+}
+
+.portCell {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2);
+}
+
+.errorBox {
+    padding: var(--space-3);
+    background: var(--color-danger-bg);
+    border: 1px solid var(--color-danger);
+    border-radius: var(--radius-md);
+    color: var(--color-danger);
+    font-size: var(--text-sm);
+}
+
+/* Show/hide eye for password fields */
+
+.secretRow {
+    position: relative;
+}
+
+.eyeButton {
+    position: absolute;
+    right: var(--space-2);
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--color-fg-muted);
+    padding: 4px;
+    border-radius: var(--radius-sm);
+}
+
+.eyeButton:hover {
+    color: var(--color-fg);
+    background: var(--color-subtle);
+}
+
+/* --- Credential section --- */
+
+.credentialSection {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.credentialTabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.credentialTab {
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-sm);
+    color: var(--color-fg-muted);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.1s, border-color 0.1s;
+    cursor: pointer;
+}
+
+.credentialTab:hover {
+    color: var(--color-fg);
+}
+
+.credentialTabActive {
+    color: var(--color-fg);
+    border-bottom-color: var(--color-accent);
+}
+
+.credentialBody {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.credentialInlineHint {
+    font-size: var(--text-xs);
+    color: var(--color-fg-faint);
+}

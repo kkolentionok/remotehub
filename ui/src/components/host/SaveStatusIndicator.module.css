@@ -1,0 +1,57 @@
+.wrap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 32px;
+    color: var(--color-fg-faint);
+}
+
+.pendingDot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-fg-faint);
+    opacity: 0.6;
+}
+
+.spinner {
+    color: var(--color-fg-muted);
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.saved {
+    color: var(--color-success, #4ade80);
+    animation: fadeIn 0.15s ease-out;
+}
+
+.error {
+    color: var(--color-danger);
+    cursor: help;
+}
+
+.errorWrap {
+    display: inline-flex;
+    align-items: center;
+    cursor: help;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: scale(0.6);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
