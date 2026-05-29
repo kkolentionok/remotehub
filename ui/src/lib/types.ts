@@ -152,7 +152,9 @@ export type TerminalColorScheme =
     | "kanagawa"
     | "octocat"
     | "material-dark"
-    | "homebrew";
+    | "homebrew"
+    | "redpanda-dark"
+    | "redpanda-light";
 export type StartupScreen = "home" | "last_hosts";
 
 export type RdpResolution =

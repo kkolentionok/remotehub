@@ -63,6 +63,8 @@ pub enum TerminalColorScheme {
     Octocat,
     MaterialDark,
     Homebrew,
+    RedpandaDark,
+    RedpandaLight,
 }
 
 /// RDP startup resolution. Either an explicit `width × height`, or
