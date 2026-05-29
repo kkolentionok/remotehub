@@ -520,9 +520,11 @@ async fn settings_load_returns_defaults_on_empty_db() {
 async fn settings_save_then_load_roundtrip() {
     let (_, _, _, settings, _) = setup().await;
 
+    // The UI patches by Settings field name; storage maps these to the
+    // namespaced table keys internally.
     let patch = serde_json::json!({
-        keys::THEME: "dark",
-        keys::TERMINAL_FONT_SIZE: 16,
+        "theme": "dark",
+        "terminal_font_size": 16,
     });
     settings.save(patch).await.unwrap();
 

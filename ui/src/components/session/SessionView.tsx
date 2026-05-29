@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { Loader2, RefreshCw, Server } from "lucide-react";
+import { Columns2, Loader2, RefreshCw, Rows2, Server, X } from "lucide-react";
 
 import { useT } from "../../i18n";
 import type { SessionTab } from "../../store";
@@ -11,14 +11,20 @@ import styles from "./SessionView.module.css";
 
 export function SessionView({
     session,
-    active,
+    visible,
+    focused,
+    showHeader,
 }: {
     session: SessionTab;
-    active: boolean;
+    visible: boolean;
+    focused: boolean;
+    showHeader: boolean;
 }) {
     const { t } = useT();
     const close = useSessionsStore((s) => s.close);
     const open = useSessionsStore((s) => s.open);
+    const requestSplit = useSessionsStore((s) => s.requestSplit);
+    const setDraggingSession = useSessionsStore((s) => s.setDraggingSession);
     const acceptHostKey = useSessionsStore((s) => s.acceptHostKey);
     const rejectHostKey = useSessionsStore((s) => s.rejectHostKey);
     const hosts = useHostsStore((s) => s.items);
@@ -36,7 +42,47 @@ export function SessionView({
 
     return (
         <main className={styles.view}>
-            {/* No header strip — the tab already shows name, state, and close. */}
+            {showHeader && (
+                <div
+                    className={styles.paneHeader}
+                    draggable
+                    onDragStart={(e) => {
+                        setDraggingSession(session.key);
+                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.setData("text/plain", session.key);
+                    }}
+                    onDragEnd={() => setDraggingSession(null)}
+                >
+                    <span className={`${styles.headerDot} ${styles[`dot--${session.state}`] ?? ""}`} />
+                    <span className={styles.headerTitle}>{session.title}</span>
+                    <span className={styles.headerProto}>{session.protocol}</span>
+                    <span className={styles.headerSpacer} />
+                    <button
+                        type="button"
+                        className={styles.headerBtn}
+                        title={t("pane.splitRight")}
+                        onClick={() => requestSplit("row")}
+                    >
+                        <Columns2 size={13} />
+                    </button>
+                    <button
+                        type="button"
+                        className={styles.headerBtn}
+                        title={t("pane.splitDown")}
+                        onClick={() => requestSplit("col")}
+                    >
+                        <Rows2 size={13} />
+                    </button>
+                    <button
+                        type="button"
+                        className={styles.headerBtn}
+                        title={t("common.close")}
+                        onClick={() => void close(session.key)}
+                    >
+                        <X size={13} />
+                    </button>
+                </div>
+            )}
             {session.hostKey && (
                 <div className={styles.hostKeyPrompt}>
                     <div className={styles.hostKeyText}>
@@ -78,7 +124,11 @@ export function SessionView({
                     </div>
                 ) : (
                     <>
-                        <Terminal sessionKey={session.key} active={active} />
+                        <Terminal
+                            sessionKey={session.key}
+                            visible={visible}
+                            focused={focused}
+                        />
                         {isConnecting && <ConnectingOverlay session={session} />}
                     </>
                 )}

@@ -95,16 +95,16 @@ export function SettingsDialog({ onClose, initialSection }: SettingsDialogProps)
                     </ul>
                 </aside>
                 <section className={styles.content}>
-                    <button
-                        type="button"
-                        className={styles.close}
-                        onClick={onClose}
-                        aria-label={t("common.close")}
-                    >
-                        <X size={16} />
-                    </button>
                     {renderSection(tab, settings)}
                 </section>
+                <button
+                    type="button"
+                    className={styles.close}
+                    onClick={onClose}
+                    aria-label={t("common.close")}
+                >
+                    <X size={16} />
+                </button>
             </div>
         </div>,
         document.body,

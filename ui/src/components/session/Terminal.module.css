@@ -5,3 +5,12 @@
     background: #15171c;
     overflow: hidden;
 }
+
+/* Reserve the scrollbar's space permanently. Otherwise the xterm viewport
+   scrollbar appears/disappears as content reflows on resize, which changes
+   the content width → FitAddon recomputes columns → another window-change →
+   the shell redraws its prompt again, stacking blank prompts. A stable
+   gutter keeps the width constant so each resize is a single clean step. */
+.term :global(.xterm-viewport) {
+    scrollbar-gutter: stable;
+}

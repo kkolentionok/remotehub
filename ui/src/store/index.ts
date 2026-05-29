@@ -45,6 +45,17 @@ import type {
     SshSessionEvent,
 } from "../lib/types";
 import { formatApiError } from "../lib/types";
+import {
+    firstLeafKey,
+    hasLeaf,
+    leafKeys,
+    removeLeaf,
+    setRatioAtPath,
+    splitLeaf,
+    splitLeafWith,
+    type PaneNode,
+    type SplitDir,
+} from "../lib/paneTree";
 
 // =====================================================================
 // Hosts
@@ -365,12 +376,37 @@ export interface SessionTab {
     hostKey: { fingerprint: string; keyType: string } | null;
 }
 
+/**
+ * A workspace tab: a layout tree of panes (each leaf hosts one session)
+ * plus which pane currently has keyboard focus.
+ */
+export interface WorkspaceTab {
+    id: string;
+    root: PaneNode;
+    activePaneKey: string;
+}
+
 interface OutputSink {
     buffer: Uint8Array[];
     writer: ((data: Uint8Array) => void) | null;
 }
 
 const sessionOutput = new Map<string, OutputSink>();
+
+/** Serialized xterm buffers, kept across pane remounts (split/move). */
+const sessionSnapshots = new Map<string, string>();
+/** Last cols×rows sent per session, to avoid redundant window-change. */
+const lastDims = new Map<string, string>();
+
+/** Terminal saves its buffer here on unmount. */
+export function saveSessionSnapshot(key: string, data: string) {
+    sessionSnapshots.set(key, data);
+}
+
+/** Terminal reads (and keeps) the saved buffer on mount. */
+export function takeSessionSnapshot(key: string): string | null {
+    return sessionSnapshots.get(key) ?? null;
+}
 
 function pushOutput(key: string, data: Uint8Array) {
     const sink = sessionOutput.get(key);
@@ -416,11 +452,69 @@ function closeReasonText(reason: CloseReason): string {
 }
 
 interface SessionsStore {
+    /** All live sessions, keyed by `key` (one per pane leaf). */
     sessions: SessionTab[];
-    activeSessionKey: string | null;
+    /** Workspace tabs, in bar order. */
+    tabs: WorkspaceTab[];
+    /** Active tab id, or null for the Vault. */
+    activeTabId: string | null;
+    /** When set, the next launcher pick splits the active pane instead
+     *  of opening a new tab. */
+    splitTarget: SplitDir | null;
+    /** Session key currently being dragged (tab or pane), for drop zones. */
+    draggingSession: string | null;
+    /** While dragging a tab, the tab whose workspace is previewed as the
+     *  split target (Termius-style: you see where the dragged tab lands). */
+    dragPreviewTabId: string | null;
+    /** Id of the tab currently being dragged (null when dragging a pane). */
+    dragTabId: string | null;
+
+    /** Open a host in a brand-new tab. */
     open: (host: HostDto) => Promise<void>;
+    /** Split the active tab's focused pane, opening `host` in the new pane. */
+    splitActivePane: (host: HostDto, dir: SplitDir) => void;
+    /** Arm a split and open the launcher to choose the host for it. */
+    requestSplit: (dir: SplitDir) => void;
+    /** Close a single pane/session. Collapses the split; drops the tab if empty. */
     close: (key: string) => Promise<void>;
-    setActive: (key: string | null) => void;
+    /** Close an entire tab and all its sessions. */
+    closeTab: (tabId: string) => Promise<void>;
+    setActiveTab: (tabId: string | null) => void;
+    setActivePane: (tabId: string, key: string) => void;
+    setDraggingSession: (key: string | null) => void;
+    setDragPreviewTabId: (tabId: string | null) => void;
+    setDragTabId: (tabId: string | null) => void;
+    /** Reset all drag state (dragging session, preview, dragged tab). */
+    endDrag: () => void;
+    /**
+     * Move `sourceKey` so it splits the pane hosting `targetKey`. `dir`
+     * + `newFirst` place it (left/top = newFirst). Collapses/removes the
+     * source tab if it empties.
+     */
+    moveSessionIntoSplit: (
+        sourceKey: string,
+        targetKey: string,
+        dir: SplitDir,
+        newFirst: boolean,
+    ) => void;
+    /** Pop a pane out of its split into its own new tab. */
+    popOutSession: (sourceKey: string) => void;
+    /**
+     * Split the tab that holds `targetKey` with its neighbour tab (the one
+     * before it, or after if it is first), merging the neighbour's active
+     * session in beside the target. Used when dragging the active tab onto
+     * its own pane.
+     */
+    splitWithPreviousTab: (
+        targetKey: string,
+        dir: SplitDir,
+        newFirst: boolean,
+    ) => void;
+    /** Persist a divider ratio (path from the tab's root). */
+    setSplitRatio: (tabId: string, path: ("a" | "b")[], ratio: number) => void;
+    /** Reorder tabs: move tab `from` to the position of tab `to`. */
+    reorder: (from: string, to: string) => void;
+
     sendInput: (key: string, data: Uint8Array) => void;
     resize: (key: string, cols: number, rows: number) => void;
     acceptHostKey: (key: string) => Promise<void>;
@@ -462,28 +556,28 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
         }
     };
 
-    return {
-        sessions: [],
-        activeSessionKey: null,
+    const genId = (): string =>
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `s_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
-        open: async (host) => {
-            const key =
-                typeof crypto !== "undefined" && "randomUUID" in crypto
-                    ? crypto.randomUUID()
-                    : `s_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-            const tab: SessionTab = {
-                key,
-                sessionId: null,
-                hostId: host.id,
-                title: host.display_name ?? host.name,
-                protocol: host.protocol,
-                state: "connecting",
-                message: null,
-                hostKey: null,
-            };
-            sessionOutput.set(key, { buffer: [], writer: null });
-            set((s) => ({ sessions: [...s.sessions, tab], activeSessionKey: key }));
+    /** Create a session (state + backend connect). Returns its key. */
+    const createSession = (host: HostDto): string => {
+        const key = genId();
+        const tab: SessionTab = {
+            key,
+            sessionId: null,
+            hostId: host.id,
+            title: host.display_name ?? host.name,
+            protocol: host.protocol,
+            state: "connecting",
+            message: null,
+            hostKey: null,
+        };
+        sessionOutput.set(key, { buffer: [], writer: null });
+        set((s) => ({ sessions: [...s.sessions, tab] }));
 
+        void (async () => {
             try {
                 const res = await sessionsApi.open(
                     {
@@ -502,29 +596,244 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
             } catch (e: unknown) {
                 patch(key, { state: "failed", message: formatApiError(e) });
             }
+        })();
+
+        return key;
+    };
+
+    /** Tear down one session (backend + output buffer). */
+    const teardownSession = async (key: string) => {
+        const sess = get().sessions.find((t) => t.key === key);
+        if (sess?.sessionId) {
+            try {
+                await sessionsApi.close(sess.sessionId);
+            } catch {
+                /* actor may already be gone — ignore */
+            }
+        }
+        sessionOutput.delete(key);
+        sessionSnapshots.delete(key);
+        lastDims.delete(key);
+    };
+
+    return {
+        sessions: [],
+        tabs: [],
+        activeTabId: null,
+        splitTarget: null,
+        draggingSession: null,
+        dragPreviewTabId: null,
+        dragTabId: null,
+
+        open: async (host) => {
+            const key = createSession(host);
+            const id = genId();
+            set((s) => ({
+                tabs: [
+                    ...s.tabs,
+                    { id, root: { t: "leaf", key }, activePaneKey: key },
+                ],
+                activeTabId: id,
+            }));
+        },
+
+        splitActivePane: (host, dir) => {
+            const st = get();
+            const tabId = st.activeTabId;
+            const tab = st.tabs.find((tb) => tb.id === tabId);
+            if (!tabId || !tab) {
+                void get().open(host);
+                return;
+            }
+            const key = createSession(host);
+            set((s) => ({
+                tabs: s.tabs.map((tb) =>
+                    tb.id === tabId
+                        ? {
+                              ...tb,
+                              root: splitLeaf(tb.root, tb.activePaneKey, key, dir),
+                              activePaneKey: key,
+                          }
+                        : tb,
+                ),
+            }));
+        },
+
+        requestSplit: (dir) => {
+            if (!get().activeTabId) return;
+            set({ splitTarget: dir });
+            useUiStore.getState().setLauncherOpen(true);
         },
 
         close: async (key) => {
-            const tab = get().sessions.find((t) => t.key === key);
-            if (tab?.sessionId) {
-                try {
-                    await sessionsApi.close(tab.sessionId);
-                } catch {
-                    /* actor may already be gone — ignore */
-                }
-            }
-            sessionOutput.delete(key);
+            await teardownSession(key);
             set((s) => {
                 const sessions = s.sessions.filter((t) => t.key !== key);
-                const activeSessionKey =
-                    s.activeSessionKey === key
-                        ? (sessions[sessions.length - 1]?.key ?? null)
-                        : s.activeSessionKey;
-                return { sessions, activeSessionKey };
+                let activeTabId = s.activeTabId;
+                const tabs: WorkspaceTab[] = [];
+                for (const tb of s.tabs) {
+                    if (!hasLeaf(tb.root, key)) {
+                        tabs.push(tb);
+                        continue;
+                    }
+                    const root = removeLeaf(tb.root, key);
+                    if (root === null) {
+                        // Tab emptied → drop it.
+                        if (activeTabId === tb.id) activeTabId = null;
+                        continue;
+                    }
+                    const activePaneKey =
+                        tb.activePaneKey === key
+                            ? firstLeafKey(root)
+                            : tb.activePaneKey;
+                    tabs.push({ ...tb, root, activePaneKey });
+                }
+                if (activeTabId === null && tabs.length > 0) {
+                    activeTabId = tabs[tabs.length - 1]?.id ?? null;
+                }
+                return { sessions, tabs, activeTabId };
             });
         },
 
-        setActive: (key) => set({ activeSessionKey: key }),
+        closeTab: async (tabId) => {
+            const tab = get().tabs.find((tb) => tb.id === tabId);
+            if (!tab) return;
+            const keys = leafKeys(tab.root);
+            await Promise.all(keys.map((k) => teardownSession(k)));
+            set((s) => {
+                const sessions = s.sessions.filter((t) => !keys.includes(t.key));
+                const tabs = s.tabs.filter((tb) => tb.id !== tabId);
+                const activeTabId =
+                    s.activeTabId === tabId
+                        ? (tabs[tabs.length - 1]?.id ?? null)
+                        : s.activeTabId;
+                return { sessions, tabs, activeTabId };
+            });
+        },
+
+        setActiveTab: (tabId) => set({ activeTabId: tabId }),
+
+        setActivePane: (tabId, key) =>
+            set((s) => ({
+                tabs: s.tabs.map((tb) =>
+                    tb.id === tabId ? { ...tb, activePaneKey: key } : tb,
+                ),
+            })),
+
+        setDraggingSession: (key) => set({ draggingSession: key }),
+
+        setDragPreviewTabId: (tabId) => set({ dragPreviewTabId: tabId }),
+
+        setDragTabId: (tabId) => set({ dragTabId: tabId }),
+
+        endDrag: () =>
+            set({
+                draggingSession: null,
+                dragPreviewTabId: null,
+                dragTabId: null,
+            }),
+
+        moveSessionIntoSplit: (sourceKey, targetKey, dir, newFirst) =>
+            set((s) => {
+                if (sourceKey === targetKey) return s;
+                const result: WorkspaceTab[] = [];
+                let targetTabId: string | null = null;
+                for (const tb of s.tabs) {
+                    let root: PaneNode | null = tb.root;
+                    let activePaneKey = tb.activePaneKey;
+                    // Pull the source leaf out of whichever tab holds it.
+                    if (hasLeaf(root, sourceKey)) {
+                        root = removeLeaf(root, sourceKey);
+                        if (root && activePaneKey === sourceKey) {
+                            activePaneKey = firstLeafKey(root);
+                        }
+                    }
+                    if (root === null) continue; // source tab emptied → drop
+                    // Insert next to the target leaf (same-tab moves land here too).
+                    if (hasLeaf(root, targetKey)) {
+                        root = splitLeafWith(root, targetKey, sourceKey, dir, newFirst);
+                        activePaneKey = sourceKey;
+                        targetTabId = tb.id;
+                    }
+                    result.push({ ...tb, root, activePaneKey });
+                }
+                if (targetTabId === null) return s; // target vanished — no-op
+                let activeTabId: string | null = targetTabId;
+                if (!result.some((tb) => tb.id === activeTabId)) {
+                    activeTabId = result[result.length - 1]?.id ?? null;
+                }
+                return {
+                    tabs: result,
+                    activeTabId,
+                    draggingSession: null,
+                    dragPreviewTabId: null,
+                    dragTabId: null,
+                };
+            }),
+
+        popOutSession: (sourceKey) =>
+            set((s) => {
+                const owner = s.tabs.find((tb) => hasLeaf(tb.root, sourceKey));
+                if (!owner) return { draggingSession: null, dragPreviewTabId: null, dragTabId: null };
+                if (owner.root.t === "leaf") return { draggingSession: null, dragPreviewTabId: null, dragTabId: null }; // already standalone
+                const newRoot = removeLeaf(owner.root, sourceKey);
+                if (newRoot === null) return { draggingSession: null, dragPreviewTabId: null, dragTabId: null };
+                const id = genId();
+                const tabs = s.tabs.map((tb) =>
+                    tb.id === owner.id
+                        ? {
+                              ...tb,
+                              root: newRoot,
+                              activePaneKey:
+                                  tb.activePaneKey === sourceKey
+                                      ? firstLeafKey(newRoot)
+                                      : tb.activePaneKey,
+                          }
+                        : tb,
+                );
+                tabs.push({
+                    id,
+                    root: { t: "leaf", key: sourceKey },
+                    activePaneKey: sourceKey,
+                });
+                return { tabs, activeTabId: id, draggingSession: null, dragPreviewTabId: null, dragTabId: null };
+            }),
+
+        splitWithPreviousTab: (targetKey, dir, newFirst) => {
+            const s = get();
+            const idx = s.tabs.findIndex((tb) => hasLeaf(tb.root, targetKey));
+            if (idx < 0) return;
+            const neighbor = s.tabs[idx - 1] ?? s.tabs[idx + 1];
+            if (!neighbor) return;
+            get().moveSessionIntoSplit(
+                neighbor.activePaneKey,
+                targetKey,
+                dir,
+                newFirst,
+            );
+        },
+
+        setSplitRatio: (tabId, path, ratio) =>
+            set((s) => ({
+                tabs: s.tabs.map((tb) =>
+                    tb.id === tabId
+                        ? { ...tb, root: setRatioAtPath(tb.root, path, ratio) }
+                        : tb,
+                ),
+            })),
+
+        reorder: (from, to) =>
+            set((s) => {
+                if (from === to) return s;
+                const list = [...s.tabs];
+                const fromIdx = list.findIndex((tb) => tb.id === from);
+                const toIdx = list.findIndex((tb) => tb.id === to);
+                if (fromIdx === -1 || toIdx === -1) return s;
+                const [moved] = list.splice(fromIdx, 1);
+                if (!moved) return s;
+                list.splice(toIdx, 0, moved);
+                return { tabs: list };
+            }),
 
         sendInput: (key, data) => {
             const tab = get().sessions.find((t) => t.key === key);
@@ -535,10 +844,13 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
         },
 
         resize: (key, cols, rows) => {
-            const tab = get().sessions.find((t) => t.key === key);
-            if (!tab?.sessionId) return;
+            const sess = get().sessions.find((t) => t.key === key);
+            if (!sess?.sessionId) return;
+            const dim = `${cols}x${rows}`;
+            if (lastDims.get(key) === dim) return; // unchanged → no SIGWINCH
+            lastDims.set(key, dim);
             void sessionsApi
-                .resize({ session_id: tab.sessionId, width: cols, height: rows })
+                .resize({ session_id: sess.sessionId, width: cols, height: rows })
                 .catch(() => {});
         },
 

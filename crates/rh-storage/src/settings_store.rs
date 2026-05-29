@@ -124,16 +124,16 @@ impl SettingsStore for SqliteSettingsStore {
             .map_err(|e| StorageError::Backend(format!("begin tx: {e}")))?;
 
         for (key, value) in obj {
-            // Validate this is a known key. Unknown → reject (we don't
-            // want UI bugs silently writing trash into the table).
-            if !is_known_key(key) {
-                return Err(StorageError::Backend(format!("unknown setting key: {key}")));
-            }
+            // The UI sends Settings field names (e.g. `terminal_color_scheme`);
+            // the table stays namespaced (`terminal.color_scheme`). Translate
+            // here, rejecting anything we don't recognize so UI bugs can't
+            // write trash into the table.
+            let storage_key = storage_key_for(key).ok_or_else(|| {
+                StorageError::Backend(format!("unknown setting key: {key}"))
+            })?;
             // We don't deeply validate the value type here — Settings::load
             // will catch type mismatches on next load, and the UI is
             // expected to send well-typed values via the typed wrapper.
-            // (Stronger validation could be added per-key but adds friction
-            // without catching anything the load path doesn't.)
             let encoded = serde_json::to_string(value).map_err(|e| {
                 StorageError::Backend(format!("encode setting {key}: {e}"))
             })?;
@@ -143,7 +143,7 @@ impl SettingsStore for SqliteSettingsStore {
                 ON CONFLICT (key) DO UPDATE SET value = excluded.value
                 ",
             )
-            .bind(key)
+            .bind(storage_key)
             .bind(&encoded)
             .execute(&mut *tx)
             .await
@@ -167,22 +167,25 @@ fn parse_field<T: serde::de::DeserializeOwned>(
     })
 }
 
-fn is_known_key(key: &str) -> bool {
-    matches!(
-        key,
-        keys::LANGUAGE
-            | keys::THEME
-            | keys::DEFAULT_SSH_PORT
-            | keys::DEFAULT_RDP_PORT
-            | keys::TERMINAL_FONT_FAMILY
-            | keys::TERMINAL_FONT_SIZE
-            | keys::TERMINAL_COLOR_SCHEME
-            | keys::TERMINAL_CURSOR_STYLE
-            | keys::TERMINAL_SCROLLBACK
-            | keys::RDP_DEFAULT_RESOLUTION
-            | keys::APP_CONFIRM_CLOSE_SESSION
-            | keys::APP_STARTUP_SCREEN
-            | keys::SSH_KEEPALIVE_INTERVAL_SECS
-            | keys::SSH_KNOWN_HOSTS_STRICT
-    )
+/// Map a Settings struct field name (as the UI sends it) to the
+/// namespaced key used in the `settings` table. Returns `None` for
+/// unknown fields so `save` can reject them.
+fn storage_key_for(field: &str) -> Option<&'static str> {
+    Some(match field {
+        "language" => keys::LANGUAGE,
+        "theme" => keys::THEME,
+        "default_ssh_port" => keys::DEFAULT_SSH_PORT,
+        "default_rdp_port" => keys::DEFAULT_RDP_PORT,
+        "terminal_font_family" => keys::TERMINAL_FONT_FAMILY,
+        "terminal_font_size" => keys::TERMINAL_FONT_SIZE,
+        "terminal_color_scheme" => keys::TERMINAL_COLOR_SCHEME,
+        "terminal_cursor_style" => keys::TERMINAL_CURSOR_STYLE,
+        "terminal_scrollback" => keys::TERMINAL_SCROLLBACK,
+        "rdp_default_resolution" => keys::RDP_DEFAULT_RESOLUTION,
+        "app_confirm_close_session" => keys::APP_CONFIRM_CLOSE_SESSION,
+        "app_startup_screen" => keys::APP_STARTUP_SCREEN,
+        "ssh_keepalive_interval_secs" => keys::SSH_KEEPALIVE_INTERVAL_SECS,
+        "ssh_known_hosts_strict" => keys::SSH_KNOWN_HOSTS_STRICT,
+        _ => return None,
+    })
 }

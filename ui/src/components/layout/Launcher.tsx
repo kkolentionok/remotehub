@@ -17,6 +17,7 @@ export function Launcher() {
     const hosts = useHostsStore((s) => s.items);
     const groups = useGroupsStore((s) => s.items);
     const open = useSessionsStore((s) => s.open);
+    const splitActivePane = useSessionsStore((s) => s.splitActivePane);
     const setLauncherOpen = useUiStore((s) => s.setLauncherOpen);
 
     const [query, setQuery] = useState("");
@@ -58,10 +59,15 @@ export function Launcher() {
             ?.scrollIntoView({ block: "nearest" });
     }, [sel]);
 
-    const close = () => setLauncherOpen(false);
+    const close = () => {
+        useSessionsStore.setState({ splitTarget: null });
+        setLauncherOpen(false);
+    };
     const connect = (h: HostDto) => {
         if (h.protocol !== "ssh") return;
-        void open(h);
+        const splitDir = useSessionsStore.getState().splitTarget;
+        if (splitDir) splitActivePane(h, splitDir);
+        else void open(h);
         close();
     };
 

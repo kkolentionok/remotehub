@@ -10,10 +10,11 @@ import {
     useSettingsStore,
     useUiStore,
 } from "../../store";
-import { SessionView } from "../session/SessionView";
+import { leafKeys } from "../../lib/paneTree";
 import { DialogHost } from "./DialogHost";
 import { HomeView } from "./HomeView";
 import { Launcher } from "./Launcher";
+import { PaneGroup } from "./PaneGroup";
 import { TabBar } from "./TabBar";
 import styles from "./AppShell.module.css";
 
@@ -30,9 +31,40 @@ export function AppShell() {
     const { locale, setLocale } = useT();
     const settingsLanguage = useSettingsStore((s) => s.settings?.language);
     const theme = useSettingsStore((s) => s.settings?.theme);
-    const sessions = useSessionsStore((s) => s.sessions);
-    const activeKey = useSessionsStore((s) => s.activeSessionKey);
+    const tabs = useSessionsStore((s) => s.tabs);
+    const activeTabId = useSessionsStore((s) => s.activeTabId);
+    const draggingSession = useSessionsStore((s) => s.draggingSession);
+    const dragPreviewTabId = useSessionsStore((s) => s.dragPreviewTabId);
+    const dragTabId = useSessionsStore((s) => s.dragTabId);
+    const setDragPreviewTabId = useSessionsStore((s) => s.setDragPreviewTabId);
     const launcherOpen = useUiStore((s) => s.launcherOpen);
+
+    // While dragging a tab, show the split-target tab's workspace (so the
+    // green drop zones land on the tab being split into, not the dragged
+    // one). Otherwise show the active tab.
+    const visibleTabId =
+        draggingSession !== null && dragPreviewTabId !== null
+            ? dragPreviewTabId
+            : activeTabId;
+
+    // When a *tab* is dragged into the content area, preview the split
+    // target there: the active tab normally, or — if the active tab is the
+    // one being dragged — its neighbour. (Pane drags don't preview; they
+    // split within the shown workspace.)
+    const onStageDragOver = () => {
+        if (dragTabId === null) return;
+        let target: string | null;
+        if (activeTabId !== null && activeTabId !== dragTabId) {
+            target = activeTabId;
+        } else {
+            const idx = tabs.findIndex((t) => t.id === dragTabId);
+            const n = tabs[idx - 1] ?? tabs[idx + 1];
+            target = n ? n.id : null;
+        }
+        if (target !== null && target !== dragPreviewTabId) {
+            setDragPreviewTabId(target);
+        }
+    };
 
     useEffect(() => {
         void useHostsStore.getState().load();
@@ -62,23 +94,47 @@ export function AppShell() {
         document.documentElement.setAttribute("data-theme", theme ?? "system");
     }, [theme]);
 
+    // Split shortcuts: Ctrl+Shift+E splits right, Ctrl+Shift+D splits down.
+    // Use e.code (physical key) so it works on any keyboard layout.
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (!(e.ctrlKey && e.shiftKey)) return;
+            if (e.code === "KeyE" || e.code === "KeyD") {
+                e.preventDefault();
+                useSessionsStore
+                    .getState()
+                    .requestSplit(e.code === "KeyE" ? "row" : "col");
+            }
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, []);
+
     return (
         <div className={styles.shell}>
             <TabBar />
-            <div className={styles.stage}>
+            <div className={styles.stage} onDragOver={onStageDragOver}>
                 <div
                     className={styles.pane}
-                    style={{ display: activeKey === null ? "flex" : "none" }}
+                    style={{ display: visibleTabId === null ? "flex" : "none" }}
                 >
                     <HomeView />
                 </div>
-                {sessions.map((s) => (
+                {tabs.map((tab) => (
                     <div
-                        key={s.key}
+                        key={tab.id}
                         className={styles.pane}
-                        style={{ display: s.key === activeKey ? "flex" : "none" }}
+                        style={{ display: tab.id === visibleTabId ? "flex" : "none" }}
                     >
-                        <SessionView session={s} active={s.key === activeKey} />
+                        <PaneGroup
+                            node={tab.root}
+                            ctx={{
+                                tabId: tab.id,
+                                activePaneKey: tab.activePaneKey,
+                                tabVisible: tab.id === visibleTabId,
+                                paneCount: leafKeys(tab.root).length,
+                            }}
+                        />
                     </div>
                 ))}
             </div>

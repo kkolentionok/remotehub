@@ -105,6 +105,75 @@
     position: relative;
 }
 
+/* --- Pane header (only when the tab is split) --- */
+.paneHeader {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 28px;
+    padding: 0 var(--space-2);
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-surface);
+    flex-shrink: 0;
+    font-size: var(--text-xs);
+}
+
+.headerDot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--color-fg-faint);
+    flex-shrink: 0;
+}
+
+.headerTitle {
+    color: var(--color-fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.headerProto {
+    font-family: var(--font-mono);
+    color: var(--color-fg-faint);
+    text-transform: uppercase;
+    font-size: 10px;
+}
+
+.headerSpacer {
+    flex: 1;
+}
+
+.headerBtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--radius-sm);
+    color: var(--color-fg-muted);
+}
+
+.headerBtn:hover {
+    background: var(--color-subtle);
+    color: var(--color-fg);
+}
+
+.dot--ready {
+    background: var(--color-success);
+}
+
+.dot--connecting,
+.dot--authenticating,
+.dot--host_key_pending {
+    background: var(--color-warning);
+}
+
+.dot--failed,
+.dot--closed {
+    background: var(--color-danger);
+}
+
 .connecting {
     position: absolute;
     inset: 0;

@@ -2,10 +2,18 @@ import { useEffect, useRef } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import "@xterm/xterm/css/xterm.css";
 
-import { registerSessionTerminal, useSessionsStore, useSettingsStore } from "../../store";
+import {
+    registerSessionTerminal,
+    takeSessionSnapshot,
+    saveSessionSnapshot,
+    useSessionsStore,
+    useSettingsStore,
+    useUiStore,
+} from "../../store";
 import { TERMINAL_THEMES } from "../../lib/terminalThemes";
 import styles from "./Terminal.module.css";
 
@@ -25,14 +33,18 @@ function fontStack(family: string): string {
  */
 export function Terminal({
     sessionKey,
-    active,
+    visible,
+    focused,
 }: {
     sessionKey: string;
-    active: boolean;
+    visible: boolean;
+    focused: boolean;
 }) {
     const containerRef = useRef<HTMLDivElement>(null);
     const termRef = useRef<XTerm | null>(null);
     const fitRef = useRef<FitAddon | null>(null);
+    const serializeRef = useRef<SerializeAddon | null>(null);
+    const webglRef = useRef<WebglAddon | null>(null);
     const sendInput = useSessionsStore((s) => s.sendInput);
     const resize = useSessionsStore((s) => s.resize);
     const fontFamily = useSettingsStore(
@@ -45,6 +57,7 @@ export function Terminal({
     const cursorStyle = useSettingsStore(
         (s) => s.settings?.terminal_cursor_style ?? "block",
     );
+    const dialogOpen = useUiStore((s) => s.dialog.kind !== "none");
     const theme = TERMINAL_THEMES[scheme] ?? TERMINAL_THEMES.default;
 
     useEffect(() => {
@@ -60,6 +73,8 @@ export function Terminal({
         });
         const fit = new FitAddon();
         term.loadAddon(fit);
+        const serialize = new SerializeAddon();
+        term.loadAddon(serialize);
         term.open(el);
 
         // GPU renderer for snappy, low-latency drawing (xterm's default
@@ -71,9 +86,11 @@ export function Terminal({
         const loadWebgl = () => {
             try {
                 const addon = new WebglAddon();
+                webglRef.current = addon;
                 const createdAt = Date.now();
                 addon.onContextLoss(() => {
                     addon.dispose();
+                    if (webglRef.current === addon) webglRef.current = null;
                     if (Date.now() - createdAt > 1000) {
                         setTimeout(loadWebgl, 200);
                     }
@@ -87,11 +104,18 @@ export function Terminal({
 
         termRef.current = term;
         fitRef.current = fit;
+        serializeRef.current = serialize;
         try {
             fit.fit();
         } catch {
             /* element not laid out yet — resize observer below recovers */
         }
+
+        // Restore the buffer captured on a prior unmount (split/move), so
+        // scrollback survives pane remounts. Live output since then is
+        // replayed right after by registerSessionTerminal.
+        const snapshot = takeSessionSnapshot(sessionKey);
+        if (snapshot) term.write(snapshot);
 
         const unregister = registerSessionTerminal(sessionKey, (data) =>
             term.write(data),
@@ -99,23 +123,39 @@ export function Terminal({
         const dataDisp = term.onData((d) =>
             sendInput(sessionKey, new TextEncoder().encode(d)),
         );
+        // The PTY resize (window-change) must stay in lockstep with xterm's
+        // own buffer reflow: if the shell learns the new size later than
+        // xterm reflows, readline redraws the prompt against a stale layout
+        // and leaves ghost prompt lines. So send it synchronously on every
+        // xterm resize. Storms are prevented upstream — the *fit* is
+        // debounced (scheduleFit) and the store dedups identical sizes — so
+        // onResize fires at most once per settled size.
         const resizeDisp = term.onResize(({ cols, rows }) =>
             resize(sessionKey, cols, rows),
         );
         resize(sessionKey, term.cols, term.rows);
 
-        const ro = new ResizeObserver(() => {
-            // While the pane is display:none its box is 0×0 — fitting then
-            // would shrink the terminal to a tiny width and reflow the
-            // buffer into garbage. Only fit when actually visible.
-            if (el.clientWidth === 0 || el.clientHeight === 0) return;
-            try {
-                fit.fit();
-                term.refresh(0, term.rows - 1);
-            } catch {
-                /* ignore transient layout */
-            }
-        });
+        // Refit when the pane settles. During a divider drag the box
+        // changes continuously; fitting on every frame would fire a
+        // window-change per step and make the shell redraw its prompt
+        // repeatedly (stacked/blank lines). Debounce so the PTY is
+        // resized once movement stops.
+        let fitTimer = 0;
+        const scheduleFit = () => {
+            clearTimeout(fitTimer);
+            fitTimer = window.setTimeout(() => {
+                // While the pane is display:none its box is 0×0 — fitting
+                // then would shrink the terminal and reflow into garbage.
+                if (el.clientWidth === 0 || el.clientHeight === 0) return;
+                try {
+                    fit.fit(); // triggers onResize → PTY resize, in sync
+                    term.refresh(0, term.rows - 1);
+                } catch {
+                    /* ignore transient layout */
+                }
+            }, 140);
+        };
+        const ro = new ResizeObserver(scheduleFit);
         ro.observe(el);
 
         // Copy-on-select (Termius-style): write the selection to the
@@ -157,6 +197,7 @@ export function Terminal({
         el.addEventListener("contextmenu", onContextMenu);
 
         return () => {
+            clearTimeout(fitTimer);
             ro.disconnect();
             el.removeEventListener("mousedown", onMouseDown);
             document.removeEventListener("mouseup", onDocMouseUp);
@@ -164,19 +205,26 @@ export function Terminal({
             unregister();
             dataDisp.dispose();
             resizeDisp.dispose();
+            try {
+                saveSessionSnapshot(sessionKey, serialize.serialize());
+            } catch {
+                /* serialize can fail on a torn-down term — skip */
+            }
             term.dispose();
             termRef.current = null;
             fitRef.current = null;
+            serializeRef.current = null;
+            webglRef.current = null;
         };
         // sendInput/resize are stable zustand actions.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [sessionKey]);
 
-    // When this tab becomes active, the pane goes from display:none to
-    // visible — refit to the now-real size, force a full repaint to clear
-    // any stale frame, and grab focus.
+    // When this pane becomes visible (its tab activated), it goes from
+    // display:none to real size — refit, repaint, and focus if it's the
+    // focused pane.
     useEffect(() => {
-        if (!active) return;
+        if (!visible) return;
         const id = requestAnimationFrame(() => {
             const term = termRef.current;
             const el = containerRef.current;
@@ -187,10 +235,19 @@ export function Terminal({
             } catch {
                 /* ignore */
             }
-            term.focus();
+            if (focused) term.focus();
         });
         return () => cancelAnimationFrame(id);
-    }, [active]);
+    }, [visible, focused]);
+
+    // A dialog (Settings, confirms…) renders in a portal and steals
+    // keyboard focus. When it closes, the active terminal must take focus
+    // back — otherwise keystrokes go nowhere until the user clicks it.
+    useEffect(() => {
+        if (!visible || !focused || dialogOpen) return;
+        const id = requestAnimationFrame(() => termRef.current?.focus());
+        return () => cancelAnimationFrame(id);
+    }, [dialogOpen, visible, focused]);
 
     // Live-apply font changes from settings.
     useEffect(() => {

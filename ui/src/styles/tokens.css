@@ -31,6 +31,7 @@
 
     /* Accent — one color for selection, focus, primary actions */
     --color-accent: #4c8eff;
+    --color-accent-faint: rgba(76, 142, 255, 0.14);
     --color-accent-hover: #3a7ae8;
     --color-accent-fg: #ffffff;
 
