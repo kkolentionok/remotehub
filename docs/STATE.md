@@ -1,6 +1,36 @@
 # RemoteHub — Project State & Handoff
 
-**Last updated:** Stage 1.5.2 completion (UX-pass: live-save, draft mode, credentials redesign, save status indicator).
+**Last updated:** UX overhaul (part 1) — tabbed shell: pinned "Vault" tab (host manager) + one tab per session; sidebar is no longer permanent chrome. Stage 2 (SSH) complete.
+
+## UX overhaul — tabbed shell (part 1, DONE, verified tsc+vite)
+
+Replaced the permanent left-sidebar shell with a Termius/Windows-Terminal-style tab bar.
+- `layout/TabBar.tsx` — top bar: pinned **Vault** tab (`nav.vault`, host manager, not closable, `activeSessionKey === null`) + one tab per session + a "+" button (currently returns to Vault; dedicated launcher is the next step).
+- `layout/HomeView.tsx` — Vault content = `CommandBar` + `Sidebar` + `HostDetail` (the former shell body, now the home tab).
+- `layout/AppShell.tsx` — `TabBar` over a stage that keeps **every** tab mounted (HomeView + all SessionViews) and toggles visibility via inline `display`, so scrollback, form drafts, and focus all survive tab switches.
+- Removed `layout/WorkArea.tsx` and `session/SessionTabs.tsx` (folded into AppShell/TabBar).
+
+**UX overhaul follow-ups (user's list):** (a) "+" launcher — search + recent/host list to start a session (screen ref: Termius new-tab); (b) terminal appearance — bundle a default mono font + make font configurable; (c) terminal theme presets (Dracula/Nord/Solarized/Monokai/Pro…) with a full 16-color ANSI palette + picker + persistence. ANSI output colors already render (server-driven); no client-side keyword highlighting.
+
+## Stage 2 — in progress (SSH sessions)
+
+**Part 1 — frontend + IPC contract (DONE, verified tsc+vite):**
+- `ui/src/components/session/{Terminal,SessionView,SessionTabs}.tsx` + `layout/WorkArea.tsx`. The work area now shows a tab strip (Host editor + one tab per session) and swaps between `HostDetail` and a live `SessionView`. AppShell body = Sidebar + WorkArea.
+- Terminal is xterm.js (`@xterm/xterm` + `addon-fit`). Output flows via a module-level registry in the sessions store (buffered until the terminal mounts, so switching tabs never loses output); keystrokes → `session_send_input`, resize → `session_resize`.
+- `useSessionsStore` (in `store/index.ts`): tabs keyed by a stable local `key` (set up before the backend returns the real `sessionId`, avoiding event races), state machine, host-key prompt, reconnect.
+- `lib/ipc.ts` `sessions.*` uses a Tauri **Channel** for `SshSessionEvent` (`state_changed/data/auth_failed/host_key_prompt/error/closed`, `CloseReason`) per `tauri-api.md`. Types in `lib/types.ts`.
+- Connect button enabled for **saved SSH hosts** (draft/RDP show a reason tooltip). Backend is still the stub → connecting shows "failed: not implemented" gracefully. No regression to the running app.
+
+**Part 2 — russh backend (DONE — live SSH connection verified against AM-NL):**
+- Compiled clean on russh 0.45 after one fix (the `Handler` trait there is `#[async_trait]`, so `ClientHandler` is annotated `#[async_trait]`). The `select!` channel-borrow and PTY/auth signatures worked as written.
+- `rh-ssh`: `russh` client actor. `lib.rs` (public types: `SessionState`, `CloseReason`, `SshSessionEvent`, `SessionCommand`, `SshOpenOptions`, `RevealedCredential`, `SshSpawnParams`, `SshSessionHandle`, `spawn_session`), `error.rs` (`SshError` + `into_close_reason`), `actor.rs` (russh connect → password auth → PTY shell → select! pump). Events flow out via `mpsc::UnboundedSender<SshSessionEvent>` (crate stays tauri-free).
+- `rh-app`: `session.rs` `SessionManager` (registry + per-session supervisor that evicts on exit); `api/sessions.rs` real handlers (`session_open` reveals credential, bridges mpsc→Tauri `Channel`, spawns actor, registers; close/send_input/resize/accept/reject); DTOs (`SessionOpenResponse`, `SessionInputRequest`, `SessionResizeRequest`, `SessionAcceptHostKeyRequest`); `AppState.sessions`; handlers registered in `main.rs`.
+- **v1 simplifications (to land a working connect first):** password auth only (SSH-key/agent → friendly not-implemented); host key auto-accepted TOFU (no `known_hosts` pinning, no interactive prompt blocking inside the russh handler — UI prompt surface stays dormant); no keepalive.
+- ⚠️ **NOT YET COMPILED** — no cargo in the authoring sandbox. All russh API usage is isolated in `rh-ssh/src/actor.rs` and flagged with notes; expect a mechanical fix-up round (method signatures, `bool` vs `AuthResult`, key-type path, possible select! borrow split). russh pinned `0.45` — adjust to whatever resolves. **Keep the previous working zip as a rollback** (a non-compiling backend breaks `cargo tauri dev` until fixed).
+
+**Part 2 follow-ups (after it connects):** known_hosts pinning + interactive TOFU (wire `host_key_prompt`/`session_accept_host_key`), SSH-key auth, keepalive, `session_list` restore-on-reload.
+
+---
 
 This document is the single source of truth for picking up RemoteHub development. Read it first when starting a new chat or after a long break. When a stage closes, **update this file** before packaging the archive.
 
@@ -72,8 +102,8 @@ remotehub/
 | 1.5.2 | UX pass #2: live-save everywhere, draft mode, credentials redesign | ✅ Done |
 | 1.7 | Visual pass: Inter + JetBrains Mono fonts, lighter dark theme, rounded sidebar items, HostIcon slot | ✅ Done |
 | 1.6 | Settings dialog + language toggle UI | ✅ Done |
-| 1.8 | Schema extensions: display_name, startup_command, env_vars, detected_os | ⬜ Next |
-| 1.9 | Command bar (top, search + user@host:port parser) | ⬜ Future |
+| 1.8 | Schema extensions: display_name, startup_command, env_vars, detected_os | ✅ Done |
+| 1.9 | Command bar (top, search + user@host:port parser) | ✅ Done |
 | 1.10 | Import .rdp files | ⬜ Future |
 | 1.12 | Export/Import JSON (our format) | ⬜ Future |
 | 2.x | SSH session actors (russh) | ⬜ Future |
@@ -81,11 +111,44 @@ remotehub/
 | 4.x | RDP (IronRDP) | ⬜ Future |
 | 5.x | Personal/Team Vault via S3 — cloud sync, identity, e2e crypto | ⬜ Future |
 
-109 Rust tests passing. Vite + tsc strict build green.
+~119 Rust tests (run `cargo test` on Windows to confirm; +10 in Stage 1.8). Vite + tsc strict build green. **DB schema is v2** as of Stage 1.8 — opening an old v1 DB drops & recreates it (alpha policy, data loss expected).
 
 ---
 
-## Stage 1.6 — pickup point
+## Stage 1.9 — closeout (command bar)
+
+Frontend-only. New full-width strip at the top of the window (`AppShell` is now a column: CommandBar over a `.body` flex row of Sidebar + HostDetail).
+
+`ui/src/components/layout/CommandBar.{tsx,module.css}` — the **single** search/command surface:
+- owns `uiStore.searchQuery`, so typing live-filters the sidebar tree. **The sidebar's own search box was removed** (one search, not two — the redundant double-search looked wrong).
+- parses `[ssh|rdp]://[user@]host[:port]`; when the text is an explicit address with no exact host match, a slim "New host" suggestion drops under the bar. Activating it (click or Enter) opens a pre-filled draft (`startDraft` + `updateDraft`).
+- Enter with no suggestion opens the sole match if exactly one host matches. Ctrl/Cmd+K focuses; Esc clears. `Ctrl K` hint shown (Windows-first).
+
+No backend changes — real connect is still Stage 2, so the "connect" path is quick host creation for now. i18n: `command.*` keys in both locales (`sidebar.searchPlaceholder` now unused but left in place).
+
+---
+
+
+
+Added four columns to `hosts` and threaded them through every layer. Schema bumped **v1 → v2**; alpha drop-recreate policy means existing DBs are wiped on first open with this build.
+
+New fields:
+- **`display_name TEXT` (nullable)** — explicit user label. **Retires the `name == hostname` auto-label heuristic** in `HostDetail.buildFormState`. The form's Label input now binds straight to `display_name`; unset = `null` and the input shows the hostname as placeholder. The frontend still sends `name` (= label‖hostname) as the canonical sort/search key *and* `display_name` separately; the backend stores both verbatim (no server-side derivation). Blank labels are normalized to NULL in `host_create`/`host_update`.
+- **`startup_command TEXT` (nullable)** — command run on SSH connect. UI field is SSH-only (hidden for RDP and forced to `null` on save when protocol≠ssh). Consumed by the Stage 2 session actor (not yet wired).
+- **`env_vars` → `env_vars_json TEXT NOT NULL DEFAULT '[]'`** — JSON array of `{key,value}` (order-preserving), mirroring the `tags_json` pattern. Domain type `EnvVar` in `rh-core`. UI: a `KEY=VALUE`-per-line textarea; `parseEnv`/`formatEnv` in HostDetail. Full-replace list on update (empty array clears).
+- **`detected_os TEXT` (nullable)** — machine-set OS slug (e.g. `ubuntu`). **Not accepted on create**; persisted through the normal `host_update` path so the **Stage 2.2** detection routine can set it. Shown read-only as a small chip on the detail header when present; will drive the sidebar HostIcon in 2.2.
+
+DTO placement: `display_name` + `detected_os` live on the lean `HostDto` (sidebar needs them); `startup_command` + `env_vars` only on `HostFullDto` (`host_get`).
+
+Validators (rh-app): display_name ≤256, startup_command ≤4096, env_vars ≤64 entries / key ≤256 / value ≤4096, non-empty + unique keys, no NUL bytes.
+
+Files touched: `rh-core/{types,lib}.rs`, `rh-storage/{db.rs, migrations/v1.sql, host_store.rs, tests/integration.rs}`, `rh-app/api/{dto,hosts}.rs`, `ui/src/lib/types.ts`, `ui/src/store/index.ts` (HostDraft gained `startupCommand`/`envVars` for faithful duplicate + dirty-check), `ui/src/components/host/{HostDetail.tsx,HostDetail.module.css}`, `ui/src/i18n/{en,ru}.ts`.
+
+Side note: fixed three **pre-existing** `tsc` errors in the legacy `dialog/HostFormDialog.tsx` (modal form, not in the live render path) — it referenced i18n keys `credentialUseExisting` / `credentialUseInline` / `credentialSelectNone` that were never added. Added them to both locales so the strict gate is green again. Consider deleting that dead modal in a future cleanup stage.
+
+---
+
+## Stage 1.6 — pickup point (ARCHIVED — 1.6 is ✅ done)
 
 What got done before pausing:
 

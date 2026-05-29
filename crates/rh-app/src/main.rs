@@ -4,6 +4,7 @@
 mod api;
 mod logging;
 mod paths;
+mod session;
 mod state;
 
 use std::sync::Arc;
@@ -30,6 +31,7 @@ fn main() {
     );
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             // Build AppState synchronously on the Tokio runtime Tauri
             // already provides via tauri::async_runtime.
@@ -78,9 +80,13 @@ fn main() {
             // Settings
             api::settings::settings_get_all,
             api::settings::settings_update,
-            // Sessions (stubs in Stage 1.4)
+            // Sessions (Stage 2: SSH)
             api::sessions::session_open,
             api::sessions::session_close,
+            api::sessions::session_send_input,
+            api::sessions::session_resize,
+            api::sessions::session_accept_host_key,
+            api::sessions::session_reject_host_key,
             api::sessions::session_list,
             // Meta
             api::meta::app_version,

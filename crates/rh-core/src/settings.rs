@@ -57,6 +57,12 @@ pub enum TerminalColorScheme {
     SolarizedLight,
     Dracula,
     Nord,
+    Pro,
+    Light,
+    Kanagawa,
+    Octocat,
+    MaterialDark,
+    Homebrew,
 }
 
 /// RDP startup resolution. Either an explicit `width × height`, or

@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use rh_core::{
-    Credential, CredentialId, CredentialKind, GroupId, Host, HostGroup, HostId, Protocol,
+    Credential, CredentialId, CredentialKind, EnvVar, GroupId, Host, HostGroup, HostId, Protocol,
 };
 
 // =====================================================================
@@ -41,17 +41,21 @@ pub struct HostListResponse {
 }
 
 /// Hosts as exposed in list responses. `notes` is omitted to keep
-/// list payloads small; use `host_get` for the full record.
+/// list payloads small; use `host_get` for the full record. `display_name`
+/// and `detected_os` are kept here (not just in the full DTO) because the
+/// sidebar renders the label and the host icon from the list payload.
 #[derive(Debug, Serialize)]
 pub struct HostDto {
     pub id: HostId,
     pub name: String,
+    pub display_name: Option<String>,
     pub group_id: Option<GroupId>,
     pub protocol: Protocol,
     pub hostname: String,
     pub port: u16,
     pub tags: Vec<String>,
     pub color: Option<String>,
+    pub detected_os: Option<String>,
     pub default_credential_id: Option<CredentialId>,
     pub created_at: String,
     pub updated_at: String,
@@ -62,12 +66,14 @@ impl From<Host> for HostDto {
         Self {
             id: h.id,
             name: h.name,
+            display_name: h.display_name,
             group_id: h.group_id,
             protocol: h.protocol,
             hostname: h.hostname,
             port: h.port,
             tags: h.tags,
             color: h.color,
+            detected_os: h.detected_os,
             default_credential_id: h.default_credential_id,
             created_at: h.created_at.to_rfc3339(),
             updated_at: h.updated_at.to_rfc3339(),
@@ -75,20 +81,28 @@ impl From<Host> for HostDto {
     }
 }
 
-/// Full host record including `notes`. Returned by `host_get`.
+/// Full host record including `notes`, `startup_command` and `env_vars`.
+/// Returned by `host_get` — these heavier fields are only needed in the
+/// detail pane, not in list views.
 #[derive(Debug, Serialize)]
 pub struct HostFullDto {
     #[serde(flatten)]
     pub base: HostDto,
     pub notes: Option<String>,
+    pub startup_command: Option<String>,
+    pub env_vars: Vec<EnvVar>,
 }
 
 impl From<Host> for HostFullDto {
     fn from(h: Host) -> Self {
         let notes = h.notes.clone();
+        let startup_command = h.startup_command.clone();
+        let env_vars = h.env_vars.clone();
         Self {
             base: HostDto::from(h),
             notes,
+            startup_command,
+            env_vars,
         }
     }
 }
@@ -97,6 +111,8 @@ impl From<Host> for HostFullDto {
 #[serde(deny_unknown_fields)]
 pub struct HostCreateRequest {
     pub name: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
     #[serde(default)]
     pub group_id: Option<GroupId>,
     pub protocol: Protocol,
@@ -109,6 +125,10 @@ pub struct HostCreateRequest {
     pub color: Option<String>,
     #[serde(default)]
     pub notes: Option<String>,
+    #[serde(default)]
+    pub startup_command: Option<String>,
+    #[serde(default)]
+    pub env_vars: Option<Vec<EnvVar>>,
     #[serde(default)]
     pub default_credential_id: Option<CredentialId>,
 }
@@ -130,6 +150,9 @@ pub struct HostUpdateRequest {
     pub id: HostId,
     #[serde(default)]
     pub name: Option<String>,
+    /// Double Option: `None` = not in request, `Some(None)` = clear label.
+    #[serde(default, deserialize_with = "deserialize_optional_optional")]
+    pub display_name: Option<Option<String>>,
     /// Double Option: `None` = not in request, `Some(None)` = set to NULL.
     #[serde(default, deserialize_with = "deserialize_optional_optional")]
     pub group_id: Option<Option<GroupId>>,
@@ -145,6 +168,12 @@ pub struct HostUpdateRequest {
     pub color: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_optional_optional")]
     pub notes: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional_optional")]
+    pub startup_command: Option<Option<String>>,
+    /// Full-replace list (like `tags`): present = set, absent = leave.
+    /// An empty array clears all environment variables.
+    #[serde(default)]
+    pub env_vars: Option<Vec<EnvVar>>,
     #[serde(default, deserialize_with = "deserialize_optional_optional")]
     pub default_credential_id: Option<Option<CredentialId>>,
 }
@@ -381,11 +410,38 @@ fn default_term() -> String {
     "xterm-256color".to_string()
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionIdRequest {
     pub session_id: rh_core::SessionId,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionOpenResponse {
+    pub session_id: rh_core::SessionId,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionInputRequest {
+    pub session_id: rh_core::SessionId,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionResizeRequest {
+    pub session_id: rh_core::SessionId,
+    pub width: u16,
+    pub height: u16,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionAcceptHostKeyRequest {
+    pub session_id: rh_core::SessionId,
+    #[allow(dead_code)]
+    pub fingerprint: String,
 }
 
 // =====================================================================
@@ -499,11 +555,33 @@ mod tests {
     fn host_full_dto_includes_notes() {
         let mut h = Host::new("t", "x.example.com", Protocol::Ssh, None);
         h.notes = Some("a note".into());
+        h.startup_command = Some("tmux".into());
+        h.env_vars = vec![EnvVar::new("LANG", "C")];
         let dto: HostFullDto = h.into();
         let json = serde_json::to_value(&dto).unwrap();
         assert_eq!(json["notes"], "a note");
+        assert_eq!(json["startup_command"], "tmux");
+        assert_eq!(json["env_vars"][0]["key"], "LANG");
         // And the flattened base fields are still there.
         assert_eq!(json["name"], "t");
+    }
+
+    #[test]
+    fn host_update_env_vars_is_full_replace_list() {
+        // Absent → None (leave alone).
+        let req: HostUpdateRequest = serde_json::from_str(r#"{ "id": "abc" }"#).unwrap();
+        assert!(req.env_vars.is_none());
+        // Empty array → Some(vec![]) (clear all).
+        let req: HostUpdateRequest =
+            serde_json::from_str(r#"{ "id": "abc", "env_vars": [] }"#).unwrap();
+        assert_eq!(req.env_vars, Some(vec![]));
+        // display_name distinguishes absent / null / value.
+        let req: HostUpdateRequest =
+            serde_json::from_str(r#"{ "id": "abc", "display_name": null }"#).unwrap();
+        assert_eq!(req.display_name, Some(None));
+        let req: HostUpdateRequest =
+            serde_json::from_str(r#"{ "id": "abc", "display_name": "Pretty" }"#).unwrap();
+        assert_eq!(req.display_name, Some(Some("Pretty".to_string())));
     }
 
     #[test]

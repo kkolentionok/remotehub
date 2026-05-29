@@ -71,6 +71,27 @@ impl CredentialKind {
     }
 }
 
+/// A single environment variable to inject into a session's shell on
+/// connect. Persisted as part of `Host::env_vars`, serialized to the
+/// `env_vars_json` column as a JSON array (order-preserving — the UI
+/// shows them in the order the user typed). Duplicate keys are not
+/// rejected at this layer; the validation boundary may dedupe.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EnvVar {
+    pub key: String,
+    pub value: String,
+}
+
+impl EnvVar {
+    #[must_use]
+    pub fn new(key: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            value: value.into(),
+        }
+    }
+}
+
 /// A target host (server, workstation, VM) the user wants to connect to.
 ///
 /// Hosts are persisted in SQLite and identified by ULID. The `tags`
@@ -80,6 +101,12 @@ impl CredentialKind {
 pub struct Host {
     pub id: HostId,
     pub name: String,
+    /// Explicit user-facing label. `None` means "no label set" — the UI
+    /// falls back to displaying `hostname`. Distinct from `name`, which
+    /// is the canonical sort/search key and is always non-empty (the
+    /// app layer keeps it = display_name-or-hostname). Added in Stage
+    /// 1.8 to retire the fragile `name == hostname` auto-label heuristic.
+    pub display_name: Option<String>,
     pub group_id: Option<GroupId>,
     pub protocol: Protocol,
     pub hostname: String,
@@ -90,6 +117,17 @@ pub struct Host {
     /// Free-form notes (markdown). Optional, max 10 000 chars enforced
     /// at the validation boundary, not in the type itself.
     pub notes: Option<String>,
+    /// Command executed automatically on session open (SSH). `None`
+    /// means no startup command. Consumed by the Stage 2 session actor.
+    pub startup_command: Option<String>,
+    /// Environment variables injected into the session shell. Empty by
+    /// default. Order-preserving.
+    pub env_vars: Vec<EnvVar>,
+    /// OS slug auto-detected after a successful connect (e.g. `"ubuntu"`,
+    /// `"debian"`, `"windows"`). `None` until detection runs. Machine-set
+    /// only — never written through the normal create/update path; the
+    /// Stage 2.2 detection routine populates it. Drives the host icon.
+    pub detected_os: Option<String>,
     pub default_credential_id: Option<CredentialId>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -111,6 +149,7 @@ impl Host {
         Self {
             id: HostId::new(),
             name: name.into(),
+            display_name: None,
             group_id: None,
             protocol,
             hostname: hostname.into(),
@@ -118,6 +157,9 @@ impl Host {
             tags: Vec::new(),
             color: None,
             notes: None,
+            startup_command: None,
+            env_vars: Vec::new(),
+            detected_os: None,
             default_credential_id: None,
             created_at: now,
             updated_at: now,
@@ -277,6 +319,38 @@ mod tests {
         let json = serde_json::to_string(&host).unwrap();
         let back: Host = serde_json::from_str(&json).unwrap();
         assert_eq!(host, back);
+    }
+
+    #[test]
+    fn host_new_defaults_stage18_fields() {
+        let host = Host::new("test", "example.com", Protocol::Ssh, None);
+        assert!(host.display_name.is_none());
+        assert!(host.startup_command.is_none());
+        assert!(host.env_vars.is_empty());
+        assert!(host.detected_os.is_none());
+    }
+
+    #[test]
+    fn host_serde_roundtrip_with_stage18_fields() {
+        let mut host = Host::new("prod", "db.example.com", Protocol::Ssh, Some(22));
+        host.display_name = Some("Prod DB".into());
+        host.startup_command = Some("tmux attach || tmux".into());
+        host.env_vars = vec![
+            EnvVar::new("LANG", "en_US.UTF-8"),
+            EnvVar::new("TERM", "xterm-256color"),
+        ];
+        host.detected_os = Some("ubuntu".into());
+        let json = serde_json::to_string(&host).unwrap();
+        let back: Host = serde_json::from_str(&json).unwrap();
+        assert_eq!(host, back);
+    }
+
+    #[test]
+    fn env_var_serde_shape() {
+        let ev = EnvVar::new("KEY", "VAL");
+        let json = serde_json::to_value(&ev).unwrap();
+        assert_eq!(json["key"], "KEY");
+        assert_eq!(json["value"], "VAL");
     }
 
     #[test]

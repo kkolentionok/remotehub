@@ -1,9 +1,13 @@
--- RemoteHub schema v1.
+-- RemoteHub schema v2.
 --
 -- This script creates the entire database from scratch. In alpha mode
 -- (current), schema bumps drop and recreate everything — there are no
 -- incremental migrations. When we ship beta, this file becomes the
--- baseline and follow-up changes get their own files: v2.sql, v3.sql, ...
+-- baseline and follow-up changes get their own files: v3.sql, v4.sql, ...
+--
+-- v2 (Stage 1.8) added to `hosts`: display_name, startup_command,
+-- env_vars_json, detected_os. Alpha policy = drop & recreate, so the
+-- bump from version 1 → 2 wipes the existing DB on next open.
 
 -- Enforce foreign keys. SQLite has them OFF by default at the connection
 -- level; the storage layer also runs `PRAGMA foreign_keys = ON` after
@@ -20,7 +24,7 @@ CREATE TABLE schema_meta (
     value   TEXT NOT NULL
 );
 
-INSERT INTO schema_meta (key, value) VALUES ('version', '1');
+INSERT INTO schema_meta (key, value) VALUES ('version', '2');
 
 -- ---------------------------------------------------------------------
 -- Host groups (hierarchical folders).
@@ -60,6 +64,7 @@ CREATE INDEX idx_credentials_kind ON credentials(kind);
 CREATE TABLE hosts (
     id                      TEXT PRIMARY KEY NOT NULL,
     name                    TEXT NOT NULL,
+    display_name            TEXT,
     group_id                TEXT REFERENCES host_groups(id) ON DELETE SET NULL,
     protocol                TEXT NOT NULL CHECK (protocol IN ('ssh', 'rdp')),
     hostname                TEXT NOT NULL,
@@ -67,6 +72,9 @@ CREATE TABLE hosts (
     tags_json               TEXT NOT NULL DEFAULT '[]',
     color                   TEXT,
     notes                   TEXT,
+    startup_command         TEXT,
+    env_vars_json           TEXT NOT NULL DEFAULT '[]',
+    detected_os             TEXT,
     default_credential_id   TEXT REFERENCES credentials(id) ON DELETE SET NULL,
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL

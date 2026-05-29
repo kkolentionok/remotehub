@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use rh_core::settings::keys;
 use rh_core::{
-    Credential, CredentialKind, CredentialStore, GroupStore, Host, HostFilter, HostGroup,
+    Credential, CredentialKind, CredentialStore, EnvVar, GroupStore, Host, HostFilter, HostGroup,
     HostStore, Protocol, SecretValue, SettingsStore, Theme,
 };
 use rh_storage::{
@@ -68,6 +68,61 @@ async fn host_create_preserves_tags_color_notes() {
     assert_eq!(back.tags, vec!["prod", "europe"]);
     assert_eq!(back.color, Some("#ff0000".into()));
     assert!(back.notes.unwrap().contains("Important"));
+}
+
+#[tokio::test]
+async fn host_create_preserves_stage18_fields() {
+    let (hosts, ..) = setup().await;
+    let mut h = Host::new("prod", "db.example.com", Protocol::Ssh, None);
+    h.display_name = Some("Prod DB".into());
+    h.startup_command = Some("tmux attach || tmux new".into());
+    h.env_vars = vec![
+        EnvVar::new("LANG", "en_US.UTF-8"),
+        EnvVar::new("EDITOR", "vim"),
+    ];
+    h.detected_os = Some("ubuntu".into());
+
+    hosts.create(&h).await.unwrap();
+    let back = hosts.get(&h.id).await.unwrap();
+
+    assert_eq!(back.display_name, Some("Prod DB".into()));
+    assert_eq!(back.startup_command, Some("tmux attach || tmux new".into()));
+    assert_eq!(back.env_vars, h.env_vars);
+    assert_eq!(back.detected_os, Some("ubuntu".into()));
+}
+
+#[tokio::test]
+async fn host_stage18_fields_default_empty_and_survive_update() {
+    let (hosts, ..) = setup().await;
+    // A bare host has no display_name / startup_command / detected_os
+    // and an empty env_vars list.
+    let h = Host::new("bare", "bare.example.com", Protocol::Ssh, None);
+    hosts.create(&h).await.unwrap();
+    let back = hosts.get(&h.id).await.unwrap();
+    assert!(back.display_name.is_none());
+    assert!(back.startup_command.is_none());
+    assert!(back.detected_os.is_none());
+    assert!(back.env_vars.is_empty());
+
+    // Set them, then clear display_name/startup_command back to None.
+    let mut edited = back;
+    edited.display_name = Some("Bare".into());
+    edited.startup_command = Some("htop".into());
+    edited.env_vars = vec![EnvVar::new("FOO", "bar")];
+    hosts.update(&edited).await.unwrap();
+    let after_set = hosts.get(&edited.id).await.unwrap();
+    assert_eq!(after_set.display_name, Some("Bare".into()));
+    assert_eq!(after_set.env_vars, vec![EnvVar::new("FOO", "bar")]);
+
+    let mut cleared = after_set;
+    cleared.display_name = None;
+    cleared.startup_command = None;
+    cleared.env_vars = Vec::new();
+    hosts.update(&cleared).await.unwrap();
+    let after_clear = hosts.get(&cleared.id).await.unwrap();
+    assert!(after_clear.display_name.is_none());
+    assert!(after_clear.startup_command.is_none());
+    assert!(after_clear.env_vars.is_empty());
 }
 
 #[tokio::test]

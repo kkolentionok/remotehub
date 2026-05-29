@@ -7,7 +7,7 @@
 //!
 //! - [`id`] — typed identifiers (ULID newtypes) and keychain references.
 //! - [`types`] — domain entities: `Host`, `HostGroup`, `Credential`,
-//!   `Protocol`, `CredentialKind`.
+//!   `Protocol`, `CredentialKind`, `EnvVar`.
 //! - [`secret`] — secret-bearing types with zeroize-on-drop semantics.
 //! - [`settings`] — user-facing settings with defaults.
 //! - [`error`] — error enums for storage, secrets, sessions, and the
@@ -42,4 +42,4 @@ pub use settings::{Language, Settings, Theme};
 pub use store::{
     CredentialStore, GroupStore, HostFilter, HostStore, RevealError, SettingsStore,
 };
-pub use types::{Credential, CredentialKind, Host, HostGroup, Protocol};
+pub use types::{Credential, CredentialKind, EnvVar, Host, HostGroup, Protocol};

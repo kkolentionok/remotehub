@@ -2,9 +2,12 @@
 //!
 //! Translation rules between `Host` and its row representation:
 //!
-//! - `id`, `name`, `group_id`, `protocol.as_str()`, `hostname`,
-//!   `port`, `color`, `notes`, `default_credential_id` — direct.
+//! - `id`, `name`, `display_name`, `group_id`, `protocol.as_str()`,
+//!   `hostname`, `port`, `color`, `notes`, `startup_command`,
+//!   `detected_os`, `default_credential_id` — direct.
 //! - `tags` (`Vec<String>` in Rust) ↔ `tags_json` (JSON array text).
+//! - `env_vars` (`Vec<EnvVar>` in Rust) ↔ `env_vars_json` (JSON array
+//!   of `{key, value}` objects, order-preserving).
 //! - `created_at` / `updated_at` — stored as ISO 8601 RFC 3339 strings
 //!   so they're inspectable in SQLite shell tools and don't depend on
 //!   SQLite's chrono affinity quirks.
@@ -18,7 +21,7 @@ use sqlx::Row;
 use tracing::instrument;
 
 use rh_core::{
-    CredentialId, GroupId, Host, HostFilter, HostId, HostStore, Protocol, StorageError,
+    CredentialId, EnvVar, GroupId, Host, HostFilter, HostId, HostStore, Protocol, StorageError,
 };
 
 use crate::db::Db;
@@ -42,18 +45,21 @@ impl HostStore for SqliteHostStore {
     async fn create(&self, host: &Host) -> Result<(), StorageError> {
         let tags_json = serde_json::to_string(&host.tags)
             .map_err(|e| StorageError::Backend(format!("encode tags: {e}")))?;
+        let env_vars_json = serde_json::to_string(&host.env_vars)
+            .map_err(|e| StorageError::Backend(format!("encode env_vars: {e}")))?;
 
         sqlx::query(
             r"
             INSERT INTO hosts (
-                id, name, group_id, protocol, hostname, port,
-                tags_json, color, notes, default_credential_id,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, name, display_name, group_id, protocol, hostname, port,
+                tags_json, color, notes, startup_command, env_vars_json,
+                detected_os, default_credential_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ",
         )
         .bind(host.id.as_str())
         .bind(&host.name)
+        .bind(host.display_name.as_deref())
         .bind(host.group_id.as_ref().map(|g| g.as_str()))
         .bind(host.protocol.as_str())
         .bind(&host.hostname)
@@ -61,6 +67,9 @@ impl HostStore for SqliteHostStore {
         .bind(&tags_json)
         .bind(host.color.as_deref())
         .bind(host.notes.as_deref())
+        .bind(host.startup_command.as_deref())
+        .bind(&env_vars_json)
+        .bind(host.detected_os.as_deref())
         .bind(host.default_credential_id.as_ref().map(|c| c.as_str()))
         .bind(host.created_at.to_rfc3339())
         .bind(host.updated_at.to_rfc3339())
@@ -141,11 +150,14 @@ impl HostStore for SqliteHostStore {
     async fn update(&self, host: &Host) -> Result<(), StorageError> {
         let tags_json = serde_json::to_string(&host.tags)
             .map_err(|e| StorageError::Backend(format!("encode tags: {e}")))?;
+        let env_vars_json = serde_json::to_string(&host.env_vars)
+            .map_err(|e| StorageError::Backend(format!("encode env_vars: {e}")))?;
 
         let result = sqlx::query(
             r"
             UPDATE hosts SET
                 name = ?,
+                display_name = ?,
                 group_id = ?,
                 protocol = ?,
                 hostname = ?,
@@ -153,12 +165,16 @@ impl HostStore for SqliteHostStore {
                 tags_json = ?,
                 color = ?,
                 notes = ?,
+                startup_command = ?,
+                env_vars_json = ?,
+                detected_os = ?,
                 default_credential_id = ?,
                 updated_at = ?
             WHERE id = ?
             ",
         )
         .bind(&host.name)
+        .bind(host.display_name.as_deref())
         .bind(host.group_id.as_ref().map(|g| g.as_str()))
         .bind(host.protocol.as_str())
         .bind(&host.hostname)
@@ -166,6 +182,9 @@ impl HostStore for SqliteHostStore {
         .bind(&tags_json)
         .bind(host.color.as_deref())
         .bind(host.notes.as_deref())
+        .bind(host.startup_command.as_deref())
+        .bind(&env_vars_json)
+        .bind(host.detected_os.as_deref())
         .bind(host.default_credential_id.as_ref().map(|c| c.as_str()))
         .bind(host.updated_at.to_rfc3339())
         .bind(host.id.as_str())
@@ -207,17 +226,17 @@ impl HostStore for SqliteHostStore {
 /// All host columns in a stable order — used by both `get` and `list`.
 const SELECT_HOST_PREFIX: &str = "
     SELECT
-        id, name, group_id, protocol, hostname, port,
-        tags_json, color, notes, default_credential_id,
-        created_at, updated_at
+        id, name, display_name, group_id, protocol, hostname, port,
+        tags_json, color, notes, startup_command, env_vars_json,
+        detected_os, default_credential_id, created_at, updated_at
     FROM hosts
 ";
 
 const SELECT_HOST_COLUMNS: &str = "
     SELECT
-        id, name, group_id, protocol, hostname, port,
-        tags_json, color, notes, default_credential_id,
-        created_at, updated_at
+        id, name, display_name, group_id, protocol, hostname, port,
+        tags_json, color, notes, startup_command, env_vars_json,
+        detected_os, default_credential_id, created_at, updated_at
     FROM hosts
     WHERE id = ?
 ";
@@ -229,6 +248,9 @@ fn row_to_host(row: &sqlx::sqlite::SqliteRow) -> Result<Host, StorageError> {
     let name: String = row
         .try_get("name")
         .map_err(|e| StorageError::Backend(format!("read name: {e}")))?;
+    let display_name: Option<String> = row
+        .try_get("display_name")
+        .map_err(|e| StorageError::Backend(format!("read display_name: {e}")))?;
     let group_id: Option<String> = row
         .try_get("group_id")
         .map_err(|e| StorageError::Backend(format!("read group_id: {e}")))?;
@@ -250,6 +272,15 @@ fn row_to_host(row: &sqlx::sqlite::SqliteRow) -> Result<Host, StorageError> {
     let notes: Option<String> = row
         .try_get("notes")
         .map_err(|e| StorageError::Backend(format!("read notes: {e}")))?;
+    let startup_command: Option<String> = row
+        .try_get("startup_command")
+        .map_err(|e| StorageError::Backend(format!("read startup_command: {e}")))?;
+    let env_vars_json: String = row
+        .try_get("env_vars_json")
+        .map_err(|e| StorageError::Backend(format!("read env_vars_json: {e}")))?;
+    let detected_os: Option<String> = row
+        .try_get("detected_os")
+        .map_err(|e| StorageError::Backend(format!("read detected_os: {e}")))?;
     let default_credential_id: Option<String> = row
         .try_get("default_credential_id")
         .map_err(|e| StorageError::Backend(format!("read default_credential_id: {e}")))?;
@@ -281,12 +312,19 @@ fn row_to_host(row: &sqlx::sqlite::SqliteRow) -> Result<Host, StorageError> {
         reason: format!("invalid JSON: {e}"),
     })?;
 
+    let env_vars: Vec<EnvVar> =
+        serde_json::from_str(&env_vars_json).map_err(|e| StorageError::Malformed {
+            entity: "hosts.env_vars_json",
+            reason: format!("invalid JSON: {e}"),
+        })?;
+
     let created_at = parse_datetime("hosts.created_at", &created_at_s)?;
     let updated_at = parse_datetime("hosts.updated_at", &updated_at_s)?;
 
     Ok(Host {
         id: HostId::from_raw(id),
         name,
+        display_name,
         group_id: group_id.map(GroupId::from_raw),
         protocol,
         hostname,
@@ -294,6 +332,9 @@ fn row_to_host(row: &sqlx::sqlite::SqliteRow) -> Result<Host, StorageError> {
         tags,
         color,
         notes,
+        startup_command,
+        env_vars,
+        detected_os,
         default_credential_id: default_credential_id.map(CredentialId::from_raw),
         created_at,
         updated_at,

@@ -6,25 +6,33 @@ import {
     useCredentialsStore,
     useGroupsStore,
     useHostsStore,
+    useSessionsStore,
     useSettingsStore,
+    useUiStore,
 } from "../../store";
-import { HostDetail } from "../host/HostDetail";
-import { Sidebar } from "../sidebar/Sidebar";
+import { SessionView } from "../session/SessionView";
 import { DialogHost } from "./DialogHost";
+import { HomeView } from "./HomeView";
+import { Launcher } from "./Launcher";
+import { TabBar } from "./TabBar";
 import styles from "./AppShell.module.css";
 
 /**
- * Root layout: sidebar on the left, main pane on the right.
+ * Root layout: a tab bar on top (pinned Vault + one tab per session),
+ * with the active tab's content below. Every tab — the Vault host
+ * manager and each session terminal — stays mounted and is toggled via
+ * visibility, so scrollback, form drafts, and focus survive switching.
  *
- * On mount: load all four stores (hosts, groups, credentials,
- * settings) and register backend event subscriptions so any change
- * refreshes the relevant store. Also keeps the i18n locale in sync
- * with `settings.language` once settings load — language is the
- * primary source of truth, the in-memory locale just mirrors it.
+ * On mount: load the four stores and register backend event
+ * subscriptions; keep the i18n locale synced with `settings.language`.
  */
 export function AppShell() {
     const { locale, setLocale } = useT();
     const settingsLanguage = useSettingsStore((s) => s.settings?.language);
+    const theme = useSettingsStore((s) => s.settings?.theme);
+    const sessions = useSessionsStore((s) => s.sessions);
+    const activeKey = useSessionsStore((s) => s.activeSessionKey);
+    const launcherOpen = useUiStore((s) => s.launcherOpen);
 
     useEffect(() => {
         void useHostsStore.getState().load();
@@ -41,10 +49,6 @@ export function AppShell() {
         };
     }, []);
 
-    // When settings.language is loaded (or changes), reflect it in the
-    // I18nProvider's runtime locale. The check prevents a feedback loop:
-    // user clicks RU → AppearanceSection sets locale + persists → settings
-    // load fires → this effect runs but values match, no-op.
     useEffect(() => {
         if (!settingsLanguage) return;
         if (settingsLanguage !== locale) {
@@ -52,11 +56,34 @@ export function AppShell() {
         }
     }, [settingsLanguage, locale, setLocale]);
 
+    // Drive the app color theme from settings (overrides the OS media
+    // query). "system" defers to the OS.
+    useEffect(() => {
+        document.documentElement.setAttribute("data-theme", theme ?? "system");
+    }, [theme]);
+
     return (
         <div className={styles.shell}>
-            <Sidebar />
-            <HostDetail />
+            <TabBar />
+            <div className={styles.stage}>
+                <div
+                    className={styles.pane}
+                    style={{ display: activeKey === null ? "flex" : "none" }}
+                >
+                    <HomeView />
+                </div>
+                {sessions.map((s) => (
+                    <div
+                        key={s.key}
+                        className={styles.pane}
+                        style={{ display: s.key === activeKey ? "flex" : "none" }}
+                    >
+                        <SessionView session={s} active={s.key === activeKey} />
+                    </div>
+                ))}
+            </div>
             <DialogHost />
+            {launcherOpen && <Launcher />}
         </div>
     );
 }

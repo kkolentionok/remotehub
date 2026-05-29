@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "SSH session actor for RemoteHub (placeholder; implemented in Stage 2)"
+description = "SSH session actor for RemoteHub (Stage 2: russh client)"
 
 [dependencies]
 rh-core.workspace = true
@@ -15,3 +15,10 @@ tracing.workspace = true
 serde.workspace = true
 bytes.workspace = true
 zeroize.workspace = true
+chrono.workspace = true
+
+# SSH client. NOTE (Stage 2): version/API may need adjusting on first
+# `cargo build` — russh's surface shifts between releases. If 0.60 isn't
+# the resolved version on this machine, pin whatever `cargo` selects and
+# fix any signature mismatches in `actor.rs` (the only file touching russh).
+russh = "0.45"

@@ -1,0 +1,7 @@
+.term {
+    width: 100%;
+    height: 100%;
+    padding: var(--space-2) var(--space-3);
+    background: #15171c;
+    overflow: hidden;
+}

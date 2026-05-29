@@ -19,7 +19,7 @@ use rh_core::StorageError;
 
 /// Schema version this binary expects. Bumping this triggers a
 /// drop-recreate on next open in alpha mode.
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 /// Embedded migration script for the current version.
 const V1_SQL: &str = include_str!("migrations/v1.sql");

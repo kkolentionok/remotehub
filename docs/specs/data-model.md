@@ -37,7 +37,8 @@
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Host {
     pub id: HostId,                                       // ULID
-    pub name: String,                                     // human-readable, unique within group
+    pub name: String,                                     // canonical sort/search key (= display_name‖hostname)
+    pub display_name: Option<String>,                    // explicit user label; null = show hostname (Stage 1.8)
     pub group_id: Option<GroupId>,                        // null = root
     pub protocol: Protocol,                               // ssh | rdp
     pub hostname: String,                                 // DNS name or IP
@@ -45,10 +46,17 @@ pub struct Host {
     pub tags: Vec<String>,                                // serialized as JSON array
     pub color: Option<String>,                            // hex "#RRGGBB" или null
     pub notes: Option<String>,                            // free-form markdown
+    pub startup_command: Option<String>,                 // SSH: command run on connect (Stage 1.8; consumed in Stage 2)
+    pub env_vars: Vec<EnvVar>,                            // {key,value} pairs, JSON array (Stage 1.8)
+    pub detected_os: Option<String>,                      // machine-set OS slug; null until Stage 2.2 detection
     pub default_credential_id: Option<CredentialId>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
+
+/// Stage 1.8. Order-preserving; serialized to `env_vars_json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnvVar { pub key: String, pub value: String }
 ```
 
 SQL:
@@ -57,6 +65,7 @@ SQL:
 CREATE TABLE hosts (
     id                      TEXT PRIMARY KEY NOT NULL,        -- ULID (26 chars)
     name                    TEXT NOT NULL,
+    display_name            TEXT,                             -- Stage 1.8: explicit label; null = use hostname
     group_id                TEXT REFERENCES host_groups(id) ON DELETE SET NULL,
     protocol                TEXT NOT NULL CHECK (protocol IN ('ssh', 'rdp')),
     hostname                TEXT NOT NULL,
@@ -64,6 +73,9 @@ CREATE TABLE hosts (
     tags_json               TEXT NOT NULL DEFAULT '[]',
     color                   TEXT,
     notes                   TEXT,
+    startup_command         TEXT,                             -- Stage 1.8: SSH connect command
+    env_vars_json           TEXT NOT NULL DEFAULT '[]',       -- Stage 1.8: JSON array of {key,value}
+    detected_os             TEXT,                             -- Stage 1.8: machine-set OS slug (Stage 2.2 populates)
     default_credential_id   TEXT REFERENCES credentials(id) ON DELETE SET NULL,
     created_at              TEXT NOT NULL,                    -- ISO 8601 UTC
     updated_at              TEXT NOT NULL
@@ -80,6 +92,10 @@ CREATE INDEX idx_hosts_name ON hosts(name);
 - `tags_json` — JSON-массив строк. Поиск по тегам — через `LIKE '%"tag"%'` или JSON1 extension (`json_each`). На объёме до 10k хостов хватит без полноценного `host_tags` table.
 - `color` — для UI; nullable. Регулярки на формат — в Rust-валидации, не в БД (CHECK constraint можно добавить позже без боли).
 - `notes` — потенциально длинный. Без size-limit в схеме, но в UI ограничиваем 10000 символами.
+- `display_name` (Stage 1.8) — явный лейбл. `name` остаётся канонической строкой для сортировки/поиска (= `display_name‖hostname`), а `display_name` хранит то, что пользователь ввёл в поле Label (null = не задан → UI показывает hostname). Заменил старую эвристику `name == hostname`. Бэкенд нормализует пустую строку в NULL.
+- `startup_command` (Stage 1.8) — команда при подключении по SSH. В UI поле скрыто для RDP; на сохранении при protocol≠ssh пишется NULL. Потребитель — session actor Stage 2.
+- `env_vars_json` (Stage 1.8) — JSON-массив `{key,value}` с сохранением порядка (как `tags_json`). Лимиты в Rust-валидации: ≤64 переменных, key ≤256, value ≤4096, ключи непустые и уникальные.
+- `detected_os` (Stage 1.8) — slug ОС, выставляется автоматически после коннекта (Stage 2.2). На create не принимается; пишется через обычный `host_update`. Драйвит иконку хоста в сайдбаре (2.2).
 
 ### HostGroup
 

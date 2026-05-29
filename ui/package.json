@@ -10,7 +10,12 @@
         "lint": "tsc --noEmit"
     },
     "dependencies": {
+        "@fontsource/jetbrains-mono": "^5.2.8",
         "@tauri-apps/api": "^2.1.0",
+        "@tauri-apps/plugin-clipboard-manager": "^2.2.0",
+        "@xterm/addon-fit": "^0.10.0",
+        "@xterm/addon-webgl": "^0.18.0",
+        "@xterm/xterm": "^5.5.0",
         "lucide-react": "^0.460.0",
         "react": "^18.3.1",
         "react-dom": "^18.3.1",

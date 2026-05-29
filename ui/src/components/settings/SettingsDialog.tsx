@@ -39,13 +39,16 @@ const TABS: Tab[] = [
 
 interface SettingsDialogProps {
     onClose: () => void;
+    initialSection?: string;
 }
 
-export function SettingsDialog({ onClose }: SettingsDialogProps) {
+export function SettingsDialog({ onClose, initialSection }: SettingsDialogProps) {
     const { t } = useT();
     const settings = useSettingsStore((s) => s.settings);
     const load = useSettingsStore((s) => s.load);
-    const [tab, setTab] = useState<Tab>("appearance");
+    const [tab, setTab] = useState<Tab>(() =>
+        TABS.includes(initialSection as Tab) ? (initialSection as Tab) : "appearance",
+    );
 
     // Lazy-load settings on first mount. The store may already have a
     // value (loaded at app startup); if not, fetch now.
@@ -122,7 +125,7 @@ function renderSection(tab: Tab, settings: ReturnType<typeof useSettingsStore.ge
         case "connections":
             return <ConnectionsSection settings={settings} />;
         case "terminal":
-            return <TerminalSection />;
+            return <TerminalSection settings={settings} />;
         case "import-export":
             return <ImportExportSection />;
         case "about":

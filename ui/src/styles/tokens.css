@@ -20,6 +20,10 @@
     --color-border: #2c303a;
     --color-border-strong: #3a3f4c;
 
+    /* Scrollbar (thin, floating) */
+    --color-scrollbar: rgba(255, 255, 255, 0.16);
+    --color-scrollbar-hover: rgba(255, 255, 255, 0.32);
+
     /* Foreground */
     --color-fg: #e8eaed;
     --color-fg-muted: #9aa0ac;
@@ -81,15 +85,45 @@
     --z-toast: 200;
 }
 
-/* Light mode overrides — kept restrained, same accent. */
+/* Light values, applied when the theme is explicitly "light" OR when
+ * it's "system" (or unset) and the OS prefers light. Kept restrained,
+ * same accent. */
+:root[data-theme="light"] {
+    --color-canvas: #fafafa;
+    --color-surface: #ffffff;
+    --color-subtle: rgba(0, 0, 0, 0.04);
+    --color-elevated: #ffffff;
+    --color-border: #e4e4e7;
+    --color-border-strong: #d4d4d8;
+
+    --color-scrollbar: rgba(0, 0, 0, 0.18);
+    --color-scrollbar-hover: rgba(0, 0, 0, 0.34);
+
+    --color-fg: #18181b;
+    --color-fg-muted: #52525b;
+    --color-fg-faint: #a1a1aa;
+
+    --color-danger: #dc2626;
+    --color-danger-bg: rgba(220, 38, 38, 0.08);
+    --color-success: #16a34a;
+    --color-warning: #d97706;
+
+    --color-ssh: #16a34a;
+    --color-rdp: #2563eb;
+}
+
 @media (prefers-color-scheme: light) {
-    :root {
+    :root[data-theme="system"],
+    :root:not([data-theme]) {
         --color-canvas: #fafafa;
         --color-surface: #ffffff;
         --color-subtle: rgba(0, 0, 0, 0.04);
         --color-elevated: #ffffff;
         --color-border: #e4e4e7;
         --color-border-strong: #d4d4d8;
+
+        --color-scrollbar: rgba(0, 0, 0, 0.18);
+        --color-scrollbar-hover: rgba(0, 0, 0, 0.34);
 
         --color-fg: #18181b;
         --color-fg-muted: #52525b;
@@ -103,4 +137,30 @@
         --color-ssh: #16a34a;
         --color-rdp: #2563eb;
     }
+}
+
+/* Explicit dark — re-assert dark values so a user who picks "dark" on a
+ * light-preferring OS still gets dark (beats the media query above). */
+:root[data-theme="dark"] {
+    --color-canvas: #15171c;
+    --color-surface: #1a1d24;
+    --color-subtle: rgba(255, 255, 255, 0.04);
+    --color-elevated: #232730;
+    --color-border: #2c303a;
+    --color-border-strong: #3a3f4c;
+
+    --color-scrollbar: rgba(255, 255, 255, 0.16);
+    --color-scrollbar-hover: rgba(255, 255, 255, 0.32);
+
+    --color-fg: #e8eaed;
+    --color-fg-muted: #9aa0ac;
+    --color-fg-faint: #5d6373;
+
+    --color-danger: #f87171;
+    --color-danger-bg: rgba(248, 113, 113, 0.1);
+    --color-success: #4ade80;
+    --color-warning: #fbbf24;
+
+    --color-ssh: #4ade80;
+    --color-rdp: #60a5fa;
 }

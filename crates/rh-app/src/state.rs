@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use rh_core::{CredentialStore, GroupStore, HostStore, SettingsStore};
 
+use crate::session::SessionManager;
+
 /// Bundle of every async store the command layer needs.
 ///
 /// Held inside `tauri::State<AppState>`. Cloning is cheap (each field
@@ -21,6 +23,7 @@ pub struct AppState {
     pub groups: Arc<dyn GroupStore>,
     pub credentials: Arc<dyn CredentialStore>,
     pub settings: Arc<dyn SettingsStore>,
+    pub sessions: SessionManager,
 }
 
 impl std::fmt::Debug for AppState {
@@ -30,6 +33,7 @@ impl std::fmt::Debug for AppState {
             .field("groups", &"<dyn GroupStore>")
             .field("credentials", &"<dyn CredentialStore>")
             .field("settings", &"<dyn SettingsStore>")
+            .field("sessions", &"<SessionManager>")
             .finish()
     }
 }
@@ -49,6 +53,7 @@ impl AppState {
             groups,
             credentials,
             settings,
+            sessions: SessionManager::new(),
         }
     }
 }

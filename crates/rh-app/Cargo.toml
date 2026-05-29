@@ -30,6 +30,7 @@ tracing-appender.workspace = true
 chrono.workspace = true
 ulid.workspace = true
 base64 = "0.22"
+tauri-plugin-clipboard-manager = "2"
 
 [features]
 default = ["custom-protocol"]

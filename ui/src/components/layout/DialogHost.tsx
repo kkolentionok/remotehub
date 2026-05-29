@@ -139,6 +139,6 @@ export function DialogHost() {
             );
 
         case "settings":
-            return <SettingsDialog onClose={closeDialog} />;
+            return <SettingsDialog onClose={closeDialog} initialSection={dialog.section} />;
     }
 }

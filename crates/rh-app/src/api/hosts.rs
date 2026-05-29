@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use tauri::{AppHandle, State};
 use tracing::instrument;
 
-use rh_core::{Host, HostFilter};
+use rh_core::{EnvVar, Host, HostFilter};
 
 use crate::api::dto::{
     HostCreateRequest, HostCreateResponse, HostDto, HostFullDto, HostIdRequest, HostListRequest,
@@ -29,6 +29,11 @@ const MAX_HOSTNAME_LEN: usize = 253;       // DNS RFC 1035 max
 const MAX_NOTES_LEN: usize = 10_000;
 const MAX_TAGS: usize = 32;
 const MAX_TAG_LEN: usize = 64;
+const MAX_DISPLAY_NAME_LEN: usize = 256;
+const MAX_STARTUP_COMMAND_LEN: usize = 4_096;
+const MAX_ENV_VARS: usize = 64;
+const MAX_ENV_KEY_LEN: usize = 256;
+const MAX_ENV_VALUE_LEN: usize = 4_096;
 
 #[tauri::command]
 #[instrument(level = "debug", skip(state))]
@@ -80,12 +85,24 @@ pub async fn host_create(
     if let Some(p) = req.port {
         validate_port(p)?;
     }
+    if let Some(ref dn) = req.display_name {
+        validate_display_name(dn)?;
+    }
+    if let Some(ref cmd) = req.startup_command {
+        validate_startup_command(cmd)?;
+    }
+    if let Some(ref env) = req.env_vars {
+        validate_env_vars(env)?;
+    }
 
     let mut host = Host::new(req.name, req.hostname, req.protocol, req.port);
+    host.display_name = normalize_optional(req.display_name);
     host.group_id = req.group_id;
     host.tags = req.tags.unwrap_or_default();
     host.color = req.color;
     host.notes = req.notes;
+    host.startup_command = normalize_optional(req.startup_command);
+    host.env_vars = req.env_vars.unwrap_or_default();
     host.default_credential_id = req.default_credential_id;
 
     let id = host.id.clone();
@@ -114,6 +131,12 @@ pub async fn host_update(
         validate_name(&name)?;
         host.name = name;
     }
+    if let Some(display_name_opt) = req.display_name {
+        if let Some(ref dn) = display_name_opt {
+            validate_display_name(dn)?;
+        }
+        host.display_name = display_name_opt.and_then(normalize_str);
+    }
     if let Some(group_id_opt) = req.group_id {
         host.group_id = group_id_opt;
     }
@@ -140,6 +163,16 @@ pub async fn host_update(
             validate_notes(n)?;
         }
         host.notes = notes_opt;
+    }
+    if let Some(startup_opt) = req.startup_command {
+        if let Some(ref cmd) = startup_opt {
+            validate_startup_command(cmd)?;
+        }
+        host.startup_command = startup_opt.and_then(normalize_str);
+    }
+    if let Some(env) = req.env_vars {
+        validate_env_vars(&env)?;
+        host.env_vars = env;
     }
     if let Some(cred_opt) = req.default_credential_id {
         host.default_credential_id = cred_opt;
@@ -263,6 +296,101 @@ fn validate_tags(tags: &[String]) -> ApiResult<()> {
     Ok(())
 }
 
+fn validate_display_name(display_name: &str) -> ApiResult<()> {
+    if display_name.len() > MAX_DISPLAY_NAME_LEN {
+        return Err(ApiError::validation(
+            "display_name",
+            format!("must be at most {MAX_DISPLAY_NAME_LEN} characters"),
+        ));
+    }
+    if display_name.contains('\0') {
+        return Err(ApiError::validation(
+            "display_name",
+            "must not contain NUL bytes",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_startup_command(cmd: &str) -> ApiResult<()> {
+    if cmd.len() > MAX_STARTUP_COMMAND_LEN {
+        return Err(ApiError::validation(
+            "startup_command",
+            format!("must be at most {MAX_STARTUP_COMMAND_LEN} characters"),
+        ));
+    }
+    if cmd.contains('\0') {
+        return Err(ApiError::validation(
+            "startup_command",
+            "must not contain NUL bytes",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_env_vars(env: &[EnvVar]) -> ApiResult<()> {
+    if env.len() > MAX_ENV_VARS {
+        return Err(ApiError::validation(
+            "env_vars",
+            format!("at most {MAX_ENV_VARS} variables allowed"),
+        ));
+    }
+    let mut seen = HashSet::with_capacity(env.len());
+    for (i, ev) in env.iter().enumerate() {
+        let key = ev.key.trim();
+        if key.is_empty() {
+            return Err(ApiError::validation(
+                "env_vars",
+                format!("variable #{} has an empty key", i + 1),
+            ));
+        }
+        if ev.key.len() > MAX_ENV_KEY_LEN {
+            return Err(ApiError::validation(
+                "env_vars",
+                format!("variable #{} key too long (max {MAX_ENV_KEY_LEN})", i + 1),
+            ));
+        }
+        if ev.value.len() > MAX_ENV_VALUE_LEN {
+            return Err(ApiError::validation(
+                "env_vars",
+                format!(
+                    "variable {key:?} value too long (max {MAX_ENV_VALUE_LEN})"
+                ),
+            ));
+        }
+        if ev.key.contains('\0') || ev.value.contains('\0') {
+            return Err(ApiError::validation(
+                "env_vars",
+                format!("variable {key:?} must not contain NUL bytes"),
+            ));
+        }
+        if !seen.insert(key) {
+            return Err(ApiError::validation(
+                "env_vars",
+                format!("variable key {key:?} is duplicated"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Trim a string; map empty → `None`. Used so a blank label/command
+/// arriving from the UI is stored as SQL NULL rather than `""`.
+fn normalize_str(s: String) -> Option<String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Normalize an optional create-path string (`Option<String>`): treat a
+/// present-but-blank value as absent.
+fn normalize_optional(s: Option<String>) -> Option<String> {
+    s.and_then(normalize_str)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,5 +447,40 @@ mod tests {
     fn empty_tag_rejected() {
         let with_empty = vec!["prod".to_string(), "".to_string()];
         assert!(validate_tags(&with_empty).is_err());
+    }
+
+    #[test]
+    fn display_name_length_enforced() {
+        assert!(validate_display_name("Prod DB").is_ok());
+        assert!(validate_display_name(&"x".repeat(MAX_DISPLAY_NAME_LEN)).is_ok());
+        assert!(validate_display_name(&"x".repeat(MAX_DISPLAY_NAME_LEN + 1)).is_err());
+    }
+
+    #[test]
+    fn startup_command_length_enforced() {
+        assert!(validate_startup_command("tmux attach").is_ok());
+        assert!(validate_startup_command(&"x".repeat(MAX_STARTUP_COMMAND_LEN + 1)).is_err());
+    }
+
+    #[test]
+    fn env_vars_validation() {
+        assert!(validate_env_vars(&[EnvVar::new("LANG", "C")]).is_ok());
+        // empty key rejected
+        assert!(validate_env_vars(&[EnvVar::new("  ", "x")]).is_err());
+        // duplicate key rejected
+        assert!(
+            validate_env_vars(&[EnvVar::new("A", "1"), EnvVar::new("A", "2")]).is_err()
+        );
+        // too many
+        let many: Vec<EnvVar> = (0..MAX_ENV_VARS + 1)
+            .map(|i| EnvVar::new(format!("K{i}"), "v"))
+            .collect();
+        assert!(validate_env_vars(&many).is_err());
+    }
+
+    #[test]
+    fn normalize_str_blanks_to_none() {
+        assert_eq!(normalize_str("  ".to_string()), None);
+        assert_eq!(normalize_str("  hi ".to_string()), Some("hi".to_string()));
     }
 }

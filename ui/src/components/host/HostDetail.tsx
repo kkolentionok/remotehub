@@ -9,9 +9,14 @@ import {
     hosts as hostsApi,
 } from "../../lib/ipc";
 import { formatApiError } from "../../lib/types";
-import type { HostFullDto, Protocol } from "../../lib/types";
+import type { EnvVar, HostFullDto, Protocol } from "../../lib/types";
 import { useDebouncedCallback } from "../../lib/useDebouncedCallback";
-import { useCredentialsStore, useGroupsStore, useUiStore } from "../../store";
+import {
+    useCredentialsStore,
+    useGroupsStore,
+    useSessionsStore,
+    useUiStore,
+} from "../../store";
 import { Button } from "../ui/Button";
 import { Combobox } from "../ui/Combobox";
 import { EmptyState } from "../ui/EmptyState";
@@ -100,6 +105,7 @@ export function HostDetail() {
         host = {
             id: "__draft__",
             name: draft.label,
+            display_name: draft.label || null,
             group_id: draft.groupId,
             protocol: draft.protocol,
             hostname: draft.hostname,
@@ -111,10 +117,13 @@ export function HostDetail() {
                     : Number(draft.port),
             tags: draft.tags,
             color: null,
+            detected_os: null,
             default_credential_id: null,
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
             notes: draft.notes || null,
+            startup_command: draft.startupCommand || null,
+            env_vars: draft.envVars,
         };
     } else if (selectedHostId && editingHost) {
         mode = "edit";
@@ -195,6 +204,9 @@ interface FormState {
     groupId: string;
     tagsRaw: string;
     notes: string;
+    startupCommand: string;
+    /** Raw textarea contents: one `KEY=VALUE` per line. */
+    envRaw: string;
     inlineUsername: string;
     inlinePassword: string;
 }
@@ -236,7 +248,9 @@ function HostForm(props: HostFormProps) {
     );
 
     // Build initial form state from the host. Re-derived only on host.id change.
-    const [form, setForm] = useState<FormState>(() => buildFormState(props));
+    const [form, setForm] = useState<FormState>(() =>
+        buildFormState(props, linkedCred?.username),
+    );
 
     // When a credential is linked (either at load time or after the user
     // picks one), surface its username into the form. Password stays
@@ -328,8 +342,11 @@ function HostForm(props: HostFormProps) {
             // Don't touch form state — the user is still typing.
             return;
         }
-        // Real change: load the new host's values into the form.
-        setForm(buildFormState(props));
+        // Real change: load the new host's values into the form,
+        // including the linked credential's username (if any).
+        setForm(buildFormState(props, linkedCred?.username));
+        committedUsernameRef.current = linkedCred?.username ?? "";
+        committedPasswordRef.current = "";
         setSaveStatus({ kind: "idle" });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [props.host.id]);
@@ -380,12 +397,18 @@ function HostForm(props: HostFormProps) {
                             state.label.trim() ||
                             state.hostname.trim() ||
                             props.host.name,
+                        display_name: state.label.trim() || null,
                         hostname: state.hostname.trim(),
                         protocol: state.protocol,
                         port: portNum,
                         group_id: state.groupId || null,
                         tags,
                         notes: state.notes.trim() || null,
+                        startup_command:
+                            state.protocol === "ssh"
+                                ? state.startupCommand.trim() || null
+                                : null,
+                        env_vars: parseEnv(state.envRaw),
                     });
 
                     // Handle inline credentials.
@@ -506,6 +529,7 @@ function HostForm(props: HostFormProps) {
                         }
                         const res = await hostsApi.create({
                             name: state.label.trim() || state.hostname.trim(),
+                            display_name: state.label.trim() || null,
                             hostname: state.hostname.trim(),
                             protocol: state.protocol,
                             port:
@@ -513,6 +537,11 @@ function HostForm(props: HostFormProps) {
                             group_id: state.groupId || null,
                             tags: tags.length > 0 ? tags : null,
                             notes: state.notes.trim() || null,
+                            startup_command:
+                                state.protocol === "ssh"
+                                    ? state.startupCommand.trim() || null
+                                    : null,
+                            env_vars: parseEnv(state.envRaw),
                             default_credential_id: credentialId,
                         });
                         if (credentialId) {
@@ -552,12 +581,18 @@ function HostForm(props: HostFormProps) {
                                     p.label.trim() ||
                                     p.hostname.trim() ||
                                     "host",
+                                display_name: p.label.trim() || null,
                                 hostname: p.hostname.trim(),
                                 protocol: p.protocol,
                                 port: pendingPort,
                                 group_id: p.groupId || null,
                                 tags: pendingTags,
                                 notes: p.notes.trim() || null,
+                                startup_command:
+                                    p.protocol === "ssh"
+                                        ? p.startupCommand.trim() || null
+                                        : null,
+                                env_vars: parseEnv(p.envRaw),
                             });
                         }
 
@@ -605,6 +640,8 @@ function HostForm(props: HostFormProps) {
                     const mirror: Record<string, unknown> = {};
                     if (key === "tagsRaw") {
                         mirror.tags = parseTags(value as string);
+                    } else if (key === "envRaw") {
+                        mirror.envVars = parseEnv(value as string);
                     } else if (key === "groupId") {
                         mirror.groupId = (value as string) || null;
                     } else {
@@ -675,15 +712,22 @@ function HostForm(props: HostFormProps) {
         if (props.mode !== "edit") return;
         startDraft(props.host.group_id ?? null);
         updateDraft({
-            label: `${props.host.name} copy`,
+            label: `${props.host.display_name ?? props.host.hostname} copy`,
             hostname: props.host.hostname,
             port: String(props.host.port),
             protocol: props.host.protocol,
             groupId: props.host.group_id ?? null,
             tags: [...props.host.tags],
             notes: props.host.notes ?? "",
+            startupCommand: props.host.startup_command ?? "",
+            envVars: props.host.env_vars.map((v) => ({ ...v })),
         });
     }, [props.mode, props.host, startDraft, updateDraft]);
+
+    const handleConnect = useCallback(() => {
+        if (props.mode !== "edit") return;
+        void useSessionsStore.getState().open(props.host);
+    }, [props.mode, props.host]);
 
     const handleDelete = useCallback(() => {
         if (props.mode === "draft") {
@@ -696,17 +740,21 @@ function HostForm(props: HostFormProps) {
     // ---------- Render --------------------------------------------------
 
     return (
-        <main className={styles.main}>
+        <main className={styles.scroll}>
+            <div className={styles.content}>
             <FormHeader
                 label={form.label}
                 hostname={form.hostname}
                 port={form.port}
                 protocol={form.protocol}
+                detectedOs={props.host.detected_os}
                 mode={props.mode}
                 hostId={props.host.id}
                 createdAt={props.host.created_at}
                 updatedAt={props.host.updated_at}
                 saveStatus={saveStatus}
+                onConnect={handleConnect}
+                canConnect={props.mode === "edit" && props.host.protocol === "ssh"}
                 onDuplicate={handleDuplicate}
                 onRequestDelete={handleDelete}
             />
@@ -792,6 +840,7 @@ function HostForm(props: HostFormProps) {
                     onUsername={(v) => update("inlineUsername", v)}
                     onPassword={(v) => update("inlinePassword", v)}
                     onPickSaved={linkCredential}
+                    linkedCredentialId={linkedCred?.id ?? null}
                     linkedCredentialName={linkedCred?.name ?? null}
                 />
             </section>
@@ -805,6 +854,38 @@ function HostForm(props: HostFormProps) {
                     placeholder={t("dialog.host.notesPlaceholder")}
                 />
             </section>
+
+            {form.protocol === "ssh" && (
+                <section className={styles.section}>
+                    <div className={styles.fieldLabel}>
+                        {t("dialog.host.startupCommand")}
+                    </div>
+                    <Input
+                        value={form.startupCommand}
+                        onChange={(e) => update("startupCommand", e.target.value)}
+                        placeholder={t("dialog.host.startupCommandPlaceholder")}
+                        spellCheck={false}
+                    />
+                    <div className={styles.fieldHint}>
+                        {t("dialog.host.startupCommandHint")}
+                    </div>
+                </section>
+            )}
+
+            <section className={styles.section}>
+                <div className={styles.fieldLabel}>{t("dialog.host.envVars")}</div>
+                <Textarea
+                    value={form.envRaw}
+                    onChange={(e) => update("envRaw", e.target.value, true)}
+                    rows={3}
+                    placeholder={t("dialog.host.envVarsPlaceholder")}
+                    spellCheck={false}
+                />
+                <div className={styles.fieldHint}>
+                    {t("dialog.host.envVarsHint")}
+                </div>
+            </section>
+            </div>
         </main>
     );
 }
@@ -818,11 +899,14 @@ interface FormHeaderProps {
     hostname: string;
     port: string;
     protocol: Protocol;
+    detectedOs: string | null;
     mode: "edit" | "draft";
     hostId: string;
     createdAt: string;
     updatedAt: string;
     saveStatus: SaveStatus;
+    onConnect: () => void;
+    canConnect: boolean;
     onDuplicate: () => void;
     onRequestDelete: () => void;
 }
@@ -859,12 +943,28 @@ function FormHeader(p: FormHeaderProps) {
                     <div className={styles.connection}>
                         <span className={styles.address}>{p.hostname}</span>
                         <span className={styles.port}>:{portDisplay}</span>
+                        {p.detectedOs && (
+                            <span className={styles.osChip} title={t("host.detectedOs")}>
+                                {p.detectedOs}
+                            </span>
+                        )}
                     </div>
                 )}
             </div>
 
             <div className={styles.headerActions}>
-                <Button variant="primary" disabled title={t("host.connectDisabled")}>
+                <Button
+                    variant="primary"
+                    onClick={p.onConnect}
+                    disabled={!p.canConnect}
+                    title={
+                        p.canConnect
+                            ? t("host.connect")
+                            : p.protocol === "rdp"
+                              ? t("host.connectRdpSoon")
+                              : t("host.connectSaveFirst")
+                    }
+                >
                     <Zap size={14} /> {t("host.connect")}
                 </Button>
 
@@ -940,9 +1040,13 @@ interface CredentialPanelProps {
     onPassword: (v: string) => void;
     /** Picking a saved credential links it; the parent flows the chosen id through linkHost. */
     onPickSaved: (credentialId: string) => Promise<void>;
+    /** Non-null when the host has a default_credential_id linked. */
+    linkedCredentialId: string | null;
     /** Non-null when the host has a default_credential_id linked; we display the name as a chip. */
     linkedCredentialName: string | null;
 }
+
+const REVEAL_SECONDS = 10;
 
 function CredentialPanel(props: CredentialPanelProps) {
     const { t } = useT();
@@ -950,7 +1054,70 @@ function CredentialPanel(props: CredentialPanelProps) {
     const [pickerOpen, setPickerOpen] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
 
+    // Revealed stored secret (plaintext from keychain), shown for a short
+    // window then auto-hidden. Distinct from `showPassword`, which only
+    // toggles visibility of a freshly-typed password.
+    const [revealed, setRevealed] = useState<string | null>(null);
+    const [secondsLeft, setSecondsLeft] = useState(0);
+    const revealTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
     const noneAvailable = credentials.length === 0;
+    const hasTyped = props.password !== "";
+    // We can reveal the stored secret when a credential is linked and the
+    // user hasn't typed a replacement password.
+    const canRevealStored = !hasTyped && props.linkedCredentialId !== null;
+
+    const stopReveal = useCallback(() => {
+        if (revealTimer.current) clearInterval(revealTimer.current);
+        revealTimer.current = null;
+        setRevealed(null);
+        setSecondsLeft(0);
+    }, []);
+
+    // Hide and forget the secret if we unmount or the linked credential
+    // changes (e.g. host switched, credential re-linked).
+    useEffect(() => stopReveal, [stopReveal]);
+    useEffect(() => {
+        stopReveal();
+        setShowPassword(false);
+    }, [props.linkedCredentialId, stopReveal]);
+
+    const revealStored = useCallback(async () => {
+        if (!props.linkedCredentialId) return;
+        try {
+            const res = await credApi.reveal(props.linkedCredentialId);
+            if (res.secret == null) return; // ssh_key_agent or no secret
+            setRevealed(res.secret);
+            setSecondsLeft(REVEAL_SECONDS);
+            if (revealTimer.current) clearInterval(revealTimer.current);
+            revealTimer.current = setInterval(() => {
+                setSecondsLeft((s) => {
+                    if (s <= 1) {
+                        stopReveal();
+                        return 0;
+                    }
+                    return s - 1;
+                });
+            }, 1000);
+        } catch {
+            // Reveal failed (e.g. keychain denied) — stay hidden silently.
+        }
+    }, [props.linkedCredentialId, stopReveal]);
+
+    const onEyeClick = () => {
+        if (hasTyped) {
+            setShowPassword((v) => !v);
+        } else if (revealed !== null) {
+            stopReveal();
+        } else {
+            void revealStored();
+        }
+    };
+
+    const showEye = hasTyped || canRevealStored || revealed !== null;
+    const valueShown = revealed !== null;
+    const fieldType = showPassword || valueShown ? "text" : "password";
+    const fieldValue = valueShown ? revealed! : props.password;
 
     return (
         <div className={styles.credentialPanel}>
@@ -963,9 +1130,13 @@ function CredentialPanel(props: CredentialPanelProps) {
             />
             <div className={styles.passwordWrap}>
                 <Input
-                    type={showPassword ? "text" : "password"}
-                    value={props.password}
-                    onChange={(e) => props.onPassword(e.target.value)}
+                    type={fieldType}
+                    value={fieldValue}
+                    onChange={(e) => {
+                        if (valueShown) stopReveal();
+                        props.onPassword(e.target.value);
+                    }}
+                    readOnly={valueShown}
                     placeholder={
                         props.linkedCredentialName
                             ? "••••••••" // password is stored, leave it
@@ -973,19 +1144,32 @@ function CredentialPanel(props: CredentialPanelProps) {
                     }
                     autoComplete="off"
                 />
-                {props.password !== "" && (
+                {valueShown && (
+                    <span className={styles.revealTimer}>
+                        {t("host.reveal.timeLeft", { seconds: secondsLeft })}
+                    </span>
+                )}
+                {showEye && (
                     <button
                         type="button"
                         className={styles.passwordEye}
-                        onClick={() => setShowPassword((v) => !v)}
+                        onClick={onEyeClick}
                         title={
-                            showPassword ? t("common.hide") : t("common.show")
+                            showPassword || valueShown
+                                ? t("common.hide")
+                                : t("common.show")
                         }
                         aria-label={
-                            showPassword ? t("common.hide") : t("common.show")
+                            showPassword || valueShown
+                                ? t("common.hide")
+                                : t("common.show")
                         }
                     >
-                        {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                        {showPassword || valueShown ? (
+                            <EyeOff size={14} />
+                        ) : (
+                            <Eye size={14} />
+                        )}
                     </button>
                 )}
             </div>
@@ -1068,20 +1252,13 @@ function SavedCredentialPicker({
 // Helpers
 // =====================================================================
 
-function buildFormState(props: HostFormProps): FormState {
-    // Heuristic: if name === hostname, treat label as un-set (an auto-fill
-    // happened earlier). This makes the Label input show a dynamic
-    // placeholder of the current hostname rather than baking the address
-    // into the label and freezing it. Edge case: a user who deliberately
-    // typed label === hostname will see it reset to placeholder on next
-    // load — acceptable; we'll address with a `display_name` column when
-    // we touch the Rust schema again.
-    const labelIsAuto =
-        props.host.name.trim() !== "" &&
-        props.host.name.trim() === props.host.hostname.trim();
-
+function buildFormState(props: HostFormProps, linkedUsername?: string): FormState {
+    // Stage 1.8: the Label input now binds directly to the explicit
+    // `display_name` column. No more `name === hostname` heuristic —
+    // an unset label is simply `display_name === null`, and the input
+    // shows the current hostname as its placeholder.
     return {
-        label: labelIsAuto ? "" : props.host.name,
+        label: props.host.display_name ?? "",
         hostname: props.host.hostname,
         port:
             props.mode === "draft" && props.host.hostname === ""
@@ -1091,9 +1268,45 @@ function buildFormState(props: HostFormProps): FormState {
         groupId: props.host.group_id ?? "",
         tagsRaw: props.host.tags.join(", "),
         notes: props.host.notes ?? "",
-        inlineUsername: props.initialInlineUsername ?? "",
+        startupCommand: props.host.startup_command ?? "",
+        envRaw: formatEnv(props.host.env_vars),
+        // Seed the username from the linked credential so it survives the
+        // form rebuild that happens when a host is selected. (Without
+        // this, the reset effect clobbered the value the linked-cred
+        // effect had just loaded → username looked empty.)
+        inlineUsername: linkedUsername ?? props.initialInlineUsername ?? "",
         inlinePassword: props.initialInlinePassword ?? "",
     };
+}
+
+/** Serialize env vars to the textarea form: one `KEY=VALUE` per line. */
+function formatEnv(vars: EnvVar[]): string {
+    return vars.map((v) => `${v.key}=${v.value}`).join("\n");
+}
+
+/**
+ * Parse the env textarea back into a list. Rules:
+ * - One variable per line, split on the first `=`.
+ * - Blank lines and lines starting with `#` are ignored.
+ * - Keys are trimmed; lines with an empty key are dropped.
+ * - Values keep their surrounding whitespace trimmed (a leading/trailing
+ *   space in an env value is almost always a typo).
+ */
+function parseEnv(raw: string): EnvVar[] {
+    const out: EnvVar[] = [];
+    const seen = new Set<string>();
+    for (const line of raw.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed === "" || trimmed.startsWith("#")) continue;
+        const eq = trimmed.indexOf("=");
+        if (eq < 0) continue;
+        const key = trimmed.slice(0, eq).trim();
+        const value = trimmed.slice(eq + 1).trim();
+        if (key === "" || seen.has(key)) continue;
+        seen.add(key);
+        out.push({ key, value });
+    }
+    return out;
 }
 
 function parseTags(raw: string): string[] {

@@ -28,16 +28,23 @@ import {
     events,
     groups as groupsApi,
     hosts as hostsApi,
+    sessions as sessionsApi,
     settings as settingsApi,
 } from "../lib/ipc";
 import type {
+    CloseReason,
     CredentialDto,
+    EnvVar,
     GroupId,
     HostDto,
     HostGroupDto,
     HostId,
+    Protocol,
+    SessionState,
     Settings,
+    SshSessionEvent,
 } from "../lib/types";
+import { formatApiError } from "../lib/types";
 
 // =====================================================================
 // Hosts
@@ -130,7 +137,7 @@ export type DialogKind =
     | { kind: "credentials-list" }
     | { kind: "credential-create" }
     | { kind: "credential-delete-confirm"; credentialId: string }
-    | { kind: "settings" }
+    | { kind: "settings"; section?: string }
     /**
      * Discard-changes prompt shown when the user tries to navigate away
      * from a draft host that has at least one filled field but cannot
@@ -158,6 +165,10 @@ export interface HostDraft {
     groupId: GroupId | null;
     tags: string[];
     notes: string;
+    /** Command run on SSH connect. Empty means none. */
+    startupCommand: string;
+    /** Environment variables to inject on connect. */
+    envVars: EnvVar[];
     /** Inline credential being typed (not yet committed to the credential store). */
     inlineUsername: string;
     inlinePassword: string;
@@ -174,6 +185,8 @@ interface UiStore {
     searchQuery: string;
     /** Collapsed group IDs in the sidebar tree. */
     collapsedGroupIds: Set<GroupId>;
+    /** Quick-connect launcher overlay (opened by the tab-bar "+"). */
+    launcherOpen: boolean;
 
     selectHost: (id: HostId | null) => void;
     startDraft: (defaultGroupId?: GroupId | null) => void;
@@ -183,6 +196,7 @@ interface UiStore {
     closeDialog: () => void;
     setSearchQuery: (q: string) => void;
     toggleGroupCollapsed: (id: GroupId) => void;
+    setLauncherOpen: (open: boolean) => void;
 }
 
 function emptyDraft(defaultGroupId: GroupId | null = null): HostDraft {
@@ -194,6 +208,8 @@ function emptyDraft(defaultGroupId: GroupId | null = null): HostDraft {
         groupId: defaultGroupId,
         tags: [],
         notes: "",
+        startupCommand: "",
+        envVars: [],
         inlineUsername: "",
         inlinePassword: "",
     };
@@ -205,6 +221,7 @@ export const useUiStore = create<UiStore>((set) => ({
     dialog: { kind: "none" },
     searchQuery: "",
     collapsedGroupIds: new Set(),
+    launcherOpen: false,
 
     selectHost: (id) => set({ selectedHostId: id, draft: null }),
     startDraft: (defaultGroupId = null) =>
@@ -215,6 +232,7 @@ export const useUiStore = create<UiStore>((set) => ({
     setDialog: (dialog) => set({ dialog }),
     closeDialog: () => set({ dialog: { kind: "none" } }),
     setSearchQuery: (searchQuery) => set({ searchQuery }),
+    setLauncherOpen: (launcherOpen) => set({ launcherOpen }),
     toggleGroupCollapsed: (id) =>
         set((s) => {
             const next = new Set(s.collapsedGroupIds);
@@ -235,6 +253,8 @@ export function isDraftDirty(d: HostDraft): boolean {
         d.port.trim() !== "" ||
         d.tags.length > 0 ||
         d.notes.trim() !== "" ||
+        d.startupCommand.trim() !== "" ||
+        d.envVars.length > 0 ||
         d.inlineUsername.trim() !== "" ||
         d.inlinePassword !== ""
     );
@@ -319,6 +339,235 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         // subscription in subscribeToBackendEvents. No manual reload here.
     },
 }));
+
+// =====================================================================
+// Sessions (Stage 2)
+//
+// Each open session is a tab. We key tabs by a stable local id (`key`)
+// generated up front, so the event channel — set up before the backend
+// returns the real `sessionId` — can address the tab without races.
+//
+// PTY output is high-frequency and must NOT flow through React state.
+// A module-level registry maps each tab to its xterm writer; output that
+// arrives before the terminal mounts is buffered and flushed on mount.
+// =====================================================================
+
+export interface SessionTab {
+    key: string;
+    sessionId: string | null;
+    hostId: HostId;
+    title: string;
+    protocol: Protocol;
+    state: SessionState;
+    /** Human-readable error / close detail, if any. */
+    message: string | null;
+    /** Set while a TOFU host-key decision is pending. */
+    hostKey: { fingerprint: string; keyType: string } | null;
+}
+
+interface OutputSink {
+    buffer: Uint8Array[];
+    writer: ((data: Uint8Array) => void) | null;
+}
+
+const sessionOutput = new Map<string, OutputSink>();
+
+function pushOutput(key: string, data: Uint8Array) {
+    const sink = sessionOutput.get(key);
+    if (!sink) return;
+    if (sink.writer) sink.writer(data);
+    else sink.buffer.push(data);
+}
+
+/** Terminal component calls this on mount; flushes buffered output. */
+export function registerSessionTerminal(
+    key: string,
+    writer: (data: Uint8Array) => void,
+): () => void {
+    let sink = sessionOutput.get(key);
+    if (!sink) {
+        sink = { buffer: [], writer: null };
+        sessionOutput.set(key, sink);
+    }
+    sink.writer = writer;
+    for (const chunk of sink.buffer) writer(chunk);
+    sink.buffer = [];
+    return () => {
+        const s = sessionOutput.get(key);
+        if (s) s.writer = null;
+    };
+}
+
+function closeReasonText(reason: CloseReason): string {
+    switch (reason.kind) {
+        case "user_requested":
+            return "Closed";
+        case "server_disconnected":
+            return reason.message ?? "Server disconnected";
+        case "network_error":
+            return reason.message;
+        case "auth_failed":
+            return "Authentication failed";
+        case "host_key_rejected":
+            return "Host key rejected";
+        case "crashed":
+            return reason.message;
+    }
+}
+
+interface SessionsStore {
+    sessions: SessionTab[];
+    activeSessionKey: string | null;
+    open: (host: HostDto) => Promise<void>;
+    close: (key: string) => Promise<void>;
+    setActive: (key: string | null) => void;
+    sendInput: (key: string, data: Uint8Array) => void;
+    resize: (key: string, cols: number, rows: number) => void;
+    acceptHostKey: (key: string) => Promise<void>;
+    rejectHostKey: (key: string) => Promise<void>;
+}
+
+export const useSessionsStore = create<SessionsStore>((set, get) => {
+    const patch = (key: string, fields: Partial<SessionTab>) =>
+        set((s) => ({
+            sessions: s.sessions.map((t) => (t.key === key ? { ...t, ...fields } : t)),
+        }));
+
+    const handleEvent = (key: string, ev: SshSessionEvent) => {
+        switch (ev.kind) {
+            case "state_changed":
+                patch(key, { state: ev.state });
+                break;
+            case "data":
+                pushOutput(key, Uint8Array.from(ev.bytes));
+                break;
+            case "auth_failed":
+                patch(key, { state: "failed", message: `Auth failed (${ev.method})` });
+                break;
+            case "host_key_prompt":
+                patch(key, {
+                    state: "host_key_pending",
+                    hostKey: {
+                        fingerprint: ev.fingerprint_sha256,
+                        keyType: ev.key_type,
+                    },
+                });
+                break;
+            case "error":
+                patch(key, { message: ev.message });
+                break;
+            case "closed":
+                patch(key, { state: "closed", message: closeReasonText(ev.reason) });
+                break;
+        }
+    };
+
+    return {
+        sessions: [],
+        activeSessionKey: null,
+
+        open: async (host) => {
+            const key =
+                typeof crypto !== "undefined" && "randomUUID" in crypto
+                    ? crypto.randomUUID()
+                    : `s_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+            const tab: SessionTab = {
+                key,
+                sessionId: null,
+                hostId: host.id,
+                title: host.display_name ?? host.name,
+                protocol: host.protocol,
+                state: "connecting",
+                message: null,
+                hostKey: null,
+            };
+            sessionOutput.set(key, { buffer: [], writer: null });
+            set((s) => ({ sessions: [...s.sessions, tab], activeSessionKey: key }));
+
+            try {
+                const res = await sessionsApi.open(
+                    {
+                        host_id: host.id,
+                        credential_id: host.default_credential_id ?? null,
+                        options: {
+                            protocol: "ssh",
+                            cols: 80,
+                            rows: 24,
+                            term: "xterm-256color",
+                        },
+                    },
+                    (ev) => handleEvent(key, ev),
+                );
+                patch(key, { sessionId: res.session_id });
+            } catch (e: unknown) {
+                patch(key, { state: "failed", message: formatApiError(e) });
+            }
+        },
+
+        close: async (key) => {
+            const tab = get().sessions.find((t) => t.key === key);
+            if (tab?.sessionId) {
+                try {
+                    await sessionsApi.close(tab.sessionId);
+                } catch {
+                    /* actor may already be gone — ignore */
+                }
+            }
+            sessionOutput.delete(key);
+            set((s) => {
+                const sessions = s.sessions.filter((t) => t.key !== key);
+                const activeSessionKey =
+                    s.activeSessionKey === key
+                        ? (sessions[sessions.length - 1]?.key ?? null)
+                        : s.activeSessionKey;
+                return { sessions, activeSessionKey };
+            });
+        },
+
+        setActive: (key) => set({ activeSessionKey: key }),
+
+        sendInput: (key, data) => {
+            const tab = get().sessions.find((t) => t.key === key);
+            if (!tab?.sessionId) return;
+            void sessionsApi
+                .sendInput({ session_id: tab.sessionId, data: Array.from(data) })
+                .catch(() => {});
+        },
+
+        resize: (key, cols, rows) => {
+            const tab = get().sessions.find((t) => t.key === key);
+            if (!tab?.sessionId) return;
+            void sessionsApi
+                .resize({ session_id: tab.sessionId, width: cols, height: rows })
+                .catch(() => {});
+        },
+
+        acceptHostKey: async (key) => {
+            const tab = get().sessions.find((t) => t.key === key);
+            if (!tab?.sessionId || !tab.hostKey) return;
+            patch(key, { hostKey: null, state: "authenticating" });
+            try {
+                await sessionsApi.acceptHostKey({
+                    session_id: tab.sessionId,
+                    fingerprint: tab.hostKey.fingerprint,
+                });
+            } catch (e: unknown) {
+                patch(key, { state: "failed", message: formatApiError(e) });
+            }
+        },
+
+        rejectHostKey: async (key) => {
+            const tab = get().sessions.find((t) => t.key === key);
+            if (!tab?.sessionId) return;
+            patch(key, { hostKey: null });
+            try {
+                await sessionsApi.rejectHostKey(tab.sessionId);
+            } catch {
+                /* ignore */
+            }
+        },
+    };
+});
 
 // =====================================================================
 // Helpers

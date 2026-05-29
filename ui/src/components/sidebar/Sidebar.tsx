@@ -6,7 +6,6 @@ import {
     KeyRound,
     Pencil,
     Plus,
-    Search,
     Settings,
 } from "lucide-react";
 
@@ -16,6 +15,7 @@ import {
     isDraftPromotable,
     useGroupsStore,
     useHostsStore,
+    useSessionsStore,
     useUiStore,
 } from "../../store";
 import type { GroupId, HostDto, HostGroupDto } from "../../lib/types";
@@ -40,7 +40,6 @@ export function Sidebar() {
     const groups = useGroupsStore((s) => s.items);
     const draft = useUiStore((s) => s.draft);
     const searchQuery = useUiStore((s) => s.searchQuery);
-    const setSearchQuery = useUiStore((s) => s.setSearchQuery);
     const startDraft = useUiStore((s) => s.startDraft);
     const setDialog = useUiStore((s) => s.setDialog);
 
@@ -73,17 +72,6 @@ export function Sidebar() {
 
     return (
         <aside className={styles.sidebar}>
-            <div className={styles.searchRow}>
-                <Search size={14} className={styles.searchIcon} />
-                <input
-                    type="search"
-                    className={styles.searchInput}
-                    placeholder={t("sidebar.searchPlaceholder")}
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                />
-            </div>
-
             <nav className={styles.tree}>
                 {draft && <DraftRow />}
 
@@ -282,12 +270,19 @@ function HostRow({
 }) {
     const selectedId = useUiStore((s) => s.selectedHostId);
     const selectHost = useUiStore((s) => s.selectHost);
+    const { t } = useT();
     const isSelected = selectedId === host.id;
     return (
         <li>
             <button
                 className={`${styles.hostRow} ${isSelected ? styles.hostRowSelected : ""}`}
                 onClick={() => guardNavigation(() => selectHost(host.id))}
+                onDoubleClick={() => {
+                    if (host.protocol === "ssh") {
+                        void useSessionsStore.getState().open(host);
+                    }
+                }}
+                title={host.protocol === "ssh" ? t("host.doubleClickConnect") : undefined}
                 type="button"
             >
                 <HostIcon />

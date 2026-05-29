@@ -14,7 +14,7 @@
  * Each function corresponds 1:1 to a Tauri command in `crates/rh-app/src/api/`.
  */
 
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
@@ -39,9 +39,16 @@ import type {
     HostListResponse,
     HostUpdateRequest,
     IdResponse,
+    SessionAcceptHostKeyRequest,
+    SessionId,
+    SessionInputRequest,
+    SessionOpenRequest,
+    SessionOpenResponse,
+    SessionResizeRequest,
     SettingsChangedPayload,
     SettingsGetAllResponse,
     SettingsUpdateRequest,
+    SshSessionEvent,
 } from "./types";
 import {
     EVENT_CREDENTIALS_CHANGED,
@@ -125,6 +132,41 @@ export const credentials = {
 
     unlinkHost: (req: { host_id: HostId; credential_id: CredentialId }): Promise<void> =>
         call("credential_unlink_host", req),
+};
+
+// =====================================================================
+// Sessions (Stage 2)
+//
+// `open` creates a Tauri Channel for the high-throughput event stream
+// (PTY output, state changes) and passes it alongside the request. The
+// Rust actor pushes `SshSessionEvent`s to it. Input/resize/close go back
+// through ordinary commands keyed by session id.
+// =====================================================================
+
+export const sessions = {
+    open: (
+        req: SessionOpenRequest,
+        onEvent: (e: SshSessionEvent) => void,
+    ): Promise<SessionOpenResponse> => {
+        const channel = new Channel<SshSessionEvent>();
+        channel.onmessage = onEvent;
+        return invoke<SessionOpenResponse>("session_open", { req, onEvent: channel });
+    },
+
+    close: (sessionId: SessionId): Promise<void> =>
+        call("session_close", { session_id: sessionId }),
+
+    sendInput: (req: SessionInputRequest): Promise<void> =>
+        call("session_send_input", req),
+
+    resize: (req: SessionResizeRequest): Promise<void> =>
+        call("session_resize", req),
+
+    acceptHostKey: (req: SessionAcceptHostKeyRequest): Promise<void> =>
+        call("session_accept_host_key", req),
+
+    rejectHostKey: (sessionId: SessionId): Promise<void> =>
+        call("session_reject_host_key", { session_id: sessionId }),
 };
 
 // =====================================================================

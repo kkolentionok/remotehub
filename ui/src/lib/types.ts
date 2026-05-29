@@ -27,15 +27,22 @@ export type CredentialKind = "password" | "ssh_key" | "ssh_key_agent";
 // Entities
 // =====================================================================
 
+export interface EnvVar {
+    key: string;
+    value: string;
+}
+
 export interface HostDto {
     id: HostId;
     name: string;
+    display_name: string | null;
     group_id: GroupId | null;
     protocol: Protocol;
     hostname: string;
     port: number;
     tags: string[];
     color: string | null;
+    detected_os: string | null;
     default_credential_id: CredentialId | null;
     created_at: string;
     updated_at: string;
@@ -43,6 +50,8 @@ export interface HostDto {
 
 export interface HostFullDto extends HostDto {
     notes: string | null;
+    startup_command: string | null;
+    env_vars: EnvVar[];
 }
 
 export interface HostGroupDto {
@@ -62,6 +71,70 @@ export interface CredentialDto {
 }
 
 // =====================================================================
+// Sessions (Stage 2)
+// =====================================================================
+
+export type SessionState =
+    | "connecting"
+    | "authenticating"
+    | "host_key_pending"
+    | "ready"
+    | "disconnecting"
+    | "closed"
+    | "failed";
+
+export type CloseReason =
+    | { kind: "user_requested" }
+    | { kind: "server_disconnected"; message: string | null }
+    | { kind: "network_error"; message: string }
+    | { kind: "auth_failed" }
+    | { kind: "host_key_rejected" }
+    | { kind: "crashed"; message: string };
+
+/** Events pushed from the Rust SSH actor over a Tauri Channel. */
+export type SshSessionEvent =
+    | { kind: "state_changed"; state: SessionState }
+    | { kind: "data"; bytes: number[] }
+    | { kind: "auth_failed"; method: string }
+    | { kind: "host_key_prompt"; fingerprint_sha256: string; key_type: string }
+    | { kind: "error"; message: string }
+    | { kind: "closed"; reason: CloseReason };
+
+export type SessionOpenOptions = {
+    protocol: "ssh";
+    cols: number;
+    rows: number;
+    term: string;
+};
+
+export interface SessionOpenRequest {
+    host_id: HostId;
+    credential_id?: CredentialId | null;
+    options: SessionOpenOptions;
+}
+
+export interface SessionOpenResponse {
+    session_id: SessionId;
+    event_channel?: string;
+}
+
+export interface SessionInputRequest {
+    session_id: SessionId;
+    data: number[];
+}
+
+export interface SessionResizeRequest {
+    session_id: SessionId;
+    width: number;
+    height: number;
+}
+
+export interface SessionAcceptHostKeyRequest {
+    session_id: SessionId;
+    fingerprint: string;
+}
+
+// =====================================================================
 // Settings
 // =====================================================================
 
@@ -73,7 +146,13 @@ export type TerminalColorScheme =
     | "solarized-dark"
     | "solarized-light"
     | "dracula"
-    | "nord";
+    | "nord"
+    | "pro"
+    | "light"
+    | "kanagawa"
+    | "octocat"
+    | "material-dark"
+    | "homebrew";
 export type StartupScreen = "home" | "last_hosts";
 
 export type RdpResolution =
@@ -110,6 +189,7 @@ export interface HostListRequest {
 
 export interface HostCreateRequest {
     name: string;
+    display_name?: string | null;
     group_id?: GroupId | null;
     protocol: Protocol;
     hostname: string;
@@ -117,6 +197,8 @@ export interface HostCreateRequest {
     tags?: string[] | null;
     color?: string | null;
     notes?: string | null;
+    startup_command?: string | null;
+    env_vars?: EnvVar[] | null;
     default_credential_id?: CredentialId | null;
 }
 
@@ -133,6 +215,7 @@ export interface HostCreateRequest {
 export interface HostUpdateRequest {
     id: HostId;
     name?: string;
+    display_name?: string | null;
     group_id?: GroupId | null;
     protocol?: Protocol;
     hostname?: string;
@@ -140,6 +223,8 @@ export interface HostUpdateRequest {
     tags?: string[];
     color?: string | null;
     notes?: string | null;
+    startup_command?: string | null;
+    env_vars?: EnvVar[];
     default_credential_id?: CredentialId | null;
 }
 
