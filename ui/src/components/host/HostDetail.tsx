@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Eye, EyeOff, Files, Info, KeyRound, Lock, Plus, Server, Trash2, Upload, User, X, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, Eye, EyeOff, Files, Info, KeyRound, Lock, Pencil, Plus, Server, Trash2, Upload, User, X, Zap } from "lucide-react";
 
 import { useT } from "../../i18n";
 import {
@@ -507,11 +507,18 @@ function HostForm(props: HostFormProps) {
                     const anyLinked = pwCred !== null || keyCred !== null;
 
                     // ----- Password -----
-                    if (
-                        passwordFilled &&
-                        state.inlinePassword !== committedPasswordRef.current
-                    ) {
-                        if (pwCred) {
+                    // A change from the committed baseline drives the action:
+                    //  • emptied (was non-empty) → remove the linked password
+                    //  • new/changed text → create+link or rotate
+                    if (state.inlinePassword !== committedPasswordRef.current) {
+                        if (state.inlinePassword === "") {
+                            if (pwCred) {
+                                await credApi.unlinkHost({
+                                    host_id: props.host.id,
+                                    credential_id: pwCred.id,
+                                });
+                            }
+                        } else if (pwCred) {
                             await credApi.rotateSecret({
                                 id: pwCred.id,
                                 secret: encodeSecret(state.inlinePassword),
@@ -888,6 +895,14 @@ function HostForm(props: HostFormProps) {
         [props, flashSaved, updateDraft],
     );
 
+    // Seed the field with the revealed stored password as the edit
+    // baseline. We set committed = value so no save fires on reveal; only
+    // a later edit (or clearing it → delete) counts as a change.
+    const onPasswordRevealed = useCallback((value: string) => {
+        committedPasswordRef.current = value;
+        setForm((f) => ({ ...f, inlinePassword: value }));
+    }, []);
+
     const groupOptions = useMemo(
         () =>
             groups
@@ -936,6 +951,21 @@ function HostForm(props: HostFormProps) {
             debouncedField.cancel();
             debouncedNotes.cancel();
             await saveAction(formRef.current);
+            // The just-typed secrets are now persisted. Drop them from the
+            // form so the field locks to the saved credential — revealing it
+            // then pulls the LIVE secret from the keychain. Without this the
+            // locally-typed value lingers and the eye would show a stale
+            // password if it later changes (e.g. via the re-auth screen).
+            committedPasswordRef.current = "";
+            committedPrivateKeyRef.current = "";
+            committedPassphraseRef.current = "";
+            setForm((f) => ({
+                ...f,
+                inlinePassword: "",
+                inlinePrivateKey: "",
+                inlinePassphrase: "",
+                inlineKeyName: "",
+            }));
             const fresh = await hostsApi.get(props.host.id);
             void useSessionsStore.getState().open(fresh);
         } catch {
@@ -1052,6 +1082,7 @@ function HostForm(props: HostFormProps) {
                     password={form.inlinePassword}
                     onUsername={(v) => update("inlineUsername", v)}
                     onPassword={(v) => update("inlinePassword", v)}
+                    onPasswordRevealed={onPasswordRevealed}
                     onPickSaved={linkCredential}
                     onAddKey={onAddKey}
                     onUnlink={unlinkCredential}
@@ -1298,6 +1329,9 @@ interface CredentialPanelProps {
     password: string;
     onUsername: (v: string) => void;
     onPassword: (v: string) => void;
+    /** Set the field to the revealed stored password as the edit baseline
+        (no save scheduled). Clearing it then removes the password. */
+    onPasswordRevealed: (v: string) => void;
     /** Picking a saved credential links it; the parent flows the chosen id through linkHost. */
     onPickSaved: (credentialId: string) => Promise<void>;
     /** Create a new SSH key (paste/import) and apply it to the host now. */
@@ -1322,8 +1356,14 @@ function CredentialPanel(props: CredentialPanelProps) {
     const [pickerOpen, setPickerOpen] = useState(false);
     const [addKeyOpen, setAddKeyOpen] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
+    // Saved methods are locked by default (protects against accidental
+    // edits/removal). A pencil unlocks editing; only then is ✕ shown.
+    const [pwEditing, setPwEditing] = useState(false);
+    const [keyEditing, setKeyEditing] = useState(false);
 
     const keyLinked = props.linkedKeyId !== null;
+    const pwLocked = props.linkedPasswordId !== null && !pwEditing;
+    const keyLocked = keyLinked && !keyEditing;
 
     // Revealed stored password (plaintext from keychain), shown briefly.
     const [revealed, setRevealed] = useState<string | null>(null);
@@ -1332,6 +1372,7 @@ function CredentialPanel(props: CredentialPanelProps) {
 
     const hasTyped = props.password !== "";
     const canRevealStored = !hasTyped && props.linkedPasswordId !== null;
+    const pwRowRef = useRef<HTMLDivElement>(null);
 
     const stopReveal = useCallback(() => {
         if (revealTimer.current) clearInterval(revealTimer.current);
@@ -1346,6 +1387,8 @@ function CredentialPanel(props: CredentialPanelProps) {
         setShowPassword(false);
         setPickerOpen(false);
         setAddKeyOpen(false);
+        setPwEditing(false);
+        setKeyEditing(false);
     }, [props.linkedPasswordId, props.linkedKeyId, stopReveal]);
 
     const revealStored = useCallback(async () => {
@@ -1370,6 +1413,22 @@ function CredentialPanel(props: CredentialPanelProps) {
         }
     }, [props.linkedPasswordId, stopReveal]);
 
+    // Re-lock the password when the user clicks/taps outside its row
+    // (including hitting Connect, another field, etc.) — and stop any
+    // open reveal. Keeps "saved = locked & muted" as the resting state.
+    useEffect(() => {
+        if (!pwEditing && revealed === null) return;
+        const onDoc = (e: MouseEvent) => {
+            if (pwRowRef.current && !pwRowRef.current.contains(e.target as Node)) {
+                setPwEditing(false);
+                setShowPassword(false);
+                stopReveal();
+            }
+        };
+        document.addEventListener("mousedown", onDoc);
+        return () => document.removeEventListener("mousedown", onDoc);
+    }, [pwEditing, revealed, stopReveal]);
+
     const onEyeClick = () => {
         if (hasTyped) {
             setShowPassword((v) => !v);
@@ -1379,6 +1438,23 @@ function CredentialPanel(props: CredentialPanelProps) {
             void revealStored();
         }
     };
+
+    // Pencil → unlock for editing. Reveal the stored secret into the field
+    // (as plaintext) so the user can edit it — or clear it to delete the
+    // password, like any text field. No ✕ shortcut.
+    const beginPasswordEdit = useCallback(async () => {
+        stopReveal();
+        setShowPassword(true);
+        setPwEditing(true);
+        if (props.linkedPasswordId) {
+            try {
+                const res = await credApi.reveal(props.linkedPasswordId);
+                props.onPasswordRevealed(res.secret ?? "");
+            } catch {
+                props.onPasswordRevealed("");
+            }
+        }
+    }, [props, stopReveal]);
 
     const showEye = hasTyped || canRevealStored || revealed !== null;
     const valueShown = revealed !== null;
@@ -1402,18 +1478,19 @@ function CredentialPanel(props: CredentialPanelProps) {
             {/* Password — always available as a method. Full width like the
                 other fields; controls (timer/eye/✕) overlay at the right. */}
             <div
+                ref={pwRowRef}
                 className={`${styles.passwordWrap} ${props.linkedPasswordId ? styles.removable : ""}`}
             >
                 <Lock size={14} className={styles.fieldIcon} />
                 <Input
-                    className={styles.iconInput}
+                    className={`${styles.iconInput} ${pwLocked ? styles.pwMuted : ""}`}
                     type={fieldType}
                     value={fieldValue}
                     onChange={(e) => {
                         if (valueShown) stopReveal();
                         props.onPassword(e.target.value);
                     }}
-                    readOnly={valueShown}
+                    readOnly={valueShown || pwLocked}
                     placeholder={
                         props.linkedPasswordId
                             ? "••••••••"
@@ -1450,36 +1527,48 @@ function CredentialPanel(props: CredentialPanelProps) {
                             )}
                         </button>
                     )}
-                    {props.linkedPasswordId && (
+                    {pwLocked && (
                         <button
                             type="button"
-                            className={styles.methodRemove}
-                            onClick={() => props.onUnlink(props.linkedPasswordId!)}
-                            title={t("dialog.host.removeMethod")}
-                            aria-label={t("dialog.host.removeMethod")}
+                            className={styles.passwordEye}
+                            onClick={() => void beginPasswordEdit()}
+                            title={t("common.edit")}
+                            aria-label={t("common.edit")}
                         >
-                            <X size={14} />
+                            <Pencil size={14} />
                         </button>
                     )}
                 </div>
             </div>
 
-            {/* SSH key — compact chip with ✕ when linked. */}
+            {/* SSH key — locked chip with a pencil; ✕ appears only in edit. */}
             {keyLinked && (
                 <div className={styles.keyChipRow}>
                     <KeyRound size={14} />
                     <span className={styles.keyChipName}>
                         {props.linkedKeyName}
                     </span>
-                    <button
-                        type="button"
-                        className={styles.methodRemove}
-                        onClick={() => props.onUnlink(props.linkedKeyId!)}
-                        title={t("dialog.host.removeMethod")}
-                        aria-label={t("dialog.host.removeMethod")}
-                    >
-                        <X size={14} />
-                    </button>
+                    {keyLocked ? (
+                        <button
+                            type="button"
+                            className={styles.methodRemove}
+                            onClick={() => setKeyEditing(true)}
+                            title={t("common.edit")}
+                            aria-label={t("common.edit")}
+                        >
+                            <Pencil size={14} />
+                        </button>
+                    ) : (
+                        <button
+                            type="button"
+                            className={styles.methodRemove}
+                            onClick={() => props.onUnlink(props.linkedKeyId!)}
+                            title={t("dialog.host.removeMethod")}
+                            aria-label={t("dialog.host.removeMethod")}
+                        >
+                            <X size={14} />
+                        </button>
+                    )}
                 </div>
             )}
 
@@ -1524,7 +1613,7 @@ function CredentialPanel(props: CredentialPanelProps) {
     );
 }
 
-function SavedCredentialPicker({
+export function SavedCredentialPicker({
     onPick,
     onAddNew,
     onClose,
@@ -1576,7 +1665,7 @@ function SavedCredentialPicker({
 // Modal for adding a brand-new SSH key: paste or import from file
 // (OpenSSH / PEM / PuTTY .ppk), optional passphrase. The key is created
 // in the keychain and applied to the host immediately on confirm.
-function AddKeyModal({
+export function AddKeyModal({
     onClose,
     onAdd,
 }: {

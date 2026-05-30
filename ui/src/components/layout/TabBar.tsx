@@ -161,7 +161,11 @@ export function TabBar() {
                         <span
                             className={`${styles.dot} ${styles[`dot--${focused?.state ?? "connecting"}`] ?? ""}`}
                         />
-                        <span className={styles.label}>{focused?.title ?? "—"}</span>
+                        <span className={styles.label}>
+                            {paneCount > 1
+                                ? t("tab.split")
+                                : (focused?.title ?? "—")}
+                        </span>
                         {paneCount > 1 && (
                             <span className={styles.count} title={t("tab.panes", { n: paneCount })}>
                                 <Columns2 size={11} />

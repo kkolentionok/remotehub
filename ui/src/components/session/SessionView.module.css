@@ -290,3 +290,67 @@
     gap: var(--space-2);
     justify-content: center;
 }
+
+/* Inline re-auth (password) on auth failure. */
+.reauth {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    width: 360px;
+    max-width: 92%;
+    margin: 0 auto;
+    text-align: center;
+}
+.reauthTitle {
+    font-size: var(--text-md);
+    font-weight: 600;
+    color: var(--color-fg);
+}
+.reauthMsg {
+    font-size: var(--text-sm);
+    color: var(--color-fg-muted);
+    margin-top: calc(-1 * var(--space-2));
+}
+.reauthButtons {
+    display: flex;
+}
+.reauthConnectBtn {
+    width: 100%;
+    justify-content: center;
+}
+.reauthHint {
+    font-size: var(--text-xs);
+    color: var(--color-fg-faint);
+}
+
+
+/* Password + key-picker on one row in the re-auth screen. */
+.reauthPwRow {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    gap: var(--space-2);
+}
+.reauthPwInput {
+    flex: 1;
+    min-width: 0;
+}
+.reauthKeyBtn {
+    flex-shrink: 0;
+    align-self: stretch;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    padding: 0;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-ssh);
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s;
+}
+.reauthKeyBtn:hover {
+    border-color: var(--color-border-strong, var(--color-border));
+    background: var(--color-subtle);
+}
