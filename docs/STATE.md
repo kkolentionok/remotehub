@@ -1,6 +1,28 @@
 # RemoteHub — Project State & Handoff
 
-**Last updated:** SSH auth complete & live-verified — password, public-key (OpenSSH/PEM), native PuTTY **.ppk** conversion, and passwordless. Credentials are now **multi-method per host** (password + key tried together), **username moved to the host** (per-host login, one shared key), new key-add UX (dropdown + modal). Stage 2 (SSH) done.
+**Last updated:** Credential-safety + re-auth UX pass. Saved password is locked/muted (eye reveals & copies, pencil edits, no ✕ — delete by clearing the revealed text), SSH-key add via dropdown + paste/import modal, inline re-auth screen on auth failure (password + SSH-key picker, both saved to the host), passwordless fallback, split-tab label. SSH (Stage 2) done & live-verified.
+
+## Latest — credential safety, key-add UX, inline re-auth (DONE, frontend, tsc+vite green)
+
+UX pass on top of the auth work below. All frontend; verified `tsc --noEmit` + `vite build`.
+
+**Credential panel (HostDetail.tsx — the fragile file):**
+- **Saved password is locked by default** (read-only, muted color `.pwMuted`). Eye 👁 reveals the live keychain secret read-only (selectable/copyable, 10s auto-hide). Pencil ✏️ reveals it into an **editable plaintext** field (via `onPasswordRevealed`, which seeds the value as the committed baseline so no save fires).
+- **No ✕ on the password.** Removal is deliberate: reveal with the pencil, clear the text, save → `credential_unlink_host`. Guard: an empty field only deletes when it differs from a non-empty committed baseline (so merely opening a host and saving never nukes the password). `saveAction` password block: changed→ empty+pwCred = unlink, non-empty = rotate/create.
+- **Re-lock on click-outside** the password row (`pwRowRef` + document mousedown) — and on linked-cred change. So the resting state is always "locked + muted"; clicking Connect, another field, etc. re-locks and hides the reveal.
+- **Connect commits the field:** `handleConnect` clears the typed `inlinePassword/privateKey/passphrase` + committed refs after the flush-save. Without this, a locally-typed password lingered and the eye showed the stale typed value (not the live keychain secret) until you navigated away — the "password shows 111 after re-auth changed it to 222" bug. Now the field locks to the saved cred and the eye always reveals live.
+- **SSH key add:** "+ SSH-ключ" opens a dropdown of existing `ssh_key` creds + an **"Add new key…"** footer → `AddKeyModal` (paste / import .ppk·PEM / passphrase). Key chip still uses pencil→✕ (keys aren't text, so the 2-step delete stays). `SavedCredentialPicker` and `AddKeyModal` are **exported** from HostDetail.tsx for reuse on the re-auth screen.
+
+**Inline re-auth on auth failure (SessionView.tsx):**
+- Detect: `isDead && message.toLowerCase().includes("auth")` — **note auth failure ends the session in state `closed`, not `failed`**, so don't gate on `failed`.
+- Layout: password input + a stretched **SSH-key button** (green `--color-ssh` icon) on one row (`.reauthPwRow` is the dropdown anchor → full-width picker), full-width **"Подключиться и сохранить"** below. No hint text, no "Edit" button on the auth screen (Edit stays on the non-auth closed/failed EmptyState).
+- Actions all **save to the host** then reconnect: `connectWithPassword` rotates the existing password cred or creates+links a new one; `linkAndReconnect(credId)` links a picked key; `addKeyAndReconnect` creates+links a pasted/imported key. Each fetches the full host (`hosts.get`) for `credential_ids`, mutates via `credApi`, then `close + open(fresh)`.
+
+**Other:**
+- **Passwordless fallback (sessions.rs):** if a host has **no linked credential but a username**, try a single empty-password attempt instead of erroring "host has no credential".
+- **Split-tab label (TabBar.tsx):** a tab with >1 pane shows `t("tab.split")` ("Сплит") instead of one pane's title; the ⊞ count badge stays.
+
+
 
 ## Latest — SSH auth, multi-method credentials, per-host username (DONE, live-verified)
 
