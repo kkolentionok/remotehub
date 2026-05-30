@@ -1,6 +1,39 @@
 # RemoteHub — Project State & Handoff
 
-**Last updated:** UX overhaul (part 1) — tabbed shell: pinned "Vault" tab (host manager) + one tab per session; sidebar is no longer permanent chrome. Stage 2 (SSH) complete.
+**Last updated:** SSH auth complete & live-verified — password, public-key (OpenSSH/PEM), native PuTTY **.ppk** conversion, and passwordless. Credentials are now **multi-method per host** (password + key tried together), **username moved to the host** (per-host login, one shared key), new key-add UX (dropdown + modal). Stage 2 (SSH) done.
+
+## Latest — SSH auth, multi-method credentials, per-host username (DONE, live-verified)
+
+Big batch after Stage 2 part 2. All compiled on the user's machine and verified by real connections (key, .ppk, password, passwordless).
+
+**SSH auth (rh-ssh):**
+- Public-key auth: `russh::keys::decode_secret_key` for OpenSSH/PEM; `authenticate_publickey` (russh 0.45 `bool` API — note in `actor.rs` for 0.46+ `PrivateKeyWithHashAlg` + `.success()`).
+- **Native PuTTY .ppk → OpenSSH** converter: `rh-ssh/src/ppk.rs` (pure Rust, PPK v2 HMAC-SHA1 + v3 Argon2id, aes256-cbc/none, rsa/dss/ecdsa/ed25519). Crypto crates added to `rh-ssh/Cargo.toml` (sha1/sha2/hmac/aes/cbc/cipher/argon2/base64) with a comment justifying the deviation from "aws-lc-rs only". `actor.rs` detects `is_ppk` → converts → decodes with no passphrase.
+- Empty/passwordless: missing keychain secret → empty password; and (see sessions) a host with a username but **no** credential tries an empty password.
+
+**Multi-method per host (the actor tries each, keys → password):**
+- `SshSpawnParams.credential` → `credentials: Vec<RevealedCredential>`. `actor.rs` loops `try_auth` over them; a bad/undecodable key is skipped (`Ok(false)`) so a working password still gets in; auth fails only if all are rejected.
+- `CredentialStore::credentials_for_host(host_id)` (new trait method + JOIN on `host_credentials`, default first).
+- `api/sessions.rs`: with no `credential_id` override, gathers **all** linked creds (keys first); if none linked but host has a username → single empty-password attempt; else "host has no credential".
+- Frontend `open()` sends `credential_id: null` (was the default id) so the backend offers every method — passing a specific id would restrict to one.
+
+**Per-host username (data-model change, NON-DESTRUCTIVE migration):**
+- `username` moved from the **credential** to the **host** (one key shared across hosts with different logins). `Host.username`, `HostFullDto.username`, host create/update DTOs.
+- Session resolves `host.username` else falls back to `cred.username` (back-compat for pre-migration hosts).
+- **Migration v2→v3 is incremental, data-preserving:** `db.rs` `CURRENT_SCHEMA_VERSION = 3`; `Some(2)` → `ALTER TABLE hosts ADD COLUMN username TEXT NOT NULL DEFAULT ''` + bump `schema_meta` (no drop). Other version mismatches still drop-recreate (alpha mode). `v1.sql` updated for fresh installs (hosts.username + version '3'). New `InitOutcome::Migrated`. **Do not bump the version with a plain edit to v1.sql for an additive change — add an incremental ALTER path or you wipe user data.**
+- `HostFullDto.credential_ids: Vec<CredentialId>` (populated by `host_get` via `credentials_for_host`) so the UI can render all linked methods.
+- Credential username validation relaxed: **empty username is allowed** for all kinds (login lives on the host now). Inline-created creds pass `username: ""`.
+
+**Credential UX (HostDetail.tsx, the fragile file):**
+- Password field is **always visible**; a linked SSH key shows as a chip; each linked method has a ✕ to **unlink** (`credential_unlink_host`). Password/key handled **independently** in save (create+link if absent, rotate if present, change-gated to avoid duplicate creates).
+- **New add-key flow:** "+ SSH-ключ" → dropdown of existing keys + **"Add new key…"** footer → **modal** (`AddKeyModal`) to paste or import (.ppk/PEM) + passphrase; on confirm creates the cred in the keychain and applies immediately (edit → linkHost, draft → remembered, linked on promotion). Inline key textarea removed.
+- **Connect flushes pending save first** (`handleConnect` cancels debounce, awaits `saveAction`, re-fetches, then opens) so a just-typed password/key is persisted before the session opens — fixes spurious "host has no credential".
+- Compact form: Name + Group on one row; Tags / Startup command / Env vars / Notes under an **"Advanced/Дополнительно"** spoiler. Password field full-width with trailing controls (timer/eye/✕) overlaid right.
+- Key creds named by imported **file name**; re-import renames. "Use existing" lists **keys only** (passwords stay private to their host).
+
+**Session error screen:** "Edit/Изменить" button next to "Reconnect" → jumps to the Vault tab and selects the host (`setActiveTab(null)` + `selectHost`).
+
+
 
 ## UX overhaul — tabbed shell (part 1, DONE, verified tsc+vite)
 
@@ -26,7 +59,7 @@ Replaced the permanent left-sidebar shell with a Termius/Windows-Terminal-style 
 - `rh-ssh`: `russh` client actor. `lib.rs` (public types: `SessionState`, `CloseReason`, `SshSessionEvent`, `SessionCommand`, `SshOpenOptions`, `RevealedCredential`, `SshSpawnParams`, `SshSessionHandle`, `spawn_session`), `error.rs` (`SshError` + `into_close_reason`), `actor.rs` (russh connect → password auth → PTY shell → select! pump). Events flow out via `mpsc::UnboundedSender<SshSessionEvent>` (crate stays tauri-free).
 - `rh-app`: `session.rs` `SessionManager` (registry + per-session supervisor that evicts on exit); `api/sessions.rs` real handlers (`session_open` reveals credential, bridges mpsc→Tauri `Channel`, spawns actor, registers; close/send_input/resize/accept/reject); DTOs (`SessionOpenResponse`, `SessionInputRequest`, `SessionResizeRequest`, `SessionAcceptHostKeyRequest`); `AppState.sessions`; handlers registered in `main.rs`.
 - **v1 simplifications (to land a working connect first):** password auth only (SSH-key/agent → friendly not-implemented); host key auto-accepted TOFU (no `known_hosts` pinning, no interactive prompt blocking inside the russh handler — UI prompt surface stays dormant); no keepalive.
-- ⚠️ **NOT YET COMPILED** — no cargo in the authoring sandbox. All russh API usage is isolated in `rh-ssh/src/actor.rs` and flagged with notes; expect a mechanical fix-up round (method signatures, `bool` vs `AuthResult`, key-type path, possible select! borrow split). russh pinned `0.45` — adjust to whatever resolves. **Keep the previous working zip as a rollback** (a non-compiling backend breaks `cargo tauri dev` until fixed).
+- ✅ **COMPILED & LIVE-VERIFIED.** russh pinned `0.45`. Auth has since grown to multi-method (key/.ppk/password/passwordless) — see the "Latest" section at the top. Keep a known-good zip as rollback when touching the backend.
 
 **Part 2 follow-ups (after it connects):** known_hosts pinning + interactive TOFU (wire `host_key_prompt`/`session_accept_host_key`), SSH-key auth, keepalive, `session_list` restore-on-reload.
 

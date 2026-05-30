@@ -1,9 +1,9 @@
 import { useCallback } from "react";
-import { Columns2, Loader2, RefreshCw, Rows2, Server, X } from "lucide-react";
+import { Columns2, Loader2, Pencil, RefreshCw, Rows2, Server, X } from "lucide-react";
 
 import { useT } from "../../i18n";
 import type { SessionTab } from "../../store";
-import { useHostsStore, useSessionsStore } from "../../store";
+import { useHostsStore, useSessionsStore, useUiStore } from "../../store";
 import { Button } from "../ui/Button";
 import { EmptyState } from "../ui/EmptyState";
 import { Terminal } from "./Terminal";
@@ -39,6 +39,15 @@ export function SessionView({
             if (host) void open(host);
         });
     }, [hosts, session.hostId, session.key, close, open]);
+
+    // Jump to the Storage tab with this host opened for editing — saves
+    // hunting back through tabs after a failed connection.
+    const setActiveTab = useSessionsStore((s) => s.setActiveTab);
+    const selectHost = useUiStore((s) => s.selectHost);
+    const editHost = useCallback(() => {
+        setActiveTab(null);
+        selectHost(session.hostId);
+    }, [setActiveTab, selectHost, session.hostId]);
 
     return (
         <main className={styles.view}>
@@ -116,9 +125,15 @@ export function SessionView({
                             }
                             description={session.message ?? undefined}
                             action={
-                                <Button variant="primary" onClick={reconnect}>
-                                    <RefreshCw size={14} /> {t("session.reconnect")}
-                                </Button>
+                                <div className={styles.deadActions}>
+                                    <Button variant="primary" onClick={reconnect}>
+                                        <RefreshCw size={14} />{" "}
+                                        {t("session.reconnect")}
+                                    </Button>
+                                    <Button variant="secondary" onClick={editHost}>
+                                        <Pencil size={14} /> {t("common.edit")}
+                                    </Button>
+                                </div>
                             }
                         />
                     </div>

@@ -1,0 +1,118 @@
+{
+  "hash": "5371125b",
+  "configHash": "d67ad153",
+  "lockfileHash": "076f598b",
+  "browserHash": "f198bf85",
+  "optimized": {
+    "react": {
+      "src": "../../node_modules/.pnpm/react@18.3.1/node_modules/react/index.js",
+      "file": "react.js",
+      "fileHash": "939bdbe0",
+      "needsInterop": true
+    },
+    "react-dom": {
+      "src": "../../node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/index.js",
+      "file": "react-dom.js",
+      "fileHash": "40266d04",
+      "needsInterop": true
+    },
+    "react/jsx-dev-runtime": {
+      "src": "../../node_modules/.pnpm/react@18.3.1/node_modules/react/jsx-dev-runtime.js",
+      "file": "react_jsx-dev-runtime.js",
+      "fileHash": "89cf6977",
+      "needsInterop": true
+    },
+    "react/jsx-runtime": {
+      "src": "../../node_modules/.pnpm/react@18.3.1/node_modules/react/jsx-runtime.js",
+      "file": "react_jsx-runtime.js",
+      "fileHash": "6cd2cae1",
+      "needsInterop": true
+    },
+    "@tauri-apps/api/core": {
+      "src": "../../node_modules/.pnpm/@tauri-apps+api@2.11.0/node_modules/@tauri-apps/api/core.js",
+      "file": "@tauri-apps_api_core.js",
+      "fileHash": "88713e5c",
+      "needsInterop": false
+    },
+    "@tauri-apps/api/event": {
+      "src": "../../node_modules/.pnpm/@tauri-apps+api@2.11.0/node_modules/@tauri-apps/api/event.js",
+      "file": "@tauri-apps_api_event.js",
+      "fileHash": "2a53392d",
+      "needsInterop": false
+    },
+    "@tauri-apps/api/window": {
+      "src": "../../node_modules/.pnpm/@tauri-apps+api@2.11.0/node_modules/@tauri-apps/api/window.js",
+      "file": "@tauri-apps_api_window.js",
+      "fileHash": "30f8e62d",
+      "needsInterop": false
+    },
+    "@tauri-apps/plugin-clipboard-manager": {
+      "src": "../../node_modules/.pnpm/@tauri-apps+plugin-clipboard-manager@2.3.2/node_modules/@tauri-apps/plugin-clipboard-manager/dist-js/index.js",
+      "file": "@tauri-apps_plugin-clipboard-manager.js",
+      "fileHash": "ac856791",
+      "needsInterop": false
+    },
+    "@xterm/addon-fit": {
+      "src": "../../node_modules/.pnpm/@xterm+addon-fit@0.10.0_@xterm+xterm@5.5.0/node_modules/@xterm/addon-fit/lib/addon-fit.js",
+      "file": "@xterm_addon-fit.js",
+      "fileHash": "3ef393f4",
+      "needsInterop": true
+    },
+    "@xterm/addon-serialize": {
+      "src": "../../node_modules/.pnpm/@xterm+addon-serialize@0.14.0/node_modules/@xterm/addon-serialize/lib/addon-serialize.mjs",
+      "file": "@xterm_addon-serialize.js",
+      "fileHash": "5a9318ed",
+      "needsInterop": false
+    },
+    "@xterm/addon-webgl": {
+      "src": "../../node_modules/.pnpm/@xterm+addon-webgl@0.18.0_@xterm+xterm@5.5.0/node_modules/@xterm/addon-webgl/lib/addon-webgl.js",
+      "file": "@xterm_addon-webgl.js",
+      "fileHash": "fa1ce756",
+      "needsInterop": true
+    },
+    "@xterm/xterm": {
+      "src": "../../node_modules/.pnpm/@xterm+xterm@5.5.0/node_modules/@xterm/xterm/lib/xterm.js",
+      "file": "@xterm_xterm.js",
+      "fileHash": "1c160e4b",
+      "needsInterop": true
+    },
+    "lucide-react": {
+      "src": "../../node_modules/.pnpm/lucide-react@0.460.0_react@18.3.1/node_modules/lucide-react/dist/esm/lucide-react.js",
+      "file": "lucide-react.js",
+      "fileHash": "43747caa",
+      "needsInterop": false
+    },
+    "react-dom/client": {
+      "src": "../../node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/client.js",
+      "file": "react-dom_client.js",
+      "fileHash": "44bcd9af",
+      "needsInterop": true
+    },
+    "zustand": {
+      "src": "../../node_modules/.pnpm/zustand@5.0.13_@types+react@18.3.29_react@18.3.1/node_modules/zustand/esm/index.mjs",
+      "file": "zustand.js",
+      "fileHash": "e7386c6b",
+      "needsInterop": false
+    }
+  },
+  "chunks": {
+    "chunk-NQFXBBWD": {
+      "file": "chunk-NQFXBBWD.js"
+    },
+    "chunk-OELA7GPI": {
+      "file": "chunk-OELA7GPI.js"
+    },
+    "chunk-KISOFHGC": {
+      "file": "chunk-KISOFHGC.js"
+    },
+    "chunk-F5F3O7SA": {
+      "file": "chunk-F5F3O7SA.js"
+    },
+    "chunk-H3D4IWB6": {
+      "file": "chunk-H3D4IWB6.js"
+    },
+    "chunk-G3PMV62Z": {
+      "file": "chunk-G3PMV62Z.js"
+    }
+  }
+}

@@ -22,3 +22,17 @@ chrono.workspace = true
 # the resolved version on this machine, pin whatever `cargo` selects and
 # fix any signature mismatches in `actor.rs` (the only file touching russh).
 russh = "0.45"
+
+# PuTTY .ppk → OpenSSH conversion (ppk.rs). russh only reads OpenSSH/PKCS#8,
+# so .ppk keys are converted on the fly. These primitives (Argon2 KDF for PPK
+# v3, AES-256-CBC, HMAC-SHA1/256) aren't exposed ergonomically by aws-lc-rs,
+# so we use the RustCrypto crates here — scoped to ppk.rs only. The actual SSH
+# transport crypto still goes through russh/aws-lc-rs.
+sha1 = "0.10"
+sha2 = "0.10"
+hmac = "0.12"
+aes = "0.8"
+cbc = "0.1"
+cipher = { version = "0.4", features = ["block-padding"] }
+argon2 = "0.5"
+base64 = "0.22"

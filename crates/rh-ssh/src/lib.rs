@@ -12,6 +12,7 @@
 
 mod actor;
 mod error;
+mod ppk;
 
 use std::time::Duration;
 
@@ -118,7 +119,10 @@ pub struct SshSpawnParams {
     pub hostname: String,
     pub port: u16,
     pub host_id: HostId,
-    pub credential: RevealedCredential,
+    /// All auth methods to try, in order. The actor attempts each until
+    /// one succeeds (typically key(s) first, then password). Auth fails
+    /// only when every method is rejected.
+    pub credentials: Vec<RevealedCredential>,
     pub options: SshOpenOptions,
     /// Optional command run once after the shell is ready (sent as input).
     pub startup_command: Option<String>,

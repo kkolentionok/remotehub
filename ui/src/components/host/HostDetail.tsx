@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Eye, EyeOff, Files, Info, Plus, Server, Trash2, Zap } from "lucide-react";
+import { ChevronDown, ChevronRight, Eye, EyeOff, Files, Info, KeyRound, Lock, Plus, Server, Trash2, Upload, User, X, Zap } from "lucide-react";
 
 import { useT } from "../../i18n";
 import {
@@ -9,7 +9,7 @@ import {
     hosts as hostsApi,
 } from "../../lib/ipc";
 import { formatApiError } from "../../lib/types";
-import type { EnvVar, HostFullDto, Protocol } from "../../lib/types";
+import type { CredentialKind, EnvVar, HostFullDto, Protocol } from "../../lib/types";
 import { useDebouncedCallback } from "../../lib/useDebouncedCallback";
 import {
     useCredentialsStore,
@@ -18,6 +18,7 @@ import {
     useUiStore,
 } from "../../store";
 import { Button } from "../ui/Button";
+import { Dialog } from "../ui/Dialog";
 import { Combobox } from "../ui/Combobox";
 import { EmptyState } from "../ui/EmptyState";
 import { Input, Textarea } from "../ui/TextField";
@@ -115,10 +116,14 @@ export function HostDetail() {
                         ? 22
                         : 3389
                     : Number(draft.port),
+            username: draft.inlineUsername,
             tags: draft.tags,
             color: null,
             detected_os: null,
-            default_credential_id: null,
+            default_credential_id: draft.pickedCredentialId,
+            credential_ids: draft.pickedCredentialId
+                ? [draft.pickedCredentialId]
+                : [],
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
             notes: draft.notes || null,
@@ -188,6 +193,10 @@ export function HostDetail() {
             }}
             initialInlineUsername={draft?.inlineUsername ?? ""}
             initialInlinePassword={draft?.inlinePassword ?? ""}
+            initialInlineAuthKind={draft?.inlineAuthKind ?? "password"}
+            initialInlinePrivateKey={draft?.inlinePrivateKey ?? ""}
+            initialInlinePassphrase={draft?.inlinePassphrase ?? ""}
+            initialInlineKeyName={draft?.inlineKeyName ?? ""}
         />
     );
 }
@@ -209,6 +218,11 @@ interface FormState {
     envRaw: string;
     inlineUsername: string;
     inlinePassword: string;
+    inlineAuthKind: "password" | "key";
+    inlinePrivateKey: string;
+    inlinePassphrase: string;
+    /** Imported key file name (used to name the created credential). */
+    inlineKeyName: string;
 }
 
 interface HostFormProps {
@@ -228,6 +242,10 @@ interface HostFormProps {
     onDraftPromoted: (h: HostFullDto) => void;
     initialInlineUsername?: string;
     initialInlinePassword?: string;
+    initialInlineAuthKind?: "password" | "key";
+    initialInlinePrivateKey?: string;
+    initialInlinePassphrase?: string;
+    initialInlineKeyName?: string;
 }
 
 function HostForm(props: HostFormProps) {
@@ -247,10 +265,29 @@ function HostForm(props: HostFormProps) {
         [props.host.default_credential_id, credentials],
     );
 
+    // All credentials linked to this host, split by kind. A host can have
+    // both a password and an SSH key — the backend tries each at connect.
+    const linkedCreds = useMemo(() => {
+        const ids = props.host.credential_ids ?? [];
+        return credentials.filter((c) => ids.includes(c.id));
+    }, [props.host.credential_ids, credentials]);
+    const linkedPwCred = useMemo(
+        () => linkedCreds.find((c) => c.kind === "password") ?? null,
+        [linkedCreds],
+    );
+    const linkedKeyCred = useMemo(
+        () => linkedCreds.find((c) => c.kind === "ssh_key") ?? null,
+        [linkedCreds],
+    );
+
     // Build initial form state from the host. Re-derived only on host.id change.
     const [form, setForm] = useState<FormState>(() =>
-        buildFormState(props, linkedCred?.username),
+        buildFormState(props, linkedCred?.username, linkedCred?.kind),
     );
+    // Always-current form snapshot for callbacks that must not capture a
+    // stale closure (e.g. flushing the save before connecting).
+    const formRef = useRef(form);
+    formRef.current = form;
 
     // When a credential is linked (either at load time or after the user
     // picks one), surface its username into the form. Password stays
@@ -266,17 +303,29 @@ function HostForm(props: HostFormProps) {
         if (linkedId === lastLinkedIdRef.current) return;
         lastLinkedIdRef.current = linkedId;
         if (linkedCred) {
+            const kind = linkedCred.kind === "ssh_key" ? "key" : "password";
+            // Note: do NOT touch inlineUsername here. Username lives on the
+            // host, not the credential — picking a shared key must not
+            // overwrite this host's login with another host's.
             setForm((s) => ({
                 ...s,
-                inlineUsername: linkedCred.username,
                 inlinePassword: "", // never auto-fill the secret
+                inlineAuthKind: kind,
+                inlinePrivateKey: "", // never auto-fill the stored key
+                inlinePassphrase: "",
+                inlineKeyName: "",
             }));
-            committedUsernameRef.current = linkedCred.username;
+            committedUsernameRef.current = props.host.username;
             committedPasswordRef.current = ""; // we don't know the stored secret
+            committedPrivateKeyRef.current = "";
+            committedPassphraseRef.current = "";
+            committedKindRef.current = kind;
         } else {
             // Credential was unlinked or never existed.
-            committedUsernameRef.current = "";
+            committedUsernameRef.current = props.host.username;
             committedPasswordRef.current = "";
+            committedPrivateKeyRef.current = "";
+            committedPassphraseRef.current = "";
         }
     }, [linkedCred]);
 
@@ -286,6 +335,7 @@ function HostForm(props: HostFormProps) {
     // - saved:   IPC succeeded; auto-resets to idle after 1.5s
     // - error:   sticky; only cleared by a successful save
     const [saveStatus, setSaveStatus] = useState<SaveStatus>({ kind: "idle" });
+    const [advancedOpen, setAdvancedOpen] = useState(false);
     const savedResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const flashSaved = useCallback(() => {
@@ -319,6 +369,12 @@ function HostForm(props: HostFormProps) {
     // 3. When a credential picker selects a different saved credential.
     const committedUsernameRef = useRef<string>("");
     const committedPasswordRef = useRef<string>("");
+    const committedPrivateKeyRef = useRef<string>("");
+    const committedPassphraseRef = useRef<string>("");
+    // The kind of the credential we currently consider "committed" for this
+    // host. Used to detect when the user switches auth method (password ⇄
+    // key), which can't be an in-place update — it needs a fresh credential.
+    const committedKindRef = useRef<"password" | "key">("password");
 
     // Track the previous host.id so we can distinguish two cases:
     //
@@ -344,9 +400,13 @@ function HostForm(props: HostFormProps) {
         }
         // Real change: load the new host's values into the form,
         // including the linked credential's username (if any).
-        setForm(buildFormState(props, linkedCred?.username));
+        setForm(buildFormState(props, linkedCred?.username, linkedCred?.kind));
         committedUsernameRef.current = linkedCred?.username ?? "";
         committedPasswordRef.current = "";
+        committedPrivateKeyRef.current = "";
+        committedPassphraseRef.current = "";
+        committedKindRef.current =
+            linkedCred?.kind === "ssh_key" ? "key" : "password";
         setSaveStatus({ kind: "idle" });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [props.host.id]);
@@ -401,6 +461,7 @@ function HostForm(props: HostFormProps) {
                         hostname: state.hostname.trim(),
                         protocol: state.protocol,
                         port: portNum,
+                        username: state.inlineUsername.trim(),
                         group_id: state.groupId || null,
                         tags,
                         notes: state.notes.trim() || null,
@@ -411,72 +472,108 @@ function HostForm(props: HostFormProps) {
                         env_vars: parseEnv(state.envRaw),
                     });
 
-                    // Handle inline credentials.
+                    // Handle inline credentials (password or SSH key).
                     //
-                    // Diff against the committed refs to avoid no-op
-                    // writes on every keystroke. We only call the
-                    // backend when the user has actually changed
-                    // something from what we already committed.
-                    //
-                    // Invariant: never create a credential with one
-                    // of {username, password} empty — the OS keychain
-                    // rejects empty secrets and the user would see a
-                    // spurious "secret must not be empty" error.
-                    const usernameTrimmed = state.inlineUsername.trim();
-                    const usernameFilled = usernameTrimmed !== "";
+                    // Diff against committed refs to avoid no-op writes on
+                    // every keystroke.
                     const passwordFilled = state.inlinePassword !== "";
+                    const keyFilled = state.inlinePrivateKey.trim() !== "";
 
-                    if (props.host.default_credential_id === null) {
-                        if (usernameFilled && passwordFilled) {
-                            const base =
+                    const makeName = (preferred?: string) =>
+                        uniqueCredentialName(
+                            (preferred && preferred.trim()) ||
                                 state.label.trim() ||
                                 state.hostname.trim() ||
-                                "credential";
-                            const name = uniqueCredentialName(
-                                base,
-                                credentials.map((c) => c.name),
-                            );
+                                "credential",
+                            credentials.map((c) => c.name),
+                        );
+
+                    // Independent methods: a host may have BOTH a password
+                    // and a key. Handle each on its own — create+link if the
+                    // method isn't linked yet, rotate if it is. Never let one
+                    // method's secret overwrite the other's.
+                    const linked = useCredentialsStore.getState().items;
+                    const linkedIds = props.host.credential_ids ?? [];
+                    const pwCred =
+                        linked.find(
+                            (c) =>
+                                linkedIds.includes(c.id) && c.kind === "password",
+                        ) ?? null;
+                    const keyCred =
+                        linked.find(
+                            (c) =>
+                                linkedIds.includes(c.id) && c.kind === "ssh_key",
+                        ) ?? null;
+                    const anyLinked = pwCred !== null || keyCred !== null;
+
+                    // ----- Password -----
+                    if (
+                        passwordFilled &&
+                        state.inlinePassword !== committedPasswordRef.current
+                    ) {
+                        if (pwCred) {
+                            await credApi.rotateSecret({
+                                id: pwCred.id,
+                                secret: encodeSecret(state.inlinePassword),
+                            });
+                        } else {
                             const created = await credApi.create({
-                                name,
+                                name: makeName(),
                                 kind: "password",
-                                username: usernameTrimmed,
+                                username: "",
                                 secret: encodeSecret(state.inlinePassword),
                             });
                             await credApi.linkHost({
                                 host_id: props.host.id,
                                 credential_id: created.id,
-                                set_as_default: true,
+                                set_as_default: !anyLinked,
                             });
-                            committedUsernameRef.current = usernameTrimmed;
-                            committedPasswordRef.current = state.inlinePassword;
                         }
-                    } else if (linkedCred) {
-                        const usernameChanged =
-                            usernameTrimmed !== committedUsernameRef.current;
-                        const passwordChanged =
-                            passwordFilled &&
-                            state.inlinePassword !== committedPasswordRef.current;
+                        committedPasswordRef.current = state.inlinePassword;
+                    }
 
-                        if (usernameChanged && usernameFilled) {
-                            await credApi.update({
-                                id: linkedCred.id,
-                                username: usernameTrimmed,
-                            });
-                            committedUsernameRef.current = usernameTrimmed;
-                        }
-                        if (passwordChanged) {
+                    // ----- SSH key (entry) -----
+                    const keyChanged =
+                        keyFilled &&
+                        state.inlinePrivateKey !== committedPrivateKeyRef.current;
+                    const passphraseChanged =
+                        state.inlinePassphrase !== committedPassphraseRef.current;
+                    if (keyFilled && (keyChanged || passphraseChanged)) {
+                        if (keyCred) {
                             await credApi.rotateSecret({
-                                id: linkedCred.id,
-                                secret: encodeSecret(state.inlinePassword),
+                                id: keyCred.id,
+                                secret: encodeSecret(state.inlinePrivateKey),
+                                passphrase:
+                                    state.inlinePassphrase !== ""
+                                        ? encodeSecret(state.inlinePassphrase)
+                                        : undefined,
                             });
-                            committedPasswordRef.current = state.inlinePassword;
-                            // NOTE: deliberately not clearing inlinePassword.
-                            // We want the user to see their masked dots (proof
-                            // their password is set), and the eye button to be
-                            // available for review. The committedPasswordRef
-                            // check above ensures we don't keep rotating on
-                            // every subsequent keystroke.
+                            const keyName = state.inlineKeyName.trim();
+                            if (keyName && keyName !== keyCred.name) {
+                                await credApi.update({
+                                    id: keyCred.id,
+                                    name: keyName,
+                                });
+                            }
+                        } else {
+                            const created = await credApi.create({
+                                name: makeName(state.inlineKeyName),
+                                kind: "ssh_key",
+                                username: "",
+                                secret: encodeSecret(state.inlinePrivateKey),
+                                passphrase:
+                                    state.inlinePassphrase !== ""
+                                        ? encodeSecret(state.inlinePassphrase)
+                                        : undefined,
+                            });
+                            await credApi.linkHost({
+                                host_id: props.host.id,
+                                credential_id: created.id,
+                                set_as_default: !anyLinked && !passwordFilled,
+                            });
                         }
+                        committedPrivateKeyRef.current = state.inlinePrivateKey;
+                        committedPassphraseRef.current = state.inlinePassphrase;
                     }
 
                     const fresh = await hostsApi.get(props.host.id);
@@ -498,34 +595,49 @@ function HostForm(props: HostFormProps) {
                     promotingRef.current = true;
                     pendingDuringPromote.current = null;
                     try {
-                        let credentialId: string | null = null;
-                        // Only create a credential when BOTH username and
-                        // password are filled — same invariant as in edit
-                        // mode. A half-filled credential would trigger a
-                        // backend "secret must not be empty" error.
-                        if (
-                            state.inlineUsername.trim() !== "" &&
-                            state.inlinePassword !== ""
-                        ) {
-                            const base =
-                                state.label.trim() ||
-                                state.hostname.trim() ||
-                                "credential";
-                            const name = uniqueCredentialName(
-                                base,
-                                credentials.map((c) => c.name),
-                            );
+                        // Collect every method the user supplied. A picked
+                        // existing key, an inline password, and an inline key
+                        // can all coexist — link them all; the first becomes
+                        // the default. The backend tries each at connect.
+                        const toLink: string[] = [];
+                        const picked = props.host.default_credential_id;
+                        const uTrim = state.inlineUsername.trim();
+                        if (picked) toLink.push(picked);
+                        if (state.inlinePassword !== "") {
                             const created = await credApi.create({
-                                name,
+                                name: uniqueCredentialName(
+                                    state.label.trim() ||
+                                        state.hostname.trim() ||
+                                        "credential",
+                                    credentials.map((c) => c.name),
+                                ),
                                 kind: "password",
-                                username: state.inlineUsername.trim(),
+                                username: "",
                                 secret: encodeSecret(state.inlinePassword),
                             });
-                            credentialId = created.id;
-                            // Now committed — keystrokes won't trigger
-                            // another create or rotate.
-                            committedUsernameRef.current = state.inlineUsername.trim();
+                            toLink.push(created.id);
                             committedPasswordRef.current = state.inlinePassword;
+                        }
+                        if (!picked && state.inlinePrivateKey.trim() !== "") {
+                            const created = await credApi.create({
+                                name: uniqueCredentialName(
+                                    state.inlineKeyName.trim() ||
+                                        state.label.trim() ||
+                                        state.hostname.trim() ||
+                                        "credential",
+                                    credentials.map((c) => c.name),
+                                ),
+                                kind: "ssh_key",
+                                username: "",
+                                secret: encodeSecret(state.inlinePrivateKey),
+                                passphrase:
+                                    state.inlinePassphrase !== ""
+                                        ? encodeSecret(state.inlinePassphrase)
+                                        : undefined,
+                            });
+                            toLink.push(created.id);
+                            committedPrivateKeyRef.current = state.inlinePrivateKey;
+                            committedPassphraseRef.current = state.inlinePassphrase;
                         }
                         const res = await hostsApi.create({
                             name: state.label.trim() || state.hostname.trim(),
@@ -534,6 +646,7 @@ function HostForm(props: HostFormProps) {
                             protocol: state.protocol,
                             port:
                                 state.port.trim() === "" ? null : Number(state.port),
+                            username: uTrim || null,
                             group_id: state.groupId || null,
                             tags: tags.length > 0 ? tags : null,
                             notes: state.notes.trim() || null,
@@ -542,13 +655,13 @@ function HostForm(props: HostFormProps) {
                                     ? state.startupCommand.trim() || null
                                     : null,
                             env_vars: parseEnv(state.envRaw),
-                            default_credential_id: credentialId,
+                            default_credential_id: toLink[0] ?? null,
                         });
-                        if (credentialId) {
+                        for (let i = 0; i < toLink.length; i++) {
                             await credApi.linkHost({
                                 host_id: res.id,
-                                credential_id: credentialId,
-                                set_as_default: true,
+                                credential_id: toLink[i]!,
+                                set_as_default: i === 0,
                             });
                         }
 
@@ -585,6 +698,7 @@ function HostForm(props: HostFormProps) {
                                 hostname: p.hostname.trim(),
                                 protocol: p.protocol,
                                 port: pendingPort,
+                                username: p.inlineUsername.trim(),
                                 group_id: p.groupId || null,
                                 tags: pendingTags,
                                 notes: p.notes.trim() || null,
@@ -664,7 +778,13 @@ function HostForm(props: HostFormProps) {
 
     const linkCredential = useCallback(
         async (credentialId: string) => {
-            if (props.mode !== "edit") return;
+            // On a draft the host doesn't exist yet — remember the choice and
+            // link it during promotion. The draft host's default_credential_id
+            // mirrors this, so the form shows it as linked immediately.
+            if (props.mode !== "edit") {
+                updateDraft({ pickedCredentialId: credentialId });
+                return;
+            }
             setSaveStatus({ kind: "saving" });
             try {
                 await credApi.linkHost({
@@ -680,10 +800,93 @@ function HostForm(props: HostFormProps) {
                 setSaveStatus({ kind: "error", message: msg });
             }
         },
-        [props, flashSaved],
+        [props, flashSaved, updateDraft],
     );
 
-    // ---------- Group combobox -----------------------------------------
+    // Remove a single auth method from the host (✕ on a method). Drafts
+    // only have a picked key, so unlinking there just clears the choice.
+    const unlinkCredential = useCallback(
+        async (credentialId: string) => {
+            if (props.mode !== "edit") {
+                updateDraft({ pickedCredentialId: null });
+                return;
+            }
+            setSaveStatus({ kind: "saving" });
+            try {
+                await credApi.unlinkHost({
+                    host_id: props.host.id,
+                    credential_id: credentialId,
+                });
+                // Reset the matching committed ref so re-adding the method
+                // later is detected as a change.
+                const removed = useCredentialsStore
+                    .getState()
+                    .items.find((c) => c.id === credentialId);
+                if (removed?.kind === "password") {
+                    committedPasswordRef.current = "";
+                } else if (removed?.kind === "ssh_key") {
+                    committedPrivateKeyRef.current = "";
+                    committedPassphraseRef.current = "";
+                }
+                const fresh = await hostsApi.get(props.host.id);
+                props.onHostUpdated(fresh);
+                flashSaved();
+            } catch (e: unknown) {
+                setSaveStatus({ kind: "error", message: formatApiError(e) });
+            }
+        },
+        [props, flashSaved, updateDraft],
+    );
+
+    // Create a brand-new SSH key credential (from the Add-key modal) and
+    // apply it to the host immediately: stored in the keychain, then linked
+    // (edit) or remembered on the draft (promoted on save).
+    const onAddKey = useCallback(
+        async ({
+            key,
+            passphrase,
+            name,
+        }: {
+            key: string;
+            passphrase: string;
+            name: string;
+        }) => {
+            if (key.trim() === "") return;
+            setSaveStatus({ kind: "saving" });
+            try {
+                const f = formRef.current;
+                const credName = uniqueCredentialName(
+                    name.trim() || f.label.trim() || f.hostname.trim() || "key",
+                    useCredentialsStore.getState().items.map((c) => c.name),
+                );
+                const created = await credApi.create({
+                    name: credName,
+                    kind: "ssh_key",
+                    username: "",
+                    secret: encodeSecret(key.trim()),
+                    passphrase:
+                        passphrase !== "" ? encodeSecret(passphrase) : undefined,
+                });
+                if (props.mode === "edit") {
+                    const anyLinked =
+                        (props.host.credential_ids ?? []).length > 0;
+                    await credApi.linkHost({
+                        host_id: props.host.id,
+                        credential_id: created.id,
+                        set_as_default: !anyLinked,
+                    });
+                    const fresh = await hostsApi.get(props.host.id);
+                    props.onHostUpdated(fresh);
+                } else {
+                    updateDraft({ pickedCredentialId: created.id });
+                }
+                flashSaved();
+            } catch (e: unknown) {
+                setSaveStatus({ kind: "error", message: formatApiError(e) });
+            }
+        },
+        [props, flashSaved, updateDraft],
+    );
 
     const groupOptions = useMemo(
         () =>
@@ -724,10 +927,23 @@ function HostForm(props: HostFormProps) {
         });
     }, [props.mode, props.host, startDraft, updateDraft]);
 
-    const handleConnect = useCallback(() => {
+    const handleConnect = useCallback(async () => {
         if (props.mode !== "edit") return;
-        void useSessionsStore.getState().open(props.host);
-    }, [props.mode, props.host]);
+        try {
+            // Persist any just-typed credential/host edits before opening
+            // the session, so a freshly entered password/key is linked and
+            // the backend doesn't see "host has no credential".
+            debouncedField.cancel();
+            debouncedNotes.cancel();
+            await saveAction(formRef.current);
+            const fresh = await hostsApi.get(props.host.id);
+            void useSessionsStore.getState().open(fresh);
+        } catch {
+            // Save failed (shown in the status indicator); still attempt to
+            // open with whatever is persisted.
+            void useSessionsStore.getState().open(props.host);
+        }
+    }, [props.mode, props.host, saveAction, debouncedField, debouncedNotes]);
 
     const handleDelete = useCallback(() => {
         if (props.mode === "draft") {
@@ -795,39 +1011,36 @@ function HostForm(props: HostFormProps) {
             </section>
 
             <section className={styles.section}>
-                <div className={styles.fieldLabel}>{t("dialog.host.label")}</div>
-                <Input
-                    value={form.label}
-                    onChange={(e) => update("label", e.target.value)}
-                    placeholder={
-                        form.hostname.trim() !== ""
-                            ? form.hostname
-                            : t("dialog.host.labelPlaceholder")
-                    }
-                    spellCheck={false}
-                />
-            </section>
-
-            <section className={styles.section}>
-                <div className={styles.fieldLabel}>{t("dialog.host.groupField")}</div>
-                <Combobox
-                    options={groupOptions}
-                    value={form.groupId}
-                    onChange={(v) => update("groupId", v)}
-                    onCreateNew={createGroup}
-                    placeholder={t("dialog.host.groupNone")}
-                    createLabel={t("dialog.host.createGroup")}
-                />
-            </section>
-
-            <section className={styles.section}>
-                <div className={styles.fieldLabel}>{t("dialog.host.tags")}</div>
-                <Input
-                    value={form.tagsRaw}
-                    onChange={(e) => update("tagsRaw", e.target.value)}
-                    placeholder={t("dialog.host.tagsPlaceholder")}
-                    spellCheck={false}
-                />
+                <div className={styles.twoCol}>
+                    <div className={styles.colField}>
+                        <div className={styles.fieldLabel}>
+                            {t("dialog.host.label")}
+                        </div>
+                        <Input
+                            value={form.label}
+                            onChange={(e) => update("label", e.target.value)}
+                            placeholder={
+                                form.hostname.trim() !== ""
+                                    ? form.hostname
+                                    : t("dialog.host.labelPlaceholder")
+                            }
+                            spellCheck={false}
+                        />
+                    </div>
+                    <div className={styles.colField}>
+                        <div className={styles.fieldLabel}>
+                            {t("dialog.host.groupField")}
+                        </div>
+                        <Combobox
+                            options={groupOptions}
+                            value={form.groupId}
+                            onChange={(v) => update("groupId", v)}
+                            onCreateNew={createGroup}
+                            placeholder={t("dialog.host.groupNone")}
+                            createLabel={t("dialog.host.createGroup")}
+                        />
+                    </div>
+                </div>
             </section>
 
             <section className={styles.section}>
@@ -840,50 +1053,97 @@ function HostForm(props: HostFormProps) {
                     onUsername={(v) => update("inlineUsername", v)}
                     onPassword={(v) => update("inlinePassword", v)}
                     onPickSaved={linkCredential}
-                    linkedCredentialId={linkedCred?.id ?? null}
-                    linkedCredentialName={linkedCred?.name ?? null}
+                    onAddKey={onAddKey}
+                    onUnlink={unlinkCredential}
+                    linkedPasswordId={linkedPwCred?.id ?? null}
+                    linkedKeyId={linkedKeyCred?.id ?? null}
+                    linkedKeyName={linkedKeyCred?.name ?? null}
                 />
             </section>
 
             <section className={styles.section}>
-                <div className={styles.fieldLabel}>{t("host.notes")}</div>
-                <Textarea
-                    value={form.notes}
-                    onChange={(e) => update("notes", e.target.value, true)}
-                    rows={4}
-                    placeholder={t("dialog.host.notesPlaceholder")}
-                />
-            </section>
+                <button
+                    type="button"
+                    className={styles.advancedToggle}
+                    onClick={() => setAdvancedOpen((v) => !v)}
+                    aria-expanded={advancedOpen}
+                >
+                    {advancedOpen ? (
+                        <ChevronDown size={14} />
+                    ) : (
+                        <ChevronRight size={14} />
+                    )}
+                    {t("dialog.host.advanced")}
+                </button>
 
-            {form.protocol === "ssh" && (
-                <section className={styles.section}>
-                    <div className={styles.fieldLabel}>
-                        {t("dialog.host.startupCommand")}
-                    </div>
-                    <Input
-                        value={form.startupCommand}
-                        onChange={(e) => update("startupCommand", e.target.value)}
-                        placeholder={t("dialog.host.startupCommandPlaceholder")}
-                        spellCheck={false}
-                    />
-                    <div className={styles.fieldHint}>
-                        {t("dialog.host.startupCommandHint")}
-                    </div>
-                </section>
-            )}
+                {advancedOpen && (
+                    <div className={styles.advancedBody}>
+                        <div>
+                            <div className={styles.fieldLabel}>
+                                {t("dialog.host.tags")}
+                            </div>
+                            <Input
+                                value={form.tagsRaw}
+                                onChange={(e) => update("tagsRaw", e.target.value)}
+                                placeholder={t("dialog.host.tagsPlaceholder")}
+                                spellCheck={false}
+                            />
+                        </div>
 
-            <section className={styles.section}>
-                <div className={styles.fieldLabel}>{t("dialog.host.envVars")}</div>
-                <Textarea
-                    value={form.envRaw}
-                    onChange={(e) => update("envRaw", e.target.value, true)}
-                    rows={3}
-                    placeholder={t("dialog.host.envVarsPlaceholder")}
-                    spellCheck={false}
-                />
-                <div className={styles.fieldHint}>
-                    {t("dialog.host.envVarsHint")}
-                </div>
+                        {form.protocol === "ssh" && (
+                            <div>
+                                <div className={styles.fieldLabel}>
+                                    {t("dialog.host.startupCommand")}
+                                </div>
+                                <Input
+                                    value={form.startupCommand}
+                                    onChange={(e) =>
+                                        update("startupCommand", e.target.value)
+                                    }
+                                    placeholder={t(
+                                        "dialog.host.startupCommandPlaceholder",
+                                    )}
+                                    spellCheck={false}
+                                />
+                                <div className={styles.fieldHint}>
+                                    {t("dialog.host.startupCommandHint")}
+                                </div>
+                            </div>
+                        )}
+
+                        <div>
+                            <div className={styles.fieldLabel}>
+                                {t("dialog.host.envVars")}
+                            </div>
+                            <Textarea
+                                value={form.envRaw}
+                                onChange={(e) =>
+                                    update("envRaw", e.target.value, true)
+                                }
+                                rows={3}
+                                placeholder={t("dialog.host.envVarsPlaceholder")}
+                                spellCheck={false}
+                            />
+                            <div className={styles.fieldHint}>
+                                {t("dialog.host.envVarsHint")}
+                            </div>
+                        </div>
+
+                        <div>
+                            <div className={styles.fieldLabel}>
+                                {t("host.notes")}
+                            </div>
+                            <Textarea
+                                value={form.notes}
+                                onChange={(e) =>
+                                    update("notes", e.target.value, true)
+                                }
+                                rows={4}
+                                placeholder={t("dialog.host.notesPlaceholder")}
+                            />
+                        </div>
+                    </div>
+                )}
             </section>
             </div>
         </main>
@@ -1040,32 +1300,38 @@ interface CredentialPanelProps {
     onPassword: (v: string) => void;
     /** Picking a saved credential links it; the parent flows the chosen id through linkHost. */
     onPickSaved: (credentialId: string) => Promise<void>;
-    /** Non-null when the host has a default_credential_id linked. */
-    linkedCredentialId: string | null;
-    /** Non-null when the host has a default_credential_id linked; we display the name as a chip. */
-    linkedCredentialName: string | null;
+    /** Create a new SSH key (paste/import) and apply it to the host now. */
+    onAddKey: (args: {
+        key: string;
+        passphrase: string;
+        name: string;
+    }) => Promise<void>;
+    /** Unlink a linked credential (✕ on a method). */
+    onUnlink: (credentialId: string) => void;
+    /** Linked password credential id, if any — enables reveal + ✕. */
+    linkedPasswordId: string | null;
+    /** Linked SSH key credential, if any — shown as a chip with ✕. */
+    linkedKeyId: string | null;
+    linkedKeyName: string | null;
 }
 
 const REVEAL_SECONDS = 10;
 
 function CredentialPanel(props: CredentialPanelProps) {
     const { t } = useT();
-    const credentials = useCredentialsStore((s) => s.items);
     const [pickerOpen, setPickerOpen] = useState(false);
+    const [addKeyOpen, setAddKeyOpen] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
 
-    // Revealed stored secret (plaintext from keychain), shown for a short
-    // window then auto-hidden. Distinct from `showPassword`, which only
-    // toggles visibility of a freshly-typed password.
+    const keyLinked = props.linkedKeyId !== null;
+
+    // Revealed stored password (plaintext from keychain), shown briefly.
     const [revealed, setRevealed] = useState<string | null>(null);
     const [secondsLeft, setSecondsLeft] = useState(0);
     const revealTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-    const noneAvailable = credentials.length === 0;
     const hasTyped = props.password !== "";
-    // We can reveal the stored secret when a credential is linked and the
-    // user hasn't typed a replacement password.
-    const canRevealStored = !hasTyped && props.linkedCredentialId !== null;
+    const canRevealStored = !hasTyped && props.linkedPasswordId !== null;
 
     const stopReveal = useCallback(() => {
         if (revealTimer.current) clearInterval(revealTimer.current);
@@ -1074,19 +1340,19 @@ function CredentialPanel(props: CredentialPanelProps) {
         setSecondsLeft(0);
     }, []);
 
-    // Hide and forget the secret if we unmount or the linked credential
-    // changes (e.g. host switched, credential re-linked).
     useEffect(() => stopReveal, [stopReveal]);
     useEffect(() => {
         stopReveal();
         setShowPassword(false);
-    }, [props.linkedCredentialId, stopReveal]);
+        setPickerOpen(false);
+        setAddKeyOpen(false);
+    }, [props.linkedPasswordId, props.linkedKeyId, stopReveal]);
 
     const revealStored = useCallback(async () => {
-        if (!props.linkedCredentialId) return;
+        if (!props.linkedPasswordId) return;
         try {
-            const res = await credApi.reveal(props.linkedCredentialId);
-            if (res.secret == null) return; // ssh_key_agent or no secret
+            const res = await credApi.reveal(props.linkedPasswordId);
+            if (res.secret == null) return;
             setRevealed(res.secret);
             setSecondsLeft(REVEAL_SECONDS);
             if (revealTimer.current) clearInterval(revealTimer.current);
@@ -1100,9 +1366,9 @@ function CredentialPanel(props: CredentialPanelProps) {
                 });
             }, 1000);
         } catch {
-            // Reveal failed (e.g. keychain denied) — stay hidden silently.
+            // Reveal failed — stay hidden silently.
         }
-    }, [props.linkedCredentialId, stopReveal]);
+    }, [props.linkedPasswordId, stopReveal]);
 
     const onEyeClick = () => {
         if (hasTyped) {
@@ -1121,15 +1387,26 @@ function CredentialPanel(props: CredentialPanelProps) {
 
     return (
         <div className={styles.credentialPanel}>
-            <Input
-                value={props.username}
-                onChange={(e) => props.onUsername(e.target.value)}
-                placeholder={t("dialog.host.credentialUsername")}
-                autoComplete="off"
-                spellCheck={false}
-            />
-            <div className={styles.passwordWrap}>
+            <div className={styles.iconField}>
+                <User size={14} className={styles.fieldIcon} />
                 <Input
+                    className={styles.iconInput}
+                    value={props.username}
+                    onChange={(e) => props.onUsername(e.target.value)}
+                    placeholder={t("dialog.host.credentialUsername")}
+                    autoComplete="off"
+                    spellCheck={false}
+                />
+            </div>
+
+            {/* Password — always available as a method. Full width like the
+                other fields; controls (timer/eye/✕) overlay at the right. */}
+            <div
+                className={`${styles.passwordWrap} ${props.linkedPasswordId ? styles.removable : ""}`}
+            >
+                <Lock size={14} className={styles.fieldIcon} />
+                <Input
+                    className={styles.iconInput}
                     type={fieldType}
                     value={fieldValue}
                     onChange={(e) => {
@@ -1138,70 +1415,108 @@ function CredentialPanel(props: CredentialPanelProps) {
                     }}
                     readOnly={valueShown}
                     placeholder={
-                        props.linkedCredentialName
-                            ? "••••••••" // password is stored, leave it
+                        props.linkedPasswordId
+                            ? "••••••••"
                             : t("dialog.host.credentialPasswordPlaceholder")
                     }
                     autoComplete="off"
                 />
-                {valueShown && (
-                    <span className={styles.revealTimer}>
-                        {t("host.reveal.timeLeft", { seconds: secondsLeft })}
+                <div className={styles.fieldControls}>
+                    {valueShown && (
+                        <span className={styles.revealTimer}>
+                            {t("host.reveal.timeLeft", { seconds: secondsLeft })}
+                        </span>
+                    )}
+                    {showEye && (
+                        <button
+                            type="button"
+                            className={styles.passwordEye}
+                            onClick={onEyeClick}
+                            title={
+                                showPassword || valueShown
+                                    ? t("common.hide")
+                                    : t("common.show")
+                            }
+                            aria-label={
+                                showPassword || valueShown
+                                    ? t("common.hide")
+                                    : t("common.show")
+                            }
+                        >
+                            {showPassword || valueShown ? (
+                                <EyeOff size={14} />
+                            ) : (
+                                <Eye size={14} />
+                            )}
+                        </button>
+                    )}
+                    {props.linkedPasswordId && (
+                        <button
+                            type="button"
+                            className={styles.methodRemove}
+                            onClick={() => props.onUnlink(props.linkedPasswordId!)}
+                            title={t("dialog.host.removeMethod")}
+                            aria-label={t("dialog.host.removeMethod")}
+                        >
+                            <X size={14} />
+                        </button>
+                    )}
+                </div>
+            </div>
+
+            {/* SSH key — compact chip with ✕ when linked. */}
+            {keyLinked && (
+                <div className={styles.keyChipRow}>
+                    <KeyRound size={14} />
+                    <span className={styles.keyChipName}>
+                        {props.linkedKeyName}
                     </span>
-                )}
-                {showEye && (
                     <button
                         type="button"
-                        className={styles.passwordEye}
-                        onClick={onEyeClick}
-                        title={
-                            showPassword || valueShown
-                                ? t("common.hide")
-                                : t("common.show")
-                        }
-                        aria-label={
-                            showPassword || valueShown
-                                ? t("common.hide")
-                                : t("common.show")
-                        }
+                        className={styles.methodRemove}
+                        onClick={() => props.onUnlink(props.linkedKeyId!)}
+                        title={t("dialog.host.removeMethod")}
+                        aria-label={t("dialog.host.removeMethod")}
                     >
-                        {showPassword || valueShown ? (
-                            <EyeOff size={14} />
-                        ) : (
-                            <Eye size={14} />
-                        )}
+                        <X size={14} />
                     </button>
-                )}
-            </div>
-            <div className={styles.useSavedRow}>
-                <button
-                    type="button"
-                    className={styles.useSavedButton}
-                    onClick={() => setPickerOpen(true)}
-                    disabled={noneAvailable}
-                    title={
-                        noneAvailable
-                            ? t("dialog.host.credentialNoSaved")
-                            : t("dialog.host.credentialUseSaved")
-                    }
-                >
-                    <Plus size={13} />
-                    {t("dialog.host.credentialUseSaved")}
-                </button>
-                {props.linkedCredentialName && (
-                    <span className={styles.linkedChip}>
-                        {t("host.credentialLinked", {
-                            name: props.linkedCredentialName,
-                        })}
-                    </span>
-                )}
-            </div>
-            {pickerOpen && (
-                <SavedCredentialPicker
-                    onClose={() => setPickerOpen(false)}
-                    onPick={async (id) => {
-                        setPickerOpen(false);
-                        await props.onPickSaved(id);
+                </div>
+            )}
+
+            {/* Add an SSH key: one click opens the picker of existing keys
+                with an "Add new" footer that opens the paste/import modal. */}
+            {!keyLinked && (
+                <div className={styles.authTriggerWrap}>
+                    <button
+                        type="button"
+                        className={styles.useSavedButton}
+                        onClick={() => setPickerOpen((v) => !v)}
+                    >
+                        <Plus size={13} />
+                        {t("dialog.host.authKind.key")}
+                    </button>
+                    {pickerOpen && (
+                        <SavedCredentialPicker
+                            onClose={() => setPickerOpen(false)}
+                            onPick={async (id) => {
+                                setPickerOpen(false);
+                                await props.onPickSaved(id);
+                            }}
+                            onAddNew={() => {
+                                setPickerOpen(false);
+                                setAddKeyOpen(true);
+                            }}
+                        />
+                    )}
+                </div>
+            )}
+
+            {addKeyOpen && (
+                <AddKeyModal
+                    onClose={() => setAddKeyOpen(false)}
+                    onAdd={async (args) => {
+                        setAddKeyOpen(false);
+                        await props.onAddKey(args);
                     }}
                 />
             )}
@@ -1211,13 +1526,17 @@ function CredentialPanel(props: CredentialPanelProps) {
 
 function SavedCredentialPicker({
     onPick,
+    onAddNew,
     onClose,
 }: {
     onPick: (credentialId: string) => Promise<void>;
+    onAddNew: () => void;
     onClose: () => void;
 }) {
+    const { t } = useT();
     const credentials = useCredentialsStore((s) => s.items);
     const ref = useRef<HTMLDivElement>(null);
+    const keys = credentials.filter((c) => c.kind === "ssh_key");
 
     useEffect(() => {
         const onDoc = (e: MouseEvent) => {
@@ -1229,21 +1548,149 @@ function SavedCredentialPicker({
 
     return (
         <div ref={ref} className={styles.savedPicker}>
-            {credentials.map((c) => (
+            {keys.map((c) => (
                 <button
                     key={c.id}
                     type="button"
                     className={styles.savedPickerRow}
                     onClick={() => void onPick(c.id)}
                 >
+                    <KeyRound size={14} />
                     <span className={styles.savedPickerName}>{c.name}</span>
-                    <span className={styles.savedPickerMeta}>
-                        {c.kind.replace("_", " ")}
-                        {c.username && ` · ${c.username}`}
-                    </span>
                 </button>
             ))}
+            <button
+                type="button"
+                className={`${styles.savedPickerRow} ${styles.savedPickerAdd}`}
+                onClick={onAddNew}
+            >
+                <Plus size={14} />
+                <span className={styles.savedPickerName}>
+                    {t("dialog.host.addNewKey")}
+                </span>
+            </button>
         </div>
+    );
+}
+
+// Modal for adding a brand-new SSH key: paste or import from file
+// (OpenSSH / PEM / PuTTY .ppk), optional passphrase. The key is created
+// in the keychain and applied to the host immediately on confirm.
+function AddKeyModal({
+    onClose,
+    onAdd,
+}: {
+    onClose: () => void;
+    onAdd: (args: {
+        key: string;
+        passphrase: string;
+        name: string;
+    }) => Promise<void>;
+}) {
+    const { t } = useT();
+    const [key, setKey] = useState("");
+    const [passphrase, setPassphrase] = useState("");
+    const [name, setName] = useState("");
+    const [note, setNote] = useState<string | null>(null);
+    const [busy, setBusy] = useState(false);
+    const fileRef = useRef<HTMLInputElement>(null);
+    const canAdd = key.trim() !== "" && !busy;
+
+    const confirm = async () => {
+        if (!canAdd) return;
+        setBusy(true);
+        try {
+            await onAdd({ key: key.trim(), passphrase, name: name.trim() });
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <Dialog
+            open
+            onClose={onClose}
+            title={t("dialog.host.addKeyTitle")}
+            size="md"
+            footer={
+                <>
+                    <Button variant="secondary" onClick={onClose}>
+                        {t("common.cancel")}
+                    </Button>
+                    <Button variant="primary" onClick={confirm} disabled={!canAdd}>
+                        {t("common.add")}
+                    </Button>
+                </>
+            }
+        >
+            <div className={styles.addKeyBody}>
+                <Input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder={t("dialog.host.keyNamePlaceholder")}
+                    spellCheck={false}
+                    autoComplete="off"
+                />
+                <Textarea
+                    value={key}
+                    onChange={(e) => {
+                        setNote(null);
+                        setKey(e.target.value);
+                    }}
+                    placeholder={
+                        "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----"
+                    }
+                    rows={7}
+                    spellCheck={false}
+                    autoComplete="off"
+                    style={{
+                        fontFamily: "var(--font-mono)",
+                        fontSize: "var(--text-sm)",
+                    }}
+                />
+                <div className={styles.useSavedRow}>
+                    <button
+                        type="button"
+                        className={styles.useSavedButton}
+                        onClick={() => fileRef.current?.click()}
+                    >
+                        <Upload size={13} />
+                        {t("dialog.host.importKeyFile")}
+                    </button>
+                </div>
+                {note && <span className={styles.inlineHint}>{note}</span>}
+                <input
+                    ref={fileRef}
+                    type="file"
+                    accept=".pem,.key,.ppk,.openssh,application/x-pem-file"
+                    style={{ display: "none" }}
+                    onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = "";
+                        if (!file) return;
+                        if (name.trim() === "") setName(file.name);
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                            const text = String(reader.result ?? "").trim();
+                            setKey(text);
+                            setNote(
+                                /PuTTY-User-Key-File/.test(text)
+                                    ? t("host.key.ppkImported")
+                                    : null,
+                            );
+                        };
+                        reader.readAsText(file);
+                    }}
+                />
+                <Input
+                    type="password"
+                    value={passphrase}
+                    onChange={(e) => setPassphrase(e.target.value)}
+                    placeholder={t("dialog.host.passphrasePlaceholder")}
+                    autoComplete="off"
+                />
+            </div>
+        </Dialog>
     );
 }
 
@@ -1252,7 +1699,11 @@ function SavedCredentialPicker({
 // Helpers
 // =====================================================================
 
-function buildFormState(props: HostFormProps, linkedUsername?: string): FormState {
+function buildFormState(
+    props: HostFormProps,
+    linkedUsername?: string,
+    linkedKind?: CredentialKind,
+): FormState {
     // Stage 1.8: the Label input now binds directly to the explicit
     // `display_name` column. No more `name === hostname` heuristic —
     // an unset label is simply `display_name === null`, and the input
@@ -1270,12 +1721,27 @@ function buildFormState(props: HostFormProps, linkedUsername?: string): FormStat
         notes: props.host.notes ?? "",
         startupCommand: props.host.startup_command ?? "",
         envRaw: formatEnv(props.host.env_vars),
-        // Seed the username from the linked credential so it survives the
-        // form rebuild that happens when a host is selected. (Without
-        // this, the reset effect clobbered the value the linked-cred
-        // effect had just loaded → username looked empty.)
-        inlineUsername: linkedUsername ?? props.initialInlineUsername ?? "",
+        // Username lives on the host now. Prefer it; for drafts use the
+        // remembered draft value; fall back to the linked credential's
+        // username only for hosts saved before the per-host migration.
+        inlineUsername:
+            props.host.username ||
+            props.initialInlineUsername ||
+            linkedUsername ||
+            "",
         inlinePassword: props.initialInlinePassword ?? "",
+        // Auth method follows the linked credential's kind when present,
+        // otherwise the draft's remembered choice (default: password).
+        inlineAuthKind:
+            linkedKind === "ssh_key"
+                ? "key"
+                : linkedKind === "password"
+                  ? "password"
+                  : props.initialInlineAuthKind ?? "password",
+        // Never seed the stored key/passphrase — we don't auto-reveal them.
+        inlinePrivateKey: props.initialInlinePrivateKey ?? "",
+        inlinePassphrase: props.initialInlinePassphrase ?? "",
+        inlineKeyName: props.initialInlineKeyName ?? "",
     };
 }
 

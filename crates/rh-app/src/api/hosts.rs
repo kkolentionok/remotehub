@@ -64,7 +64,15 @@ pub async fn host_get(
         .get(&req.id)
         .await
         .map_err(|_| ApiError::not_found("host"))?;
-    Ok(host.into())
+    let credential_ids = state
+        .credentials
+        .credentials_for_host(&req.id)
+        .await
+        .map(|creds| creds.into_iter().map(|c| c.id).collect())
+        .unwrap_or_default();
+    let mut dto = HostFullDto::from(host);
+    dto.credential_ids = credential_ids;
+    Ok(dto)
 }
 
 #[tauri::command]
@@ -98,6 +106,7 @@ pub async fn host_create(
     let mut host = Host::new(req.name, req.hostname, req.protocol, req.port);
     host.display_name = normalize_optional(req.display_name);
     host.group_id = req.group_id;
+    host.username = req.username.unwrap_or_default();
     host.tags = req.tags.unwrap_or_default();
     host.color = req.color;
     host.notes = req.notes;
@@ -150,6 +159,9 @@ pub async fn host_update(
     if let Some(port) = req.port {
         validate_port(port)?;
         host.port = port;
+    }
+    if let Some(username) = req.username {
+        host.username = username;
     }
     if let Some(tags) = req.tags {
         validate_tags(&tags)?;

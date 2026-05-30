@@ -58,6 +58,77 @@ pub async fn run(
     }
 }
 
+/// Attempt a single auth method. Returns `Ok(true)` on success,
+/// `Ok(false)` if the server rejected it (or a key couldn't be decoded —
+/// we skip rather than abort so other methods still get a turn), and
+/// `Err` only for transport-level failures.
+async fn try_auth(
+    handle: &mut russh::client::Handle<ClientHandler>,
+    cred: RevealedCredential,
+) -> Result<bool, SshError> {
+    match cred {
+        RevealedCredential::Password { username, password } => {
+            let pw = password
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| String::from_utf8_lossy(password.expose()).into_owned());
+            // NOTE (russh 0.45): returns `bool`. On 0.46+ it returns
+            // `AuthResult` — then use `.success()` here.
+            let ok = handle.authenticate_password(&username, &pw).await?;
+            drop(password); // RevealedSecret → zeroized
+            Ok(ok)
+        }
+        RevealedCredential::Key {
+            username,
+            private_key_pem,
+            passphrase,
+        } => {
+            let pem = private_key_pem
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    String::from_utf8_lossy(private_key_pem.expose()).into_owned()
+                });
+            let pass = passphrase
+                .as_ref()
+                .and_then(|p| p.as_str().map(str::to_owned));
+            // PuTTY .ppk keys can't be read by russh — convert to OpenSSH on
+            // the fly. The converted PEM is already decrypted, so we then
+            // decode with no passphrase. A plain OpenSSH key is decoded
+            // directly (russh applies the passphrase if it's encrypted).
+            let (pem, decode_pass): (String, Option<&str>) = if crate::ppk::is_ppk(&pem) {
+                match crate::ppk::ppk_to_openssh(&pem, pass.as_deref()) {
+                    Ok(converted) => (converted, None),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "ppk → openssh conversion failed; skipping key");
+                        return Ok(false);
+                    }
+                }
+            } else {
+                (pem, pass.as_deref())
+            };
+            drop(private_key_pem); // zeroized
+            // russh re-exports key helpers at `russh::keys`. `decode_secret_key`
+            // parses OpenSSH / PKCS#8 keys, deciphering with `pass` if encrypted.
+            let key = match russh::keys::decode_secret_key(&pem, decode_pass) {
+                Ok(k) => k,
+                Err(_) => {
+                    tracing::warn!("ssh key decode failed; skipping key");
+                    return Ok(false);
+                }
+            };
+            drop(passphrase);
+            // NOTE (russh 0.45): `authenticate_publickey(user, Arc<KeyPair>)`
+            // returns `bool`. On 0.46+ wrap as `PrivateKeyWithHashAlg` and
+            // use `.success()`.
+            let ok = handle
+                .authenticate_publickey(&username, Arc::new(key))
+                .await?;
+            Ok(ok)
+        }
+    }
+}
+
 async fn connect_and_pump(
     params: SshSpawnParams,
     rx_cmd: &mut mpsc::Receiver<SessionCommand>,
@@ -92,33 +163,27 @@ async fn connect_and_pump(
         state: SessionState::Authenticating,
     });
 
-    let (username, password) = match params.credential {
-        RevealedCredential::Password { username, password } => {
-            let pw = password
-                .as_str()
-                .map(str::to_owned)
-                .unwrap_or_else(|| String::from_utf8_lossy(password.expose()).into_owned());
-            (username, pw)
-            // `password` (RevealedSecret) drops here → zeroized.
+    // Try each available method (typically key(s) first, then password).
+    // Auth fails only when every method is rejected; a bad/undecodable key
+    // is skipped so a working password can still get us in.
+    let mut authed = false;
+    let mut last_method = "none";
+    for cred in params.credentials {
+        last_method = match &cred {
+            RevealedCredential::Password { .. } => "password",
+            RevealedCredential::Key { .. } => "publickey",
+        };
+        if try_auth(&mut handle, cred).await? {
+            authed = true;
+            break;
         }
-        RevealedCredential::Key { .. } => {
-            emit(SshSessionEvent::AuthFailed {
-                method: "publickey".into(),
-            });
-            return Err(SshError::KeyAuthUnsupported);
-        }
-    };
-
-    // NOTE: in some russh versions `authenticate_password` returns
-    // `AuthResult` instead of `bool` — then use `.success()` here.
-    let authenticated = handle.authenticate_password(&username, &password).await?;
-    drop(password);
-    if !authenticated {
+    }
+    if !authed {
         emit(SshSessionEvent::AuthFailed {
-            method: "password".into(),
+            method: last_method.into(),
         });
         return Err(SshError::AuthFailed {
-            method: "password".into(),
+            method: last_method.into(),
         });
     }
 

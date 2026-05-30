@@ -111,6 +111,11 @@ pub struct Host {
     pub protocol: Protocol,
     pub hostname: String,
     pub port: u16,
+    /// Login user for the session. Lives on the host (not the credential)
+    /// so one SSH key can be reused across hosts that log in as different
+    /// users. Empty string means "unset"; the session layer then falls
+    /// back to the credential's own username for backward compatibility.
+    pub username: String,
     pub tags: Vec<String>,
     /// Hex color `#RRGGBB`, used in UI for visual grouping. Optional.
     pub color: Option<String>,
@@ -154,6 +159,7 @@ impl Host {
             protocol,
             hostname: hostname.into(),
             port: port.unwrap_or_else(|| protocol.default_port()),
+            username: String::new(),
             tags: Vec::new(),
             color: None,
             notes: None,

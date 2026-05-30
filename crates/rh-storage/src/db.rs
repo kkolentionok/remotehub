@@ -17,12 +17,21 @@ use tracing::{info, warn};
 
 use rh_core::StorageError;
 
-/// Schema version this binary expects. Bumping this triggers a
-/// drop-recreate on next open in alpha mode.
-pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+/// Schema version this binary expects. Bumping this triggers either an
+/// incremental migration (when a path exists, e.g. v2 → v3) or, for any
+/// other mismatch, a drop-recreate in alpha mode.
+pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
 /// Embedded migration script for the current version.
 const V1_SQL: &str = include_str!("migrations/v1.sql");
+
+/// Incremental, data-preserving migration v2 → v3: per-host username.
+///
+/// `username` used to live on the credential, which broke when one SSH key
+/// is shared across hosts that log in as different users. It now lives on
+/// the host. This `ALTER TABLE` keeps all existing rows intact.
+const MIGRATE_V2_TO_V3: &str =
+    "ALTER TABLE hosts ADD COLUMN username TEXT NOT NULL DEFAULT '';";
 
 /// What [`Db::open`] decided to do with the schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +43,9 @@ pub enum InitOutcome {
     /// File existed at a different version. We dropped and recreated.
     /// User-visible data was lost.
     Recreated { old_version: u32 },
+    /// File existed one version behind and we applied an incremental,
+    /// data-preserving migration. No data lost.
+    Migrated { old_version: u32 },
 }
 
 /// Opaque pool wrapper. Cloning is cheap (Arc inside).
@@ -133,6 +145,15 @@ impl Db {
                 info!(source = %self.source, version = v, "schema already at current version");
                 Ok(InitOutcome::AlreadyCurrent)
             }
+            Some(2) if CURRENT_SCHEMA_VERSION == 3 => {
+                info!(
+                    source = %self.source,
+                    "migrating schema v2 → v3 (per-host username, data preserved)"
+                );
+                self.apply_migration(MIGRATE_V2_TO_V3).await?;
+                self.set_schema_version(3).await?;
+                Ok(InitOutcome::Migrated { old_version: 2 })
+            }
             Some(v) => {
                 warn!(
                     source = %self.source,
@@ -180,6 +201,29 @@ impl Db {
             }
             None => Ok(None),
         }
+    }
+
+    /// Run a single incremental migration script (one or more statements).
+    async fn apply_migration(&self, sql: &str) -> Result<(), StorageError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| StorageError::Backend(format!("acquire for migration: {e}")))?;
+        conn.execute(sql)
+            .await
+            .map_err(|e| StorageError::Backend(format!("apply migration: {e}")))?;
+        Ok(())
+    }
+
+    /// Update the recorded schema version after an incremental migration.
+    async fn set_schema_version(&self, version: u32) -> Result<(), StorageError> {
+        sqlx::query("UPDATE schema_meta SET value = ? WHERE key = 'version'")
+            .bind(version.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| StorageError::Backend(format!("set schema version: {e}")))?;
+        Ok(())
     }
 
     async fn apply_v1(&self) -> Result<(), StorageError> {

@@ -171,6 +171,28 @@ impl CredentialStore for SqliteCredentialStore {
         rows.iter().map(row_to_credential).collect()
     }
 
+    #[instrument(level = "debug", skip(self), fields(host_id = %host_id))]
+    async fn credentials_for_host(
+        &self,
+        host_id: &HostId,
+    ) -> Result<Vec<Credential>, StorageError> {
+        let rows = sqlx::query(
+            "
+            SELECT c.id, c.name, c.kind, c.username, c.keychain_ref,
+                   c.created_at, c.updated_at
+            FROM credentials c
+            JOIN host_credentials hc ON hc.credential_id = c.id
+            WHERE hc.host_id = ?
+            ORDER BY hc.is_default DESC, c.name COLLATE NOCASE
+            ",
+        )
+        .bind(host_id.as_str())
+        .fetch_all(self.db.pool())
+        .await
+        .map_err(map_err)?;
+        rows.iter().map(row_to_credential).collect()
+    }
+
     #[instrument(level = "debug", skip(self, credential), fields(cred_id = %credential.id))]
     async fn update(&self, credential: &Credential) -> Result<(), StorageError> {
         // Metadata only — kind and keychain_ref are NOT updateable.

@@ -53,11 +53,12 @@ export function CredentialFormDialog({ open, onClose }: Props) {
         setSubmitting(true);
         setError(null);
         try {
-            const secretNeeded = form.kind !== "ssh_key_agent";
-            if (secretNeeded && form.secret.length === 0) {
+            // Only the private key is mandatory. A password may be empty
+            // (passwordless / empty-password hosts); the agent has no secret.
+            if (form.kind === "ssh_key" && form.secret.length === 0) {
                 throw {
                     kind: "validation",
-                    field: t("dialog.credential.password"),
+                    field: t("dialog.credential.privateKey"),
                     reason: "required",
                 };
             }
@@ -65,7 +66,10 @@ export function CredentialFormDialog({ open, onClose }: Props) {
                 name: form.name.trim(),
                 kind: form.kind,
                 username: form.username.trim(),
-                secret: secretNeeded ? encodeSecret(form.secret) : undefined,
+                secret:
+                    form.kind !== "ssh_key_agent"
+                        ? encodeSecret(form.secret)
+                        : undefined,
                 passphrase:
                     form.kind === "ssh_key" && form.passphrase.length > 0
                         ? encodeSecret(form.passphrase)
@@ -154,8 +158,7 @@ export function CredentialFormDialog({ open, onClose }: Props) {
                                 type={showSecret ? "text" : "password"}
                                 value={form.secret}
                                 onChange={(e) => update("secret", e.target.value)}
-                                placeholder="••••••••"
-                                required
+                                placeholder={t("dialog.credential.passwordPlaceholder")}
                             />
                             <button
                                 type="button"

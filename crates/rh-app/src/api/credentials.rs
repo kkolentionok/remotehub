@@ -270,11 +270,10 @@ fn validate_cred_name(name: &str) -> ApiResult<()> {
     Ok(())
 }
 
-fn validate_username(username: &str, kind: CredentialKind) -> ApiResult<()> {
-    // SshKeyAgent allows empty username — the agent handles user lookup.
-    if username.is_empty() && kind != CredentialKind::SshKeyAgent {
-        return Err(ApiError::validation("username", "must not be empty"));
-    }
+fn validate_username(username: &str, _kind: CredentialKind) -> ApiResult<()> {
+    // Empty is allowed: the login lives on the host now, not the
+    // credential (one key can serve hosts with different users). The
+    // credential username is optional metadata / legacy fallback.
     if username.len() > MAX_USERNAME {
         return Err(ApiError::validation(
             "username",
@@ -323,13 +322,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn validate_username_ssh_key_agent_allows_empty() {
+    fn validate_username_allows_empty_any_kind() {
+        // Login now lives on the host; an empty credential username is fine.
         assert!(validate_username("", CredentialKind::SshKeyAgent).is_ok());
+        assert!(validate_username("", CredentialKind::Password).is_ok());
+        assert!(validate_username("", CredentialKind::SshKey).is_ok());
     }
 
     #[test]
-    fn validate_username_password_requires_nonempty() {
-        assert!(validate_username("", CredentialKind::Password).is_err());
+    fn validate_username_rejects_nul() {
+        assert!(validate_username("a\0b", CredentialKind::Password).is_err());
     }
 
     #[test]

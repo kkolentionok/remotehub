@@ -10,7 +10,7 @@ use tauri::State;
 use tokio::sync::mpsc;
 use tracing::{info, instrument};
 
-use rh_core::{CredentialKind, Protocol, SessionId};
+use rh_core::{CredentialKind, Protocol, RevealError, RevealedSecret, SecretError, SessionId};
 use rh_ssh::{RevealedCredential, SessionCommand, SshOpenOptions, SshSessionEvent, SshSpawnParams};
 
 use crate::api::dto::{
@@ -40,23 +40,92 @@ pub async fn session_open(
         return Err(ApiError::validation("protocol", "host is not an SSH host"));
     }
 
-    // Resolve credential: explicit override, else the host default.
-    let cred_id = req
-        .credential_id
-        .or(host.default_credential_id.clone())
-        .ok_or_else(|| ApiError::validation("credential", "host has no credential"))?;
+    // Username lives on the host so one key can serve hosts with different
+    // logins. Fall back to a credential's own username for hosts saved
+    // before the per-host username migration (host.username == "").
+    let host_username = host.username.clone();
+    let resolve_username = |cred_username: &str| -> String {
+        if host_username.is_empty() {
+            cred_username.to_owned()
+        } else {
+            host_username.clone()
+        }
+    };
 
-    let cred = state.credentials.get(&cred_id).await?;
-    if cred.kind != CredentialKind::Password {
+    // Collect every auth method linked to the host. An explicit override
+    // (req.credential_id) wins and restricts to that single credential;
+    // otherwise we offer all linked methods and let the actor try each.
+    let creds: Vec<_> = match &req.credential_id {
+        Some(id) => vec![state.credentials.get(id).await?],
+        None => {
+            let mut all = state.credentials.credentials_for_host(&req.host_id).await?;
+            if all.is_empty() {
+                if let Some(def) = host.default_credential_id.clone() {
+                    all.push(state.credentials.get(&def).await?);
+                }
+            }
+            all
+        }
+    };
+    let mut credentials: Vec<RevealedCredential> = Vec::new();
+
+    if creds.is_empty() {
+        // No stored credential. If the host has a username, try a
+        // passwordless login (empty password) — covers "username only,
+        // blank password" hosts. Without a username we genuinely can't.
+        if host.username.is_empty() {
+            return Err(ApiError::validation(
+                "credential",
+                "host has no credential",
+            ));
+        }
+        credentials.push(RevealedCredential::Password {
+            username: host.username.clone(),
+            password: RevealedSecret::new(Vec::new()),
+        });
+    }
+
+    for cred in &creds {
+        let username = resolve_username(&cred.username);
+        match cred.kind {
+            CredentialKind::Password => {
+                // Allow passwordless / empty-password hosts: a missing
+                // keychain secret is treated as an empty password.
+                let password = match state.credentials.reveal(&cred.id).await {
+                    Ok(s) => s,
+                    Err(RevealError::Secret(SecretError::NotFound)) => {
+                        RevealedSecret::new(Vec::new())
+                    }
+                    Err(e) => return Err(e.into()),
+                };
+                credentials.push(RevealedCredential::Password { username, password });
+            }
+            CredentialKind::SshKey => {
+                let private_key_pem = state.credentials.reveal(&cred.id).await?;
+                let passphrase = state.credentials.reveal_passphrase(&cred.id).await?;
+                credentials.push(RevealedCredential::Key {
+                    username,
+                    private_key_pem,
+                    passphrase,
+                });
+            }
+            CredentialKind::SshKeyAgent => {
+                // Not implemented yet — skip rather than fail the whole
+                // connection when other methods are available.
+            }
+        }
+    }
+    if credentials.is_empty() {
         return Err(ApiError::not_implemented(
-            "SSH key / agent authentication (Stage 2 follow-up)",
+            "no usable auth method (SSH agent not implemented)",
         ));
     }
-    let password = state.credentials.reveal(&cred_id).await?;
-    let credential = RevealedCredential::Password {
-        username: cred.username,
-        password,
-    };
+    // Try keys before passwords (conventional, and avoids burning a
+    // password attempt when a key would work).
+    credentials.sort_by_key(|c| match c {
+        RevealedCredential::Key { .. } => 0,
+        RevealedCredential::Password { .. } => 1,
+    });
 
     // Bridge the actor's mpsc events into the UI Channel.
     let (tx_events, mut rx_events) = mpsc::unbounded_channel::<SshSessionEvent>();
@@ -74,7 +143,7 @@ pub async fn session_open(
         hostname: host.hostname,
         port: host.port,
         host_id: req.host_id,
-        credential,
+        credentials,
         options: SshOpenOptions {
             cols,
             rows,

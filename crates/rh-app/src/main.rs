@@ -119,6 +119,10 @@ async fn build_state(_app: &tauri::AppHandle) -> Result<AppState, String> {
             old_version,
             "database schema mismatch (alpha mode): existing data was wiped"
         ),
+        InitOutcome::Migrated { old_version } => info!(
+            old_version,
+            "migrated database schema (data preserved)"
+        ),
     }
 
     let hosts: Arc<dyn HostStore> = Arc::new(SqliteHostStore::new(db.clone()));

@@ -40,6 +40,7 @@ export interface HostDto {
     protocol: Protocol;
     hostname: string;
     port: number;
+    username: string;
     tags: string[];
     color: string | null;
     detected_os: string | null;
@@ -52,6 +53,8 @@ export interface HostFullDto extends HostDto {
     notes: string | null;
     startup_command: string | null;
     env_vars: EnvVar[];
+    /** All credentials linked to this host (default first). */
+    credential_ids: CredentialId[];
 }
 
 export interface HostGroupDto {
@@ -196,6 +199,7 @@ export interface HostCreateRequest {
     protocol: Protocol;
     hostname: string;
     port?: number | null;
+    username?: string | null;
     tags?: string[] | null;
     color?: string | null;
     notes?: string | null;
@@ -222,6 +226,7 @@ export interface HostUpdateRequest {
     protocol?: Protocol;
     hostname?: string;
     port?: number;
+    username?: string;
     tags?: string[];
     color?: string | null;
     notes?: string | null;

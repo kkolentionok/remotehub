@@ -183,6 +183,16 @@ export interface HostDraft {
     /** Inline credential being typed (not yet committed to the credential store). */
     inlineUsername: string;
     inlinePassword: string;
+    /** Which auth method the inline credential uses. */
+    inlineAuthKind: "password" | "key";
+    /** Pasted private key (PEM) when inlineAuthKind === "key". */
+    inlinePrivateKey: string;
+    /** Optional passphrase for the private key. */
+    inlinePassphrase: string;
+    /** Imported key file name (names the created credential). */
+    inlineKeyName: string;
+    /** An existing credential chosen via "use existing" (linked on promotion). */
+    pickedCredentialId: string | null;
 }
 
 interface UiStore {
@@ -223,6 +233,11 @@ function emptyDraft(defaultGroupId: GroupId | null = null): HostDraft {
         envVars: [],
         inlineUsername: "",
         inlinePassword: "",
+        inlineAuthKind: "password",
+        inlinePrivateKey: "",
+        inlinePassphrase: "",
+        inlineKeyName: "",
+        pickedCredentialId: null,
     };
 }
 
@@ -267,7 +282,9 @@ export function isDraftDirty(d: HostDraft): boolean {
         d.startupCommand.trim() !== "" ||
         d.envVars.length > 0 ||
         d.inlineUsername.trim() !== "" ||
-        d.inlinePassword !== ""
+        d.inlinePassword !== "" ||
+        d.inlinePrivateKey.trim() !== "" ||
+        d.inlinePassphrase !== ""
     );
 }
 
@@ -582,7 +599,10 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
                 const res = await sessionsApi.open(
                     {
                         host_id: host.id,
-                        credential_id: host.default_credential_id ?? null,
+                        // null = offer every auth method linked to the host
+                        // (the backend tries key(s) then password). Passing a
+                        // specific id would restrict to that single method.
+                        credential_id: null,
                         options: {
                             protocol: "ssh",
                             cols: 80,

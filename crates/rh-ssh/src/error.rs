@@ -14,8 +14,8 @@ pub enum SshError {
     #[error("authentication failed ({method})")]
     AuthFailed { method: String },
 
-    #[error("ssh-key authentication is not supported yet")]
-    KeyAuthUnsupported,
+    #[error("could not decode the private key (wrong passphrase or unsupported format)")]
+    KeyDecode,
 
     #[error("channel closed")]
     ChannelClosed,
@@ -31,7 +31,7 @@ impl SshError {
             SshError::Russh(e) => CloseReason::NetworkError {
                 message: e.to_string(),
             },
-            SshError::AuthFailed { .. } | SshError::KeyAuthUnsupported => {
+            SshError::AuthFailed { .. } | SshError::KeyDecode => {
                 CloseReason::AuthFailed
             }
             SshError::ChannelClosed => CloseReason::ServerDisconnected { message: None },

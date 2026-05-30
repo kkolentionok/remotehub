@@ -52,9 +52,9 @@ impl HostStore for SqliteHostStore {
             r"
             INSERT INTO hosts (
                 id, name, display_name, group_id, protocol, hostname, port,
-                tags_json, color, notes, startup_command, env_vars_json,
+                username, tags_json, color, notes, startup_command, env_vars_json,
                 detected_os, default_credential_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ",
         )
         .bind(host.id.as_str())
@@ -64,6 +64,7 @@ impl HostStore for SqliteHostStore {
         .bind(host.protocol.as_str())
         .bind(&host.hostname)
         .bind(i32::from(host.port))
+        .bind(&host.username)
         .bind(&tags_json)
         .bind(host.color.as_deref())
         .bind(host.notes.as_deref())
@@ -162,6 +163,7 @@ impl HostStore for SqliteHostStore {
                 protocol = ?,
                 hostname = ?,
                 port = ?,
+                username = ?,
                 tags_json = ?,
                 color = ?,
                 notes = ?,
@@ -179,6 +181,7 @@ impl HostStore for SqliteHostStore {
         .bind(host.protocol.as_str())
         .bind(&host.hostname)
         .bind(i32::from(host.port))
+        .bind(&host.username)
         .bind(&tags_json)
         .bind(host.color.as_deref())
         .bind(host.notes.as_deref())
@@ -227,7 +230,7 @@ impl HostStore for SqliteHostStore {
 const SELECT_HOST_PREFIX: &str = "
     SELECT
         id, name, display_name, group_id, protocol, hostname, port,
-        tags_json, color, notes, startup_command, env_vars_json,
+        username, tags_json, color, notes, startup_command, env_vars_json,
         detected_os, default_credential_id, created_at, updated_at
     FROM hosts
 ";
@@ -235,7 +238,7 @@ const SELECT_HOST_PREFIX: &str = "
 const SELECT_HOST_COLUMNS: &str = "
     SELECT
         id, name, display_name, group_id, protocol, hostname, port,
-        tags_json, color, notes, startup_command, env_vars_json,
+        username, tags_json, color, notes, startup_command, env_vars_json,
         detected_os, default_credential_id, created_at, updated_at
     FROM hosts
     WHERE id = ?
@@ -260,6 +263,9 @@ fn row_to_host(row: &sqlx::sqlite::SqliteRow) -> Result<Host, StorageError> {
     let hostname: String = row
         .try_get("hostname")
         .map_err(|e| StorageError::Backend(format!("read hostname: {e}")))?;
+    let username: String = row
+        .try_get("username")
+        .map_err(|e| StorageError::Backend(format!("read username: {e}")))?;
     let port: i64 = row
         .try_get("port")
         .map_err(|e| StorageError::Backend(format!("read port: {e}")))?;
@@ -329,6 +335,7 @@ fn row_to_host(row: &sqlx::sqlite::SqliteRow) -> Result<Host, StorageError> {
         protocol,
         hostname,
         port,
+        username,
         tags,
         color,
         notes,

@@ -87,6 +87,14 @@ pub trait CredentialStore: Send + Sync {
     async fn get(&self, id: &CredentialId) -> Result<Credential, StorageError>;
     async fn list(&self) -> Result<Vec<Credential>, StorageError>;
 
+    /// All credentials linked to a host, default first. Used by the
+    /// session layer to offer every available auth method (key(s) then
+    /// password) and by the UI to render all active methods.
+    async fn credentials_for_host(
+        &self,
+        host_id: &HostId,
+    ) -> Result<Vec<Credential>, StorageError>;
+
     /// Update metadata only (name, username). Secret is not touched —
     /// use [`Self::rotate_secret`] to change it.
     async fn update(&self, credential: &Credential) -> Result<(), StorageError>;

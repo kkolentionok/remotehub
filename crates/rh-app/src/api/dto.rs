@@ -53,6 +53,7 @@ pub struct HostDto {
     pub protocol: Protocol,
     pub hostname: String,
     pub port: u16,
+    pub username: String,
     pub tags: Vec<String>,
     pub color: Option<String>,
     pub detected_os: Option<String>,
@@ -71,6 +72,7 @@ impl From<Host> for HostDto {
             protocol: h.protocol,
             hostname: h.hostname,
             port: h.port,
+            username: h.username,
             tags: h.tags,
             color: h.color,
             detected_os: h.detected_os,
@@ -91,6 +93,10 @@ pub struct HostFullDto {
     pub notes: Option<String>,
     pub startup_command: Option<String>,
     pub env_vars: Vec<EnvVar>,
+    /// All credentials linked to this host (default first). Lets the UI
+    /// render every active auth method. Populated by `host_get`; empty
+    /// from the `From<Host>` conversion (which has no store access).
+    pub credential_ids: Vec<CredentialId>,
 }
 
 impl From<Host> for HostFullDto {
@@ -103,6 +109,7 @@ impl From<Host> for HostFullDto {
             notes,
             startup_command,
             env_vars,
+            credential_ids: Vec::new(),
         }
     }
 }
@@ -119,6 +126,8 @@ pub struct HostCreateRequest {
     pub hostname: String,
     #[serde(default)]
     pub port: Option<u16>,
+    #[serde(default)]
+    pub username: Option<String>,
     #[serde(default)]
     pub tags: Option<Vec<String>>,
     #[serde(default)]
@@ -162,6 +171,8 @@ pub struct HostUpdateRequest {
     pub hostname: Option<String>,
     #[serde(default)]
     pub port: Option<u16>,
+    #[serde(default)]
+    pub username: Option<String>,
     #[serde(default)]
     pub tags: Option<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_optional_optional")]

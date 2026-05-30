@@ -1,4 +1,4 @@
--- RemoteHub schema v2.
+-- RemoteHub schema v3.
 --
 -- This script creates the entire database from scratch. In alpha mode
 -- (current), schema bumps drop and recreate everything — there are no
@@ -24,7 +24,7 @@ CREATE TABLE schema_meta (
     value   TEXT NOT NULL
 );
 
-INSERT INTO schema_meta (key, value) VALUES ('version', '2');
+INSERT INTO schema_meta (key, value) VALUES ('version', '3');
 
 -- ---------------------------------------------------------------------
 -- Host groups (hierarchical folders).
@@ -69,6 +69,7 @@ CREATE TABLE hosts (
     protocol                TEXT NOT NULL CHECK (protocol IN ('ssh', 'rdp')),
     hostname                TEXT NOT NULL,
     port                    INTEGER NOT NULL CHECK (port > 0 AND port < 65536),
+    username                TEXT NOT NULL DEFAULT '',
     tags_json               TEXT NOT NULL DEFAULT '[]',
     color                   TEXT,
     notes                   TEXT,
