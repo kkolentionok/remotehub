@@ -1,10 +1,38 @@
 # RemoteHub — Project State & Handoff
 
-**Last updated:** Host info-panel polish — dropped the debug ULID `ID` row; added **"Last connection"** (`last_connected_at`, stamped when a session reaches Ready) and the copyable host-key fingerprint. SSH hardening (TOFU/agent/restore/env) below. **All live-verified on Windows** (compiled + manually tested).
+**Last updated:** **SFTP file explorer (full two-pane commander)** shipped end-to-end, plus the **local terminal (PTY)** and **Tools credential manager** that preceded it. All three live-verified on Windows against the real test host (`89.23.99.57`, password auth). Sections for each below; older RDP/SSH history follows. Detailed SFTP pipeline doc: `docs/specs/sftp.md`.
 
 **Follow-up 2 (region-diff — the real fix):** instrumentation revealed the smoking gun — full-frame JPEG encode was **~130ms** each (the RGBA→RGB copy ran in *unoptimized* rh-rdp; the dev profile only optimized dependencies, not our own crate), capping fps at ~7 and blocking the worker; and full ~130KB base64 frames congested the single webview IPC bridge, so input invokes (clicks) queued behind them and arrived 3-15s late. Fixes: (1) **region-diff** — compute the changed bounding box vs the last frame and JPEG only that rectangle (`FrameJpeg` now carries x,y); a click/keystroke touches a tiny area → tiny encode + tiny payload → no IPC congestion. Frame coalescing was *removed* (each region is a distinct rect; dropping one leaves a stale patch). (2) `[profile.dev.package.rh-rdp] opt-level = 3` so the hot pixel loops are optimized in dev too. Added `rdp frame stats` (fps / avg encode ms / payload KB) + per-click logging for diagnosis.
 
-## Latest — RDP perf pass: JPEG frame transport + tight input poll
+## Latest — SFTP file explorer (full two-pane commander)
+
+A complete Termius/commander-style SFTP browser, built incrementally and live-verified. Spec/pipeline reference: **`docs/specs/sftp.md`**.
+
+**Backend**
+- `rh-ssh/src/sftp.rs` — `SftpConn`: connect (TrustAll host-key — TOFU is a follow-up) via russh `request_subsystem("sftp")` + `russh_sftp::client::SftpSession`; `list` (`SftpEntry{name,path,is_dir,size,modified:Option<i64> from mtime, perms:Option<String> via fmt_perms()}`, dirs-first), `read_file`/`put_in_dir`, `download`/`upload` (buffered), **`download_stream`/`upload_stream`** (256 KiB chunks, cancel flag `&AtomicBool`, `progress: &mut (dyn FnMut(u64)+Send)`), `rename`, `remove` (recursive, boxed async), `mkdir`. `read_dir`/`open`/`read_to_end`/`metadata` are spike-proven; `create`/`write_all`/`shutdown`/`rename`/`remove_file`/`remove_dir`/`create_dir`/`mtime`/`permissions` were unproven russh-sftp surface (compiled clean on Windows).
+- `rh-app/src/sftp_session.rs` — `SftpManager`: `HashMap<SessionId, Arc<Mutex<SftpConn>>>` + a per-transfer cancel registry (`cancels: HashMap<String, Arc<AtomicBool>>`, `register/unregister/cancel_transfer`). `rh-app/src/api/sftp_sessions.rs` — commands `sftp_open` (host_id → `revealed_creds_for` → connect), `sftp_list`, `sftp_close`, `sftp_download`/`sftp_upload`/`sftp_copy` (legacy buffered, still registered), **`sftp_transfer`** (`Channel<u64>` byte-progress + `dst_name` override + cancel), `sftp_transfer_cancel`, `sftp_rename`, `sftp_remove`, `sftp_mkdir`.
+- `rh-app/src/api/local_fs.rs` — the local side of the explorer: `fs_home`, `fs_drives` ("This PC" — enumerates Windows drive roots), `fs_list` (with `clean()` stripping the `\\?\` verbatim prefix so breadcrumbs are clean), `fs_rename`, `fs_remove` (`remove_dir_all` for dirs), `fs_mkdir`. `FsEntry`/`SftpEntry` share `{name,path,is_dir,size,modified,perms}`.
+- tokio gained `io-util` in `rh-ssh` for the streamed copies.
+
+**Frontend** (`ui/src/components/sftp/SftpView.tsx` + `.module.css`, ~1.2k lines)
+- Two interchangeable panels ("точка А | точка Б"), each a `usePanel()` hook: source (local | host), session, listing, sort, multi-select, hidden-files toggle (hosts show dotfiles by default, local hides), filter, inline-rename, create-folder. Endpoint switcher with "This machine"/"Hosts" sections; clean breadcrumbs with a PC-icon root → drives.
+- **Transfer matrix:** local↔host (download/upload), host↔host (copy through the app). Four ways to move: center-rail →/← (armed on the active pane's selection), double-click a file, drag-and-drop between panels (drop highlight + plate), context menu (ПКМ: send/open/rename F2/copy-path/delete Del).
+- **Transfer queue dock** (bottom, collapsible): max 2 parallel (`useTransfers` orchestrator), per-row progress bar / speed / ETA / cancel, total speed, "clear finished"; streamed via `sftp.transfer` + `Channel<u64>`.
+- **Name-conflict dialog** on collision: Replace / Keep both (auto `name (1).ext`, via `dst_name`) / Skip.
+- File ops: search/filter, rename (inline), delete (confirm dialog, recursive), new folder.
+- All `invoke` through `lib/ipc.ts` (`localFs.*`, `sftp.*`); every string i18n'd (`sftp.*`).
+
+**Known follow-ups:** streaming host→host copy (currently buffered, progress 0→100); SFTP TOFU cert pinning (trust-all now); agent-auth for SFTP; transfer queue speed-smoothing; perms-edit (chmod) context item.
+
+## Latest — Local terminal (real PTY)
+
+`portable-pty` in `rh-app`; `rh-app/src/local_pty.rs` `LocalPtyManager` + `spawn_pty` worker (PTY → shell: PowerShell on Windows / `$SHELL`|bash unix, overridable). Reuses `SshSessionEvent`/`SessionCommand` so the existing `Terminal.tsx` works unchanged. Commands `local_session_open/close/input/resize` (`rh-app/src/api/local_sessions.rs`). Shell choice persisted via settings key `local.shell` (rh-core `Settings.local_shell`, `TerminalSection.tsx`). Resize-race fixed (re-send resize once `sessionId` set, else ConPTY sticks at 80×24). Restore-on-reload deferred.
+
+## Latest — Tools credential manager fixes
+
+In the Tools screen, the credential list now: reveals on row click (copy icon appears inline next to a revealed password; no edit-on-click — creds are edited in the host form), shows **only credentials still linked to ≥1 host** (orphans from `unlinkHost` hidden via a `useCredentialLinks` aggregation), and dropped the "+ Add" path (credentials are created in the host editor). Backend orphan-cleanup-on-unlink offered but deferred.
+
+
 
 First report of real-world lag (vs native mstsc). Two fixes for the two causes:
 - **Input latency** — the worker's idle read timeout was 400ms, so a click sent during an idle read waited up to 400ms before the worker drained + forwarded it. Dropped `READ_POLL` to **16ms** (read_pdu still returns immediately on data; this only bounds the idle wait). This is the dominant click-responsiveness fix.
