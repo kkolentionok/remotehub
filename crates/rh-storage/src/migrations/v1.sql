@@ -24,7 +24,7 @@ CREATE TABLE schema_meta (
     value   TEXT NOT NULL
 );
 
-INSERT INTO schema_meta (key, value) VALUES ('version', '3');
+INSERT INTO schema_meta (key, value) VALUES ('version', '8');
 
 -- ---------------------------------------------------------------------
 -- Host groups (hierarchical folders).
@@ -77,6 +77,9 @@ CREATE TABLE hosts (
     env_vars_json           TEXT NOT NULL DEFAULT '[]',
     detected_os             TEXT,
     default_credential_id   TEXT REFERENCES credentials(id) ON DELETE SET NULL,
+    jump_host_id            TEXT,
+    agent_forwarding        INTEGER NOT NULL DEFAULT 0,
+    last_connected_at       TEXT,
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL
 );
@@ -104,4 +107,27 @@ CREATE INDEX idx_host_credentials_credential ON host_credentials(credential_id);
 CREATE TABLE settings (
     key     TEXT PRIMARY KEY NOT NULL,
     value   TEXT NOT NULL
+);
+
+-- ---------------------------------------------------------------------
+-- Pinned SSH host keys (TOFU). Public material, identified by
+-- (hostname, port). The session actor looks up the expected key during
+-- the handshake; the user trusts unknown/changed keys explicitly.
+-- ---------------------------------------------------------------------
+CREATE TABLE known_hosts (
+    hostname            TEXT NOT NULL,
+    port                INTEGER NOT NULL,
+    key_type            TEXT NOT NULL,
+    fingerprint_sha256  TEXT NOT NULL,
+    created_at          TEXT NOT NULL,
+    PRIMARY KEY (hostname, port)
+);
+
+CREATE TABLE rdp_known_certs (
+    hostname            TEXT NOT NULL,
+    port                INTEGER NOT NULL,
+    fingerprint_sha256  TEXT NOT NULL,
+    subject             TEXT NOT NULL,
+    trusted_at          TEXT NOT NULL,
+    PRIMARY KEY (hostname, port)
 );

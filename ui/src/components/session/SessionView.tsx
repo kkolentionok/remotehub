@@ -9,12 +9,14 @@ import {
     useSessionsStore,
     useUiStore,
 } from "../../store";
-import { credentials as credApi, hosts as hostsApi, encodeSecret } from "../../lib/ipc";
+import { credentials as credApi, hosts as hostsApi, rdpSession as rdpSessionApi, encodeSecret } from "../../lib/ipc";
 import { Button } from "../ui/Button";
 import { AddKeyModal, SavedCredentialPicker } from "../host/HostDetail";
 import { EmptyState } from "../ui/EmptyState";
 import { Input } from "../ui/TextField";
 import { Terminal } from "./Terminal";
+import { RdpViewport } from "./RdpViewport";
+import type { RdpInputEvent } from "../../lib/types";
 import styles from "./SessionView.module.css";
 
 export function SessionView({
@@ -39,7 +41,9 @@ export function SessionView({
 
     const isDead = session.state === "closed" || session.state === "failed";
     const isConnecting =
-        session.state === "connecting" || session.state === "authenticating";
+        session.state === "resolving" ||
+        session.state === "connecting" ||
+        session.state === "authenticating";
 
     const reconnect = useCallback(() => {
         const host = hosts.find((h) => h.id === session.hostId);
@@ -56,6 +60,19 @@ export function SessionView({
         setActiveTab(null);
         selectHost(session.hostId);
     }, [setActiveTab, selectHost, session.hostId]);
+
+    // RDP input sink: forward viewport events to the session actor. Mouse
+    // is handled server-side; keyboard/modifier-sync land in 2b-2b (the
+    // actor currently ignores those). Fire-and-forget — input is lossy by
+    // nature and we don't want to await per mouse-move.
+    const handleRdpInput = useCallback(
+        (ev: RdpInputEvent) => {
+            const sid = session.sessionId;
+            if (!sid) return; // not connected yet
+            void rdpSessionApi.sendInput({ session_id: sid, event: ev });
+        },
+        [session.sessionId],
+    );
 
     // Inline re-auth on auth failure: type a password (or pick/add an SSH
     // key) and reconnect without leaving the session tab.
@@ -209,11 +226,17 @@ export function SessionView({
                 </div>
             )}
             {session.hostKey && (
-                <div className={styles.hostKeyPrompt}>
+                <div
+                    className={`${styles.hostKeyPrompt} ${
+                        session.hostKey.changed ? styles.hostKeyChanged : ""
+                    }`}
+                >
                     <div className={styles.hostKeyText}>
-                        {t("session.hostKey.prompt")}
+                        {session.hostKey.changed
+                            ? t("session.hostKey.changedPrompt")
+                            : t("session.hostKey.prompt")}
                         <code className={styles.fingerprint}>
-                            {session.hostKey.keyType} · {session.hostKey.fingerprint}
+                            {session.hostKey.keyType} · SHA256:{session.hostKey.fingerprint}
                         </code>
                     </div>
                     <div className={styles.hostKeyActions}>
@@ -331,11 +354,20 @@ export function SessionView({
                     </div>
                 ) : (
                     <>
-                        <Terminal
-                            sessionKey={session.key}
-                            visible={visible}
-                            focused={focused}
-                        />
+                        {session.protocol === "rdp" ? (
+                            <RdpViewport
+                                sessionKey={session.key}
+                                width={session.rdpWidth ?? 1280}
+                                height={session.rdpHeight ?? 800}
+                                onInput={handleRdpInput}
+                            />
+                        ) : (
+                            <Terminal
+                                sessionKey={session.key}
+                                visible={visible}
+                                focused={focused}
+                            />
+                        )}
                         {isConnecting && <ConnectingOverlay session={session} />}
                     </>
                 )}

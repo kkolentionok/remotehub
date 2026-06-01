@@ -18,7 +18,9 @@ use rh_core::{EnvVar, Host, HostFilter};
 
 use crate::api::dto::{
     HostCreateRequest, HostCreateResponse, HostDto, HostFullDto, HostIdRequest, HostListRequest,
-    HostListResponse, HostUpdateRequest,
+    HostListResponse, HostUpdateRequest, KnownHostEntryDto, KnownHostForgetRequest,
+    KnownHostGetResponse, KnownHostKeyDto, KnownHostsListResponse, RdpCertEntryDto,
+    RdpCertsListResponse,
 };
 use crate::api::error::{ApiError, ApiResult};
 use crate::api::events;
@@ -75,6 +77,94 @@ pub async fn host_get(
     Ok(dto)
 }
 
+/// The pinned SSH host key for a host (resolved by its hostname+port),
+/// for display in the technical-info panel. `None` until first trusted.
+#[tauri::command]
+#[instrument(level = "debug", skip(state))]
+pub async fn known_host_get(
+    state: State<'_, AppState>,
+    req: HostIdRequest,
+) -> ApiResult<KnownHostGetResponse> {
+    let host = state
+        .hosts
+        .get(&req.id)
+        .await
+        .map_err(|_| ApiError::not_found("host"))?;
+    let key = state
+        .known_hosts
+        .lookup(&host.hostname, host.port)
+        .await?
+        .map(|k| KnownHostKeyDto {
+            key_type: k.key_type,
+            fingerprint_sha256: k.fingerprint_sha256,
+        });
+    Ok(KnownHostGetResponse { key })
+}
+
+/// All pinned SSH host keys, for the Known Hosts management list.
+#[tauri::command]
+#[instrument(level = "debug", skip(state))]
+pub async fn known_hosts_list(
+    state: State<'_, AppState>,
+) -> ApiResult<KnownHostsListResponse> {
+    let entries = state
+        .known_hosts
+        .list()
+        .await?
+        .into_iter()
+        .map(|e| KnownHostEntryDto {
+            hostname: e.hostname,
+            port: e.port,
+            key_type: e.key_type,
+            fingerprint_sha256: e.fingerprint_sha256,
+            created_at: e.created_at.to_rfc3339(),
+        })
+        .collect();
+    Ok(KnownHostsListResponse { entries })
+}
+
+/// Forget (untrust) a pinned host key. The next connect re-prompts (TOFU).
+#[tauri::command]
+#[instrument(level = "debug", skip(state))]
+pub async fn known_host_forget(
+    state: State<'_, AppState>,
+    req: KnownHostForgetRequest,
+) -> ApiResult<()> {
+    state.known_hosts.forget(&req.hostname, req.port).await?;
+    Ok(())
+}
+
+/// All pinned RDP server certificates, for the management list.
+#[tauri::command]
+#[instrument(level = "debug", skip(state))]
+pub async fn rdp_certs_list(state: State<'_, AppState>) -> ApiResult<RdpCertsListResponse> {
+    let entries = state
+        .rdp_certs
+        .list()
+        .await?
+        .into_iter()
+        .map(|e| RdpCertEntryDto {
+            hostname: e.hostname,
+            port: e.port,
+            fingerprint_sha256: e.fingerprint_sha256,
+            subject: e.subject,
+            trusted_at: e.trusted_at.to_rfc3339(),
+        })
+        .collect();
+    Ok(RdpCertsListResponse { entries })
+}
+
+/// Forget (untrust) a pinned RDP cert. The next connect re-prompts (TOFU).
+#[tauri::command]
+#[instrument(level = "debug", skip(state))]
+pub async fn rdp_cert_forget(
+    state: State<'_, AppState>,
+    req: KnownHostForgetRequest,
+) -> ApiResult<()> {
+    state.rdp_certs.forget(&req.hostname, req.port).await?;
+    Ok(())
+}
+
 #[tauri::command]
 #[instrument(level = "debug", skip(state, app))]
 pub async fn host_create(
@@ -113,6 +203,8 @@ pub async fn host_create(
     host.startup_command = normalize_optional(req.startup_command);
     host.env_vars = req.env_vars.unwrap_or_default();
     host.default_credential_id = req.default_credential_id;
+    host.jump_host_id = req.jump_host_id;
+    host.agent_forwarding = req.agent_forwarding.unwrap_or(false);
 
     let id = host.id.clone();
     state.hosts.create(&host).await?;
@@ -188,6 +280,16 @@ pub async fn host_update(
     }
     if let Some(cred_opt) = req.default_credential_id {
         host.default_credential_id = cred_opt;
+    }
+    if let Some(jump_opt) = req.jump_host_id {
+        // Guard against self-reference; the UI also excludes it.
+        if jump_opt.as_ref() == Some(&host.id) {
+            return Err(ApiError::validation("jump_host", "a host cannot jump through itself"));
+        }
+        host.jump_host_id = jump_opt;
+    }
+    if let Some(af) = req.agent_forwarding {
+        host.agent_forwarding = af;
     }
     host.touch();
 

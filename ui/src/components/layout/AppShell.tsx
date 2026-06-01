@@ -16,6 +16,7 @@ import { HomeView } from "./HomeView";
 import { Launcher } from "./Launcher";
 import { PaneGroup } from "./PaneGroup";
 import { TabBar } from "./TabBar";
+import { ToolsView } from "./ToolsView";
 import styles from "./AppShell.module.css";
 
 /**
@@ -38,6 +39,7 @@ export function AppShell() {
     const dragTabId = useSessionsStore((s) => s.dragTabId);
     const setDragPreviewTabId = useSessionsStore((s) => s.setDragPreviewTabId);
     const launcherOpen = useUiStore((s) => s.launcherOpen);
+    const section = useUiStore((s) => s.section);
 
     // While dragging a tab, show the split-target tab's workspace (so the
     // green drop zones land on the tab being split into, not the dragged
@@ -71,6 +73,8 @@ export function AppShell() {
         void useGroupsStore.getState().load();
         void useCredentialsStore.getState().load();
         void useSettingsStore.getState().load();
+        // Rebuild any sessions the Rust process kept alive across a reload.
+        void useSessionsStore.getState().restoreSessions();
 
         let cleanup: (() => void) | undefined;
         subscribeToBackendEvents().then((c) => {
@@ -116,9 +120,25 @@ export function AppShell() {
             <div className={styles.stage} onDragOver={onStageDragOver}>
                 <div
                     className={styles.pane}
-                    style={{ display: visibleTabId === null ? "flex" : "none" }}
+                    style={{
+                        display:
+                            visibleTabId === null && section === "vault"
+                                ? "flex"
+                                : "none",
+                    }}
                 >
                     <HomeView />
+                </div>
+                <div
+                    className={styles.pane}
+                    style={{
+                        display:
+                            visibleTabId === null && section === "tools"
+                                ? "flex"
+                                : "none",
+                    }}
+                >
+                    <ToolsView />
                 </div>
                 {tabs.map((tab) => (
                     <div

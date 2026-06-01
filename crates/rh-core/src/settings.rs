@@ -107,6 +107,7 @@ pub mod keys {
     pub const APP_STARTUP_SCREEN: &str = "app.startup_screen";
     pub const SSH_KEEPALIVE_INTERVAL_SECS: &str = "ssh.keepalive_interval_secs";
     pub const SSH_KNOWN_HOSTS_STRICT: &str = "ssh.known_hosts_strict";
+    pub const LOCAL_SHELL: &str = "local.shell";
 }
 
 /// Typed view of all settings with their default values.
@@ -130,6 +131,9 @@ pub struct Settings {
     pub app_startup_screen: StartupScreen,
     pub ssh_keepalive_interval_secs: u32,
     pub ssh_known_hosts_strict: bool,
+    /// Override shell for local terminals (absolute path or name on PATH).
+    /// Empty = platform default (PowerShell on Windows, $SHELL on Unix).
+    pub local_shell: String,
 }
 
 impl Default for Settings {
@@ -149,6 +153,7 @@ impl Default for Settings {
             app_startup_screen: StartupScreen::default(),
             ssh_keepalive_interval_secs: 30,
             ssh_known_hosts_strict: true,
+            local_shell: String::new(),
         }
     }
 }

@@ -134,6 +134,19 @@ pub struct Host {
     /// Stage 2.2 detection routine populates it. Drives the host icon.
     pub detected_os: Option<String>,
     pub default_credential_id: Option<CredentialId>,
+    /// Optional bastion: another saved host to route this connection
+    /// through (ProxyJump). The bastion's own hostname/port/username/
+    /// credentials are reused. `None` = connect directly. One level only.
+    pub jump_host_id: Option<HostId>,
+    /// Forward the local SSH agent to this host (`ssh -A`). The actor
+    /// requests agent forwarding and bridges the server's back-channels
+    /// to the OS agent. Off by default (forwarding has security caveats).
+    pub agent_forwarding: bool,
+    /// When a session to this host last reached the `Ready` state.
+    /// Machine-set by the session layer (never through create/update);
+    /// `None` until the first successful connect. Drives the
+    /// "last connection" line in the host info panel.
+    pub last_connected_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -167,6 +180,9 @@ impl Host {
             env_vars: Vec::new(),
             detected_os: None,
             default_credential_id: None,
+            jump_host_id: None,
+            agent_forwarding: false,
+            last_connected_at: None,
             created_at: now,
             updated_at: now,
         }
@@ -198,6 +214,52 @@ impl HostGroup {
             created_at: Utc::now(),
         }
     }
+}
+
+/// A pinned SSH host key, looked up by `(hostname, port)`.
+///
+/// Stored in SQLite (it's public material — not a secret) to support
+/// TOFU: on first connect the user trusts the presented key and we
+/// persist its fingerprint; on later connects a mismatch is surfaced as
+/// a "host key changed" warning. The fingerprint is the OpenSSH SHA256
+/// form — `base64(sha256(public_key_blob))` without padding, i.e. the
+/// part `ssh-keygen -lf` prints after `SHA256:`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnownHostKey {
+    /// Algorithm name, e.g. `ssh-ed25519`, `rsa-sha2-512`.
+    pub key_type: String,
+    /// OpenSSH SHA256 fingerprint, no `SHA256:` prefix, no base64 padding.
+    pub fingerprint_sha256: String,
+}
+
+/// A full pinned-host record for the management list (identity + when
+/// it was trusted). [`KnownHostKey`] is the lookup-shaped subset.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnownHostEntry {
+    pub hostname: String,
+    pub port: u16,
+    pub key_type: String,
+    pub fingerprint_sha256: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A trusted RDP server certificate (TOFU pin), the RDP analog of
+/// [`KnownHostKey`]. `subject` is the cert's CN/subject for display.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustedCert {
+    pub fingerprint_sha256: String,
+    pub subject: String,
+    pub trusted_at: DateTime<Utc>,
+}
+
+/// A pinned RDP cert with its host identity, for the management list.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RdpCertEntry {
+    pub hostname: String,
+    pub port: u16,
+    pub fingerprint_sha256: String,
+    pub subject: String,
+    pub trusted_at: DateTime<Utc>,
 }
 
 /// A reusable credential — login material for one or more hosts.

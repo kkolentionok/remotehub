@@ -276,3 +276,57 @@ pub enum SshError {
 - Целевой сервер поддерживает SSH 2.0 (стандарт с 2006 года; все реальные системы).
 - Поддерживаемые ключевые алгоритмы — russh-default'ы: ed25519, rsa-sha2-256/512, ecdsa-sha2-nistp256/384/521. Legacy `ssh-dss`, `ssh-rsa` (sha1) — отключены.
 - Размер выходного буфера PTY — стандартный для russh (нет наших настроек).
+
+---
+
+## Jump host / ProxyJump (Stage 2.x — implemented)
+
+A host may route its connection through a **bastion** — another saved host
+used as a jump. Model + flow:
+
+- **Data model:** `Host.jump_host_id: Option<HostId>` references another
+  saved host (its own hostname/port/username/credentials are reused as the
+  bastion login). Plain nullable column (no FK enforcement) — a deleted
+  bastion is handled gracefully at connect time ("jump host not found").
+  One level only in v1 (a bastion that itself has a `jump_host_id` is NOT
+  chained — noted, not supported).
+- **Connect flow (actor):**
+  1. Connect to the bastion (`russh::client::connect`), auth with the
+     bastion's credentials (same multi-method `try_auth` loop).
+  2. Open a `direct-tcpip` channel from the bastion to the target
+     (`channel_open_direct_tcpip(target_host, target_port, …)`).
+  3. Wrap that channel as a stream (`Channel::into_stream`) and run the
+     target SSH transport over it (`russh::client::connect_stream`).
+  4. Proceed exactly as a direct session (auth, PTY, shell, pump). The
+     bastion `Handle` is kept alive for the whole session.
+- **Host-key checking:** the **target** uses the normal interactive TOFU
+  (known_hosts pin + prompt). The **bastion** auto-pins silently
+  (`ClientHandler.auto_accept = true`) to avoid double prompts — its key is
+  still recorded in `known_hosts`. (Refinement: optional bastion prompt
+  later.)
+- **UI:** a "Jump host" combobox in the host form's Advanced section,
+  listing other SSH hosts (a host can't jump through itself). Empty = direct.
+
+## Agent forwarding (Stage 2.x — NEXT, not in this pass)
+
+`Host.agent_forwarding: bool` → request `auth-agent-req@openssh.com` on the
+session channel and serve the server's `auth-agent@openssh.com` back-channels
+by bridging to the local agent. Deferred to its own pass (russh's serving
+side needs care).
+
+---
+
+## Agent forwarding (Stage 2.x — implemented)
+
+`Host.agent_forwarding: bool`. Flow:
+- **Request:** after opening the session channel, the client calls
+  `Channel::agent_forward(false)` (tells the server we accept
+  `auth-agent@openssh.com` back-channels).
+- **Serve:** the server opens `auth-agent@openssh.com` channels when a
+  remote process wants the agent. `ClientHandler::server_channel_open_agent_forward`
+  takes each channel, `into_stream()`s it, and `copy_bidirectional`s to the
+  local OS agent: unix `$SSH_AUTH_SOCK`, Windows `\\.\pipe\openssh-ssh-agent`.
+  Pageant (PuTTY) is not supported.
+- **UI:** checkbox in the host Advanced section (edit mode), live-saved.
+- **Security:** off by default. Forwarding lets root on the remote use your
+  agent; only enable for trusted hosts.

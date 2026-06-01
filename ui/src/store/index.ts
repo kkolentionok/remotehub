@@ -28,6 +28,8 @@ import {
     events,
     groups as groupsApi,
     hosts as hostsApi,
+    rdpSession as rdpSessionApi,
+    localSession as localSessionApi,
     sessions as sessionsApi,
     settings as settingsApi,
 } from "../lib/ipc";
@@ -40,6 +42,7 @@ import type {
     HostGroupDto,
     HostId,
     Protocol,
+    RdpSessionEvent,
     SessionState,
     Settings,
     SshSessionEvent,
@@ -208,6 +211,8 @@ interface UiStore {
     collapsedGroupIds: Set<GroupId>;
     /** Quick-connect launcher overlay (opened by the tab-bar "+"). */
     launcherOpen: boolean;
+    /** Active app section shown when no session tab is active. */
+    section: "vault" | "tools";
 
     selectHost: (id: HostId | null) => void;
     startDraft: (defaultGroupId?: GroupId | null) => void;
@@ -218,6 +223,7 @@ interface UiStore {
     setSearchQuery: (q: string) => void;
     toggleGroupCollapsed: (id: GroupId) => void;
     setLauncherOpen: (open: boolean) => void;
+    setSection: (section: "vault" | "tools") => void;
 }
 
 function emptyDraft(defaultGroupId: GroupId | null = null): HostDraft {
@@ -248,6 +254,7 @@ export const useUiStore = create<UiStore>((set) => ({
     searchQuery: "",
     collapsedGroupIds: new Set(),
     launcherOpen: false,
+    section: "vault",
 
     selectHost: (id) => set({ selectedHostId: id, draft: null }),
     startDraft: (defaultGroupId = null) =>
@@ -259,6 +266,7 @@ export const useUiStore = create<UiStore>((set) => ({
     closeDialog: () => set({ dialog: { kind: "none" } }),
     setSearchQuery: (searchQuery) => set({ searchQuery }),
     setLauncherOpen: (launcherOpen) => set({ launcherOpen }),
+    setSection: (section) => set({ section }),
     toggleGroupCollapsed: (id) =>
         set((s) => {
             const next = new Set(s.collapsedGroupIds);
@@ -389,8 +397,17 @@ export interface SessionTab {
     state: SessionState;
     /** Human-readable error / close detail, if any. */
     message: string | null;
-    /** Set while a TOFU host-key decision is pending. */
-    hostKey: { fingerprint: string; keyType: string } | null;
+    /** Set while a TOFU host-key decision is pending. `changed` marks a
+     *  key that differs from the one previously pinned for this host. */
+    hostKey: { fingerprint: string; keyType: string; changed: boolean } | null;
+    /** RDP backing resolution (server's negotiated desktop size). The
+     *  viewport canvas is sized to this; updated by the `resized` event. */
+    rdpWidth?: number;
+    rdpHeight?: number;
+    /** True for a local shell PTY session (no host; uses local_session_* IPC). */
+    local?: boolean;
+    /** True for an SFTP file-browser tab (SftpView manages its own backend). */
+    sftp?: boolean;
 }
 
 /**
@@ -451,6 +468,54 @@ export function registerSessionTerminal(
     };
 }
 
+// --- RDP frame routing -------------------------------------------------
+// RDP frames are a live raster (latest wins), not a replayable byte
+// stream — so no ring buffer. The viewport registers a sink; events that
+// arrive before it mounts keep only the most recent frame.
+type RdpEventSink = (ev: RdpSessionEvent) => void;
+const sessionViewports = new Map<string, RdpEventSink>();
+const pendingRdpFrame = new Map<string, RdpSessionEvent>();
+
+function pushRdpEvent(key: string, ev: RdpSessionEvent) {
+    const sink = sessionViewports.get(key);
+    if (sink) {
+        sink(ev);
+    } else if (ev.kind === "frame" || ev.kind === "frame_batch") {
+        pendingRdpFrame.set(key, ev); // keep only the latest
+    }
+}
+
+/** RdpViewport calls this on mount; replays the last buffered frame. */
+export function registerSessionViewport(
+    key: string,
+    sink: RdpEventSink,
+): () => void {
+    sessionViewports.set(key, sink);
+    const pending = pendingRdpFrame.get(key);
+    if (pending) {
+        sink(pending);
+        pendingRdpFrame.delete(key);
+    }
+    return () => {
+        if (sessionViewports.get(key) === sink) sessionViewports.delete(key);
+    };
+}
+
+function rdpCloseText(reason: { kind: string }): string {
+    switch (reason.kind) {
+        case "user_requested":
+            return "Closed";
+        case "server_disconnected":
+            return "Server disconnected";
+        case "auth_failed":
+            return "Authentication failed";
+        case "cert_rejected":
+            return "Certificate rejected";
+        default:
+            return "Disconnected";
+    }
+}
+
 function closeReasonText(reason: CloseReason): string {
     switch (reason.kind) {
         case "user_requested":
@@ -488,6 +553,10 @@ interface SessionsStore {
 
     /** Open a host in a brand-new tab. */
     open: (host: HostDto) => Promise<void>;
+    /** Open a local shell PTY in a new tab. `title` is i18n'd by the caller. */
+    openLocalTerminal: (title: string) => void;
+    /** Open an SFTP file-browser tab. `title` is i18n'd by the caller. */
+    openSftp: (title: string) => void;
     /** Split the active tab's focused pane, opening `host` in the new pane. */
     splitActivePane: (host: HostDto, dir: SplitDir) => void;
     /** Arm a split and open the launcher to choose the host for it. */
@@ -536,6 +605,10 @@ interface SessionsStore {
     resize: (key: string, cols: number, rows: number) => void;
     acceptHostKey: (key: string) => Promise<void>;
     rejectHostKey: (key: string) => Promise<void>;
+    /** After a webview reload, rebuild tabs for sessions the Rust process
+     *  kept alive and re-bind each to a fresh event channel. Idempotent;
+     *  no-op once any session already exists in the store. */
+    restoreSessions: () => Promise<void>;
 }
 
 export const useSessionsStore = create<SessionsStore>((set, get) => {
@@ -561,6 +634,7 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
                     hostKey: {
                         fingerprint: ev.fingerprint_sha256,
                         keyType: ev.key_type,
+                        changed: ev.changed,
                     },
                 });
                 break;
@@ -573,6 +647,38 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
         }
     };
 
+    const handleRdpEvent = (key: string, ev: RdpSessionEvent) => {
+        switch (ev.kind) {
+            case "state_changed":
+                patch(key, { state: ev.state });
+                break;
+            case "error":
+                patch(key, { message: ev.message });
+                break;
+            case "closed": {
+                // Keep the specific error (from a preceding `error` event)
+                // rather than overwriting it with the generic close text.
+                const prevMsg = get().sessions.find((t) => t.key === key)?.message;
+                const text =
+                    ev.reason.kind === "error" && prevMsg
+                        ? prevMsg
+                        : rdpCloseText(ev.reason);
+                patch(key, { state: "closed", message: text });
+                break;
+            }
+            case "resized":
+                patch(key, { rdpWidth: ev.width, rdpHeight: ev.height });
+                break;
+            case "frame":
+            case "frame_batch":
+            case "pointer_position":
+            case "cert_prompt":
+            case "clipboard":
+                pushRdpEvent(key, ev);
+                break;
+        }
+    };
+
     const genId = (): string =>
         typeof crypto !== "undefined" && "randomUUID" in crypto
             ? crypto.randomUUID()
@@ -581,6 +687,19 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
     /** Create a session (state + backend connect). Returns its key. */
     const createSession = (host: HostDto): string => {
         const key = genId();
+        // Render at the monitor resolution. That way the picture is native
+        // when shown full-screen and only ever *downscaled* (sharp) when the
+        // window is smaller — never upscaled (which was the blur on maximize).
+        // The backend reports the server's actual negotiated size via the
+        // `resized` event, and the canvas sizes to that. Capped to bound encode
+        // load; live reflow on resize is a follow-up (DisplayControl).
+        const even = (n: number) => Math.max(2, Math.floor(n / 2) * 2);
+        const rdpW = host.protocol === "rdp"
+            ? Math.min(2560, even(Math.max(1280, window.screen.width)))
+            : undefined;
+        const rdpH = host.protocol === "rdp"
+            ? Math.min(1600, even(Math.max(720, window.screen.height)))
+            : undefined;
         const tab: SessionTab = {
             key,
             sessionId: null,
@@ -590,12 +709,32 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
             state: "connecting",
             message: null,
             hostKey: null,
+            rdpWidth: rdpW,
+            rdpHeight: rdpH,
         };
         sessionOutput.set(key, { buffer: [], writer: null });
         set((s) => ({ sessions: [...s.sessions, tab] }));
 
         void (async () => {
             try {
+                if (host.protocol === "rdp") {
+                    const res = await rdpSessionApi.open(
+                        {
+                            host_id: host.id,
+                            credential_id: null,
+                            options: {
+                                protocol: "rdp",
+                                width: rdpW ?? 1280,
+                                height: rdpH ?? 800,
+                                color_depth: 32,
+                                keyboard_layout: "0",
+                            },
+                        },
+                        (ev) => handleRdpEvent(key, ev),
+                    );
+                    patch(key, { sessionId: res.session_id });
+                    return;
+                }
                 const res = await sessionsApi.open(
                     {
                         host_id: host.id,
@@ -621,18 +760,58 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
         return key;
     };
 
+    // Local shell PTY: no host, no connect phase — starts "ready" and
+    // streams bytes through the same SshSessionEvent handler as SSH.
+    const createLocalSession = (title: string): string => {
+        const key = genId();
+        const tab: SessionTab = {
+            key,
+            sessionId: null,
+            hostId: "__local__",
+            title,
+            protocol: "ssh",
+            state: "ready",
+            message: null,
+            hostKey: null,
+            local: true,
+        };
+        sessionOutput.set(key, { buffer: [], writer: null });
+        set((s) => ({ sessions: [...s.sessions, tab] }));
+
+        void (async () => {
+            try {
+                const res = await localSessionApi.open(80, 24, (ev) =>
+                    handleEvent(key, ev),
+                );
+                patch(key, { sessionId: res.session_id });
+            } catch (e: unknown) {
+                patch(key, { state: "failed", message: formatApiError(e) });
+            }
+        })();
+
+        return key;
+    };
+
     /** Tear down one session (backend + output buffer). */
     const teardownSession = async (key: string) => {
         const sess = get().sessions.find((t) => t.key === key);
         if (sess?.sessionId) {
             try {
-                await sessionsApi.close(sess.sessionId);
+                if (sess.local) {
+                    await localSessionApi.close(sess.sessionId);
+                } else if (sess.protocol === "rdp") {
+                    await rdpSessionApi.close(sess.sessionId);
+                } else {
+                    await sessionsApi.close(sess.sessionId);
+                }
             } catch {
                 /* actor may already be gone — ignore */
             }
         }
         sessionOutput.delete(key);
         sessionSnapshots.delete(key);
+        sessionViewports.delete(key);
+        pendingRdpFrame.delete(key);
         lastDims.delete(key);
     };
 
@@ -649,6 +828,46 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
             const key = createSession(host);
             const id = genId();
             set((s) => ({
+                tabs: [
+                    ...s.tabs,
+                    { id, root: { t: "leaf", key }, activePaneKey: key },
+                ],
+                activeTabId: id,
+            }));
+        },
+
+        openLocalTerminal: (title) => {
+            const key = createLocalSession(title);
+            const id = genId();
+            set((s) => ({
+                tabs: [
+                    ...s.tabs,
+                    { id, root: { t: "leaf", key }, activePaneKey: key },
+                ],
+                activeTabId: id,
+            }));
+        },
+
+        openSftp: (title) => {
+            // SFTP tab: a session-shaped container. SftpView owns the actual
+            // local/remote browsing + backend connection; the tab just holds
+            // it in the pane system. No backend session opened here.
+            const key = genId();
+            const tab: SessionTab = {
+                key,
+                sessionId: null,
+                hostId: "__sftp__",
+                title,
+                protocol: "ssh",
+                state: "ready",
+                message: null,
+                hostKey: null,
+                sftp: true,
+            };
+            sessionOutput.set(key, { buffer: [], writer: null });
+            const id = genId();
+            set((s) => ({
+                sessions: [...s.sessions, tab],
                 tabs: [
                     ...s.tabs,
                     { id, root: { t: "leaf", key }, activePaneKey: key },
@@ -686,7 +905,11 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
         },
 
         close: async (key) => {
-            await teardownSession(key);
+            // Remove the tab from the UI immediately so the button is
+            // responsive even when the actor is mid-connect (a blocking
+            // handshake won't process the close command until it finishes);
+            // tear the actor down in the background.
+            void teardownSession(key);
             set((s) => {
                 const sessions = s.sessions.filter((t) => t.key !== key);
                 let activeTabId = s.activeTabId;
@@ -858,9 +1081,9 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
         sendInput: (key, data) => {
             const tab = get().sessions.find((t) => t.key === key);
             if (!tab?.sessionId) return;
-            void sessionsApi
-                .sendInput({ session_id: tab.sessionId, data: Array.from(data) })
-                .catch(() => {});
+            const payload = { session_id: tab.sessionId, data: Array.from(data) };
+            if (tab.local) void localSessionApi.input(payload).catch(() => {});
+            else void sessionsApi.sendInput(payload).catch(() => {});
         },
 
         resize: (key, cols, rows) => {
@@ -869,9 +1092,9 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
             const dim = `${cols}x${rows}`;
             if (lastDims.get(key) === dim) return; // unchanged → no SIGWINCH
             lastDims.set(key, dim);
-            void sessionsApi
-                .resize({ session_id: sess.sessionId, width: cols, height: rows })
-                .catch(() => {});
+            const payload = { session_id: sess.sessionId, width: cols, height: rows };
+            if (sess.local) void localSessionApi.resize(payload).catch(() => {});
+            else void sessionsApi.resize(payload).catch(() => {});
         },
 
         acceptHostKey: async (key) => {
@@ -896,6 +1119,65 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
                 await sessionsApi.rejectHostKey(tab.sessionId);
             } catch {
                 /* ignore */
+            }
+        },
+
+        restoreSessions: async () => {
+            // The Rust process survives a webview reload, so its actors —
+            // and their scrollback — are still live. Rebuild a tab per
+            // session and reattach a fresh channel; the backend replays
+            // buffered output so the terminal repaints. Guard against
+            // double-run (StrictMode / re-mounts) by bailing if we already
+            // hold sessions.
+            if (get().sessions.length > 0) return;
+            let list;
+            try {
+                list = await sessionsApi.list();
+            } catch {
+                return;
+            }
+            if (list.sessions.length === 0) return;
+
+            for (const summary of list.sessions) {
+                // Skip sessions the backend reports as already finished.
+                if (summary.state === "closed" || summary.state === "failed") {
+                    continue;
+                }
+                const key = genId();
+                const tab: SessionTab = {
+                    key,
+                    sessionId: summary.session_id,
+                    hostId: summary.host_id,
+                    title: summary.title,
+                    protocol: summary.protocol,
+                    state: summary.state,
+                    message: null,
+                    hostKey: null,
+                };
+                sessionOutput.set(key, { buffer: [], writer: null });
+                const id = genId();
+                set((s) => ({
+                    sessions: [...s.sessions, tab],
+                    tabs: [
+                        ...s.tabs,
+                        { id, root: { t: "leaf", key }, activePaneKey: key },
+                    ],
+                }));
+
+                void (async () => {
+                    try {
+                        const ok = await sessionsApi.reattach(
+                            summary.session_id,
+                            (ev) => handleEvent(key, ev),
+                        );
+                        if (!ok) {
+                            // Died between list and reattach — drop the tab.
+                            void get().close(key);
+                        }
+                    } catch {
+                        patch(key, { state: "failed", message: "reattach failed" });
+                    }
+                })();
             }
         },
     };

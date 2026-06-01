@@ -35,6 +35,8 @@ pub mod db;
 pub mod group_store;
 pub mod host_store;
 pub mod keychain;
+pub mod known_hosts_store;
+pub mod rdp_cert_store;
 pub mod settings_store;
 
 pub use credential_store::SqliteCredentialStore;
@@ -42,4 +44,6 @@ pub use db::{Db, InitOutcome, CURRENT_SCHEMA_VERSION};
 pub use group_store::SqliteGroupStore;
 pub use host_store::SqliteHostStore;
 pub use keychain::{Keychain, MemoryKeychain, OsKeychain};
+pub use known_hosts_store::SqliteKnownHostsStore;
+pub use rdp_cert_store::SqliteRdpCertStore;
 pub use settings_store::SqliteSettingsStore;

@@ -47,6 +47,14 @@ export function Terminal({
     const webglRef = useRef<WebglAddon | null>(null);
     const sendInput = useSessionsStore((s) => s.sendInput);
     const resize = useSessionsStore((s) => s.resize);
+    // Backend session id arrives a tick after the tab is created. The
+    // first resize (fired at mount) is dropped while it's null, and a
+    // later refit of the *same* size won't re-fire onResize — so the PTY
+    // would stay at its 80×24 default while xterm renders wider, garbling
+    // PSReadLine redraws. Re-send the real size once the id is set.
+    const sessionId = useSessionsStore(
+        (s) => s.sessions.find((t) => t.key === sessionKey)?.sessionId ?? null,
+    );
     const fontFamily = useSettingsStore(
         (s) => s.settings?.terminal_font_family ?? "JetBrains Mono",
     );
@@ -219,6 +227,16 @@ export function Terminal({
         // sendInput/resize are stable zustand actions.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [sessionKey]);
+
+    // Once the backend session id is set, push the current terminal size
+    // so the PTY/remote stops assuming the 80×24 default it opened with.
+    useEffect(() => {
+        if (!sessionId) return;
+        const term = termRef.current;
+        if (term) resize(sessionKey, term.cols, term.rows);
+        // resize is a stable zustand action.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [sessionId, sessionKey]);
 
     // When this pane becomes visible (its tab activated), it goes from
     // display:none to real size — refit, repaint, and focus if it's the

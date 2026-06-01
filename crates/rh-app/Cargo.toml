@@ -16,6 +16,8 @@ rh-storage.workspace = true
 rh-ssh.workspace = true
 rh-rdp.workspace = true
 
+portable-pty = "0.8"
+
 tauri = { workspace = true, features = ["devtools"] }
 
 tokio.workspace = true

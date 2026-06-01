@@ -7,8 +7,11 @@
 
 use std::sync::Arc;
 
-use rh_core::{CredentialStore, GroupStore, HostStore, SettingsStore};
+use rh_core::{CredentialStore, GroupStore, HostStore, KnownHostsStore, SettingsStore, RdpCertStore};
 
+use crate::local_pty::LocalPtyManager;
+use crate::rdp_session::RdpSessionManager;
+use crate::sftp_session::SftpManager;
 use crate::session::SessionManager;
 
 /// Bundle of every async store the command layer needs.
@@ -23,7 +26,12 @@ pub struct AppState {
     pub groups: Arc<dyn GroupStore>,
     pub credentials: Arc<dyn CredentialStore>,
     pub settings: Arc<dyn SettingsStore>,
+    pub known_hosts: Arc<dyn KnownHostsStore>,
+    pub rdp_certs: Arc<dyn RdpCertStore>,
     pub sessions: SessionManager,
+    pub rdp_sessions: RdpSessionManager,
+    pub local_sessions: LocalPtyManager,
+    pub sftp: SftpManager,
 }
 
 impl std::fmt::Debug for AppState {
@@ -33,7 +41,12 @@ impl std::fmt::Debug for AppState {
             .field("groups", &"<dyn GroupStore>")
             .field("credentials", &"<dyn CredentialStore>")
             .field("settings", &"<dyn SettingsStore>")
+            .field("known_hosts", &"<dyn KnownHostsStore>")
+            .field("rdp_certs", &"<dyn RdpCertStore>")
             .field("sessions", &"<SessionManager>")
+            .field("rdp_sessions", &"<RdpSessionManager>")
+            .field("local_sessions", &"<LocalPtyManager>")
+            .field("sftp", &"<SftpManager>")
             .finish()
     }
 }
@@ -47,13 +60,20 @@ impl AppState {
         groups: Arc<dyn GroupStore>,
         credentials: Arc<dyn CredentialStore>,
         settings: Arc<dyn SettingsStore>,
+        known_hosts: Arc<dyn KnownHostsStore>,
+        rdp_certs: Arc<dyn RdpCertStore>,
     ) -> Self {
         Self {
             hosts,
             groups,
             credentials,
             settings,
+            known_hosts,
+            rdp_certs,
             sessions: SessionManager::new(),
+            rdp_sessions: RdpSessionManager::new(),
+            local_sessions: LocalPtyManager::new(),
+            sftp: SftpManager::new(),
         }
     }
 }

@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { useT } from "../../../i18n";
 import { useSettingsStore } from "../../../store";
+import { useDebouncedCallback } from "../../../lib/useDebouncedCallback";
 import type { CursorStyle, Settings } from "../../../lib/types";
 import {
     TERMINAL_SCHEME_NAMES,
@@ -20,6 +22,14 @@ const CURSORS: CursorStyle[] = ["block", "underline", "bar"];
 export function TerminalSection({ settings }: { settings: Settings }) {
     const { t } = useT();
     const update = useSettingsStore((s) => s.update);
+
+    const [shell, setShell] = useState(settings.local_shell);
+    useEffect(() => {
+        setShell((v) => (v === settings.local_shell ? v : settings.local_shell));
+    }, [settings.local_shell]);
+    const commitShell = useDebouncedCallback(async (raw: string) => {
+        await update({ local_shell: raw.trim() });
+    }, 500);
 
     const fonts = [
         { value: "JetBrains Mono", label: "JetBrains Mono" },
@@ -134,6 +144,23 @@ export function TerminalSection({ settings }: { settings: Settings }) {
                         </button>
                     ))}
                 </div>
+            </div>
+            <div className={styles.field}>
+                <label className={styles.fieldLabel}>
+                    {t("settings.terminal.shell")}
+                </label>
+                <input
+                    type="text"
+                    value={shell}
+                    spellCheck={false}
+                    placeholder={t("settings.terminal.shellPlaceholder")}
+                    onChange={(e) => {
+                        setShell(e.target.value);
+                        commitShell.call(e.target.value);
+                    }}
+                    className={term.shellInput}
+                />
+                <p className={term.shellHint}>{t("settings.terminal.shellHint")}</p>
             </div>
         </div>
     );

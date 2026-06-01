@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "RDP session actor for RemoteHub (placeholder; implemented in Stage 4)"
+description = "RDP session actor for RemoteHub (Stage 4, IronRDP)"
 
 [dependencies]
 rh-core.workspace = true
@@ -15,3 +15,26 @@ tracing.workspace = true
 serde.workspace = true
 bytes.workspace = true
 zeroize.workspace = true
+
+# --- IronRDP (Stage 4, round 2b) — versions confirmed by the spike ---
+ironrdp = { version = "0.14", features = ["connector", "session", "graphics", "input"] }
+ironrdp-blocking = "0.8"
+sspi = { version = "0.18", features = ["network_client"] }
+tokio-rustls = "0.26"
+x509-cert = "0.2"
+# Frame transport: JPEG-compress the framebuffer before sending over IPC.
+# (also used by the rdp_spike example for PNG screenshot output.)
+image = "0.25"
+base64 = "0.22"
+# Parallel tile encoding (one frame's regions compressed across all cores).
+rayon = "1"
+
+# --- Connectivity spike (round 2a) — example-only deps ------------------
+[dev-dependencies]
+pico-args = "0.5"
+anyhow = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[example]]
+name = "rdp_spike"
+path = "examples/rdp_spike.rs"

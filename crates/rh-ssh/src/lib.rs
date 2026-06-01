@@ -6,13 +6,16 @@
 //! (the `rh-app` layer bridges that stream into a Tauri `Channel`, so
 //! this crate stays free of any `tauri` dependency).
 //!
-//! v1 scope: password authentication; host keys are accepted TOFU-style
-//! (interactive confirmation + `known_hosts` pinning come later — the UI
-//! already has the prompt surface for that). SSH-key auth is reserved.
+//! v1 scope has since grown: password, SSH-key (OpenSSH/PEM + PuTTY
+//! .ppk), and SSH-agent auth, all tried in order. Host keys are pinned
+//! via [`rh_core::KnownHostsStore`] with an interactive TOFU prompt
+//! surfaced through [`SshSessionEvent::HostKeyPrompt`] and answered with
+//! [`SessionCommand::HostKeyDecision`].
 
 mod actor;
 mod error;
 mod ppk;
+pub mod sftp;
 
 use std::time::Duration;
 
@@ -62,8 +65,20 @@ pub enum SshSessionEvent {
     StateChanged { state: SessionState },
     Data { bytes: Vec<u8> },
     AuthFailed { method: String },
-    HostKeyPrompt { fingerprint_sha256: String, key_type: String },
+    HostKeyPrompt {
+        fingerprint_sha256: String,
+        key_type: String,
+        /// `true` when a key was already pinned for this host but the
+        /// server presented a *different* one — a security-relevant
+        /// change, surfaced more loudly in the UI than a first-time key.
+        changed: bool,
+    },
     Error { message: String },
+    /// Detected remote OS slug (e.g. "ubuntu", "debian", "macos",
+    /// "windows"). Emitted once, best-effort, shortly after Ready. The
+    /// `rh-app` layer persists it to `hosts.detected_os`; the UI never
+    /// sees this event (the session manager consumes it).
+    DetectedOs { os: String },
     Closed { reason: CloseReason },
 }
 
@@ -74,6 +89,9 @@ pub enum SessionCommand {
     SshInput(Vec<u8>),
     /// PTY resize, in character cells.
     Resize { cols: u16, rows: u16 },
+    /// Answer to a pending [`SshSessionEvent::HostKeyPrompt`]: `true`
+    /// trusts (and pins) the key, `false` rejects and ends the session.
+    HostKeyDecision(bool),
     /// Graceful shutdown.
     Shutdown,
 }
@@ -85,6 +103,11 @@ pub struct SshOpenOptions {
     pub rows: u16,
     pub term: String,
     pub keepalive_interval: Option<Duration>,
+    /// When `true`, an unknown host key triggers an interactive TOFU
+    /// prompt before trusting it. When `false`, an unknown key is
+    /// auto-trusted and pinned (legacy behavior) — but a *changed* key
+    /// still always prompts, regardless of this flag.
+    pub strict_host_key: bool,
 }
 
 impl Default for SshOpenOptions {
@@ -94,6 +117,7 @@ impl Default for SshOpenOptions {
             rows: 24,
             term: "xterm-256color".to_string(),
             keepalive_interval: Some(Duration::from_secs(30)),
+            strict_host_key: true,
         }
     }
 }
@@ -105,12 +129,28 @@ pub enum RevealedCredential {
         username: String,
         password: RevealedSecret,
     },
-    /// Reserved — not implemented in v1.
+    /// SSH key auth. The PEM may be OpenSSH/PKCS#8 or PuTTY .ppk (the
+    /// actor converts the latter on the fly).
     Key {
         username: String,
         private_key_pem: RevealedSecret,
         passphrase: Option<RevealedSecret>,
     },
+    /// SSH-agent auth (Pageant / OpenSSH agent). No secret travels
+    /// through the app — the OS-side agent signs the challenge. The
+    /// actor lists the agent's identities and tries each.
+    Agent { username: String },
+}
+
+/// Bastion (ProxyJump) connection params. The actor connects here first,
+/// then opens a direct-tcpip channel to the real target and runs the
+/// target SSH transport over it.
+pub struct JumpParams {
+    pub hostname: String,
+    pub port: u16,
+    pub host_id: HostId,
+    /// Auth methods for the bastion (same multi-method semantics).
+    pub credentials: Vec<RevealedCredential>,
 }
 
 /// What the caller needs to spawn a session.
@@ -126,6 +166,18 @@ pub struct SshSpawnParams {
     pub options: SshOpenOptions,
     /// Optional command run once after the shell is ready (sent as input).
     pub startup_command: Option<String>,
+    /// Environment variables requested on the channel before the shell
+    /// starts (`SSH_MSG_CHANNEL_REQUEST` "env"). Servers honor these
+    /// only for names allowed by their `AcceptEnv`; unaccepted ones are
+    /// silently ignored by the peer.
+    pub env_vars: Vec<(String, String)>,
+    /// Host-key pinning store for TOFU. The actor looks up the expected
+    /// key during the handshake and persists the user's trust decision.
+    pub known_hosts: std::sync::Arc<dyn rh_core::KnownHostsStore>,
+    /// Optional bastion to route through (ProxyJump). One level only.
+    pub jump: Option<JumpParams>,
+    /// Forward the local SSH agent to the target (`ssh -A`).
+    pub agent_forwarding: bool,
 }
 
 /// Remote control for a running session actor.

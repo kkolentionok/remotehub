@@ -84,3 +84,17 @@ strip = true
 [profile.dev]
 # Tauri dev iteration speed
 incremental = true
+
+# Optimize dependencies even in dev builds. RDP needs real-time JPEG
+# encoding (image) and graphics decoding (ironrdp-graphics); unoptimized
+# these are 10-30× slower and make the desktop feel laggy. Our own crates
+# stay unoptimized so iteration stays fast. Deps are cached after the first
+# build, so this is a one-time cost.
+[profile.dev.package."*"]
+opt-level = 3
+
+# rh-rdp runs the hot per-frame pixel loops (region diff, RGB extract) and
+# the input/active-stage loop — optimize it even in dev so the desktop is
+# responsive. Other workspace crates stay unoptimized for fast iteration.
+[profile.dev.package.rh-rdp]
+opt-level = 3

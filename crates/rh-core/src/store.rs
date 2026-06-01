@@ -48,6 +48,19 @@ pub trait HostStore: Send + Sync {
     async fn list(&self, filter: HostFilter) -> Result<Vec<Host>, StorageError>;
     async fn update(&self, host: &Host) -> Result<(), StorageError>;
     async fn delete(&self, id: &HostId) -> Result<(), StorageError>;
+
+    /// Stamp `last_connected_at`. Machine-set by the session layer when a
+    /// session reaches `Ready`; targeted write that doesn't disturb the
+    /// rest of the row (unlike [`Self::update`]).
+    async fn mark_connected(
+        &self,
+        id: &HostId,
+        when: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), StorageError>;
+
+    /// Stamp the auto-detected OS slug (e.g. "ubuntu"). Machine-set after
+    /// a connect; targeted write that doesn't disturb the rest of the row.
+    async fn mark_detected_os(&self, id: &HostId, os: &str) -> Result<(), StorageError>;
 }
 
 #[async_trait]
@@ -154,6 +167,66 @@ pub enum RevealError {
 
     #[error("keychain access failed")]
     Secret(#[from] SecretError),
+}
+
+/// Persistence for pinned SSH host keys (TOFU). Public material, so it
+/// lives in SQLite alongside the other stores rather than the keychain.
+///
+/// Identity is `(hostname, port)`. The session actor calls [`Self::lookup`]
+/// during the SSH handshake and, when the user trusts an unknown or
+/// changed key, [`Self::remember`] to pin it.
+#[async_trait]
+pub trait KnownHostsStore: Send + Sync {
+    /// The pinned key for `(hostname, port)`, or `None` if never trusted.
+    async fn lookup(
+        &self,
+        hostname: &str,
+        port: u16,
+    ) -> Result<Option<crate::types::KnownHostKey>, StorageError>;
+
+    /// Trust (or re-trust, overwriting any previous key) the given key
+    /// for `(hostname, port)`. Upsert semantics.
+    async fn remember(
+        &self,
+        hostname: &str,
+        port: u16,
+        key: &crate::types::KnownHostKey,
+    ) -> Result<(), StorageError>;
+
+    /// Forget the pinned key for `(hostname, port)`. No error if absent.
+    async fn forget(&self, hostname: &str, port: u16) -> Result<(), StorageError>;
+
+    /// All pinned host keys, for the management UI. Ordered by hostname.
+    async fn list(&self) -> Result<Vec<crate::types::KnownHostEntry>, StorageError>;
+}
+
+/// TOFU store for RDP server certificates — the RDP analog of
+/// [`KnownHostsStore`]. Pins `(hostname, port) → cert` so a changed cert
+/// later can be flagged.
+#[async_trait]
+pub trait RdpCertStore: Send + Sync {
+    /// The pinned cert for `(hostname, port)`, or `None` if never trusted.
+    async fn lookup(
+        &self,
+        hostname: &str,
+        port: u16,
+    ) -> Result<Option<crate::types::TrustedCert>, StorageError>;
+
+    /// Trust (or re-trust, overwriting) the cert for `(hostname, port)`.
+    /// `trusted_at` is set to now. Upsert semantics.
+    async fn remember(
+        &self,
+        hostname: &str,
+        port: u16,
+        fingerprint_sha256: &str,
+        subject: &str,
+    ) -> Result<(), StorageError>;
+
+    /// Forget the pinned cert for `(hostname, port)`. No error if absent.
+    async fn forget(&self, hostname: &str, port: u16) -> Result<(), StorageError>;
+
+    /// All pinned certs, for the management UI. Ordered by hostname.
+    async fn list(&self) -> Result<Vec<crate::types::RdpCertEntry>, StorageError>;
 }
 
 #[async_trait]

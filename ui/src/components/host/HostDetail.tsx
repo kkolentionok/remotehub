@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Eye, EyeOff, Files, Info, KeyRound, Lock, Pencil, Plus, Server, Trash2, Upload, User, X, Zap } from "lucide-react";
+import { ArrowRightToLine, Check, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Files, Info, KeyRound, Lock, Monitor, Pencil, Plus, Server, Terminal, Trash2, Upload, User, X, Zap } from "lucide-react";
 
 import { useT } from "../../i18n";
 import {
@@ -9,11 +9,12 @@ import {
     hosts as hostsApi,
 } from "../../lib/ipc";
 import { formatApiError } from "../../lib/types";
-import type { CredentialKind, EnvVar, HostFullDto, Protocol } from "../../lib/types";
+import type { CredentialKind, EnvVar, HostFullDto, KnownHostKeyDto, Protocol } from "../../lib/types";
 import { useDebouncedCallback } from "../../lib/useDebouncedCallback";
 import {
     useCredentialsStore,
     useGroupsStore,
+    useHostsStore,
     useSessionsStore,
     useUiStore,
 } from "../../store";
@@ -22,7 +23,6 @@ import { Dialog } from "../ui/Dialog";
 import { Combobox } from "../ui/Combobox";
 import { EmptyState } from "../ui/EmptyState";
 import { Input, Textarea } from "../ui/TextField";
-import { ProtocolBadge } from "../ui/ProtocolBadge";
 import { SaveStatusIndicator, type SaveStatus } from "./SaveStatusIndicator";
 import styles from "./HostDetail.module.css";
 
@@ -121,6 +121,9 @@ export function HostDetail() {
             color: null,
             detected_os: null,
             default_credential_id: draft.pickedCredentialId,
+            jump_host_id: null,
+            agent_forwarding: false,
+            last_connected_at: null,
             credential_ids: draft.pickedCredentialId
                 ? [draft.pickedCredentialId]
                 : [],
@@ -214,6 +217,10 @@ interface FormState {
     tagsRaw: string;
     notes: string;
     startupCommand: string;
+    /** Selected jump-host id (ProxyJump bastion), or "" for direct. */
+    jumpHostId: string;
+    /** Forward the local SSH agent to this host (ssh -A). */
+    agentForwarding: boolean;
     /** Raw textarea contents: one `KEY=VALUE` per line. */
     envRaw: string;
     inlineUsername: string;
@@ -251,6 +258,7 @@ interface HostFormProps {
 function HostForm(props: HostFormProps) {
     const { t } = useT();
     const groups = useGroupsStore((s) => s.items);
+    const allHosts = useHostsStore((s) => s.items);
     const credentials = useCredentialsStore((s) => s.items);
     const updateDraft = useUiStore((s) => s.updateDraft);
     const clearDraft = useUiStore((s) => s.clearDraft);
@@ -277,6 +285,10 @@ function HostForm(props: HostFormProps) {
     );
     const linkedKeyCred = useMemo(
         () => linkedCreds.find((c) => c.kind === "ssh_key") ?? null,
+        [linkedCreds],
+    );
+    const linkedAgentCred = useMemo(
+        () => linkedCreds.find((c) => c.kind === "ssh_key_agent") ?? null,
         [linkedCreds],
     );
 
@@ -527,7 +539,7 @@ function HostForm(props: HostFormProps) {
                             const created = await credApi.create({
                                 name: makeName(),
                                 kind: "password",
-                                username: "",
+                                username: state.inlineUsername.trim(),
                                 secret: encodeSecret(state.inlinePassword),
                             });
                             await credApi.linkHost({
@@ -566,7 +578,7 @@ function HostForm(props: HostFormProps) {
                             const created = await credApi.create({
                                 name: makeName(state.inlineKeyName),
                                 kind: "ssh_key",
-                                username: "",
+                                username: state.inlineUsername.trim(),
                                 secret: encodeSecret(state.inlinePrivateKey),
                                 passphrase:
                                     state.inlinePassphrase !== ""
@@ -619,7 +631,7 @@ function HostForm(props: HostFormProps) {
                                     credentials.map((c) => c.name),
                                 ),
                                 kind: "password",
-                                username: "",
+                                username: uTrim,
                                 secret: encodeSecret(state.inlinePassword),
                             });
                             toLink.push(created.id);
@@ -635,7 +647,7 @@ function HostForm(props: HostFormProps) {
                                     credentials.map((c) => c.name),
                                 ),
                                 kind: "ssh_key",
-                                username: "",
+                                username: uTrim,
                                 secret: encodeSecret(state.inlinePrivateKey),
                                 passphrase:
                                     state.inlinePassphrase !== ""
@@ -756,6 +768,17 @@ function HostForm(props: HostFormProps) {
         ) => {
             setForm((prev) => {
                 const next = { ...prev, [key]: value };
+                // Switching protocol: if the port is still empty or the old
+                // protocol's default, follow the switch (SSH 22 ↔ RDP 3389).
+                // A custom port is left untouched.
+                if (key === "protocol") {
+                    const oldDefault = prev.protocol === "ssh" ? "22" : "3389";
+                    const newDefault = value === "ssh" ? "22" : "3389";
+                    const port = prev.port.trim();
+                    if (port === "" || port === oldDefault) {
+                        next.port = newDefault;
+                    }
+                }
                 if (props.mode === "draft") {
                     // Mirror into draft store for navigate-away detection.
                     const mirror: Record<string, unknown> = {};
@@ -767,6 +790,10 @@ function HostForm(props: HostFormProps) {
                         mirror.groupId = (value as string) || null;
                     } else {
                         mirror[key as string] = value;
+                    }
+                    // Protocol switch may have moved the port — mirror it.
+                    if (key === "protocol" && next.port !== prev.port) {
+                        mirror.port = next.port;
                     }
                     updateDraft(mirror);
                 }
@@ -869,7 +896,7 @@ function HostForm(props: HostFormProps) {
                 const created = await credApi.create({
                     name: credName,
                     kind: "ssh_key",
-                    username: "",
+                    username: f.inlineUsername.trim(),
                     secret: encodeSecret(key.trim()),
                     passphrase:
                         passphrase !== "" ? encodeSecret(passphrase) : undefined,
@@ -894,6 +921,45 @@ function HostForm(props: HostFormProps) {
         },
         [props, flashSaved, updateDraft],
     );
+
+    // Use the OS SSH agent for this host: link an `ssh_key_agent`
+    // credential (no secret stored — the agent signs). Agent creds are
+    // interchangeable, so reuse an existing one rather than proliferating.
+    const onUseAgent = useCallback(async () => {
+        setSaveStatus({ kind: "saving" });
+        try {
+            const existing = useCredentialsStore
+                .getState()
+                .items.find((c) => c.kind === "ssh_key_agent");
+            const credId = existing
+                ? existing.id
+                : (
+                      await credApi.create({
+                          name: uniqueCredentialName(
+                              "SSH agent",
+                              useCredentialsStore.getState().items.map((c) => c.name),
+                          ),
+                          kind: "ssh_key_agent",
+                          username: "",
+                      })
+                  ).id;
+            if (props.mode === "edit") {
+                const anyLinked = (props.host.credential_ids ?? []).length > 0;
+                await credApi.linkHost({
+                    host_id: props.host.id,
+                    credential_id: credId,
+                    set_as_default: !anyLinked,
+                });
+                const fresh = await hostsApi.get(props.host.id);
+                props.onHostUpdated(fresh);
+            } else {
+                updateDraft({ pickedCredentialId: credId });
+            }
+            flashSaved();
+        } catch (e: unknown) {
+            setSaveStatus({ kind: "error", message: formatApiError(e) });
+        }
+    }, [props, flashSaved, updateDraft]);
 
     // Seed the field with the revealed stored password as the edit
     // baseline. We set committed = value so no save fires on reveal; only
@@ -922,6 +988,46 @@ function HostForm(props: HostFormProps) {
             }
         },
         [update],
+    );
+
+    // Jump-host options: other SSH hosts (a host can't jump through itself).
+    const jumpOptions = useMemo(
+        () =>
+            allHosts
+                .filter((h) => h.protocol === "ssh" && h.id !== props.host.id)
+                .map((h) => ({ value: h.id, label: h.name })),
+        [allHosts, props.host.id],
+    );
+
+    // The jump host is a discrete choice — persist it immediately rather
+    // than threading it through the debounced text-field autosave.
+    const setJumpHost = useCallback(
+        (value: string) => {
+            setForm((f) => ({ ...f, jumpHostId: value }));
+            if (props.mode !== "edit") return;
+            void hostsApi
+                .update({ id: props.host.id, jump_host_id: value || null })
+                .then(() => flashSaved())
+                .catch((e: unknown) =>
+                    setSaveStatus({ kind: "error", message: formatApiError(e) }),
+                );
+        },
+        [props.mode, props.host.id, flashSaved],
+    );
+
+    // Agent forwarding is a toggle — persist immediately, same as jump host.
+    const setAgentForwarding = useCallback(
+        (value: boolean) => {
+            setForm((f) => ({ ...f, agentForwarding: value }));
+            if (props.mode !== "edit") return;
+            void hostsApi
+                .update({ id: props.host.id, agent_forwarding: value })
+                .then(() => flashSaved())
+                .catch((e: unknown) =>
+                    setSaveStatus({ kind: "error", message: formatApiError(e) }),
+                );
+        },
+        [props.mode, props.host.id, flashSaved],
     );
 
     // ---------- Inline action handlers --------------------------------
@@ -998,86 +1104,81 @@ function HostForm(props: HostFormProps) {
                 hostId={props.host.id}
                 createdAt={props.host.created_at}
                 updatedAt={props.host.updated_at}
+                lastConnectedAt={props.host.last_connected_at}
                 saveStatus={saveStatus}
                 onConnect={handleConnect}
-                canConnect={props.mode === "edit" && props.host.protocol === "ssh"}
+                canConnect={props.mode === "edit"}
                 onDuplicate={handleDuplicate}
                 onRequestDelete={handleDelete}
             />
 
 
+            <div className={styles.body}>
             <section className={styles.section}>
-                <div className={styles.sectionTitle}>{t("dialog.host.address")}</div>
-                <div className={styles.addressRow}>
-                    <Input
-                        value={form.hostname}
-                        onChange={(e) => update("hostname", e.target.value)}
-                        placeholder={t("dialog.host.addressPlaceholder")}
-                        autoFocus={props.mode === "draft"}
-                        spellCheck={false}
-                    />
-                    <select
-                        className={styles.protocolSelect}
-                        value={form.protocol}
-                        onChange={(e) =>
-                            update("protocol", e.target.value as Protocol)
-                        }
-                        aria-label={t("dialog.host.protocol")}
+                <div className={styles.fieldLabel}>{t("dialog.host.label")}</div>
+                <Input
+                    value={form.label}
+                    onChange={(e) => update("label", e.target.value)}
+                    placeholder={
+                        form.hostname.trim() !== ""
+                            ? form.hostname
+                            : t("dialog.host.labelPlaceholder")
+                    }
+                    spellCheck={false}
+                />
+            </section>
+
+            <section className={styles.section}>
+                <div className={styles.fieldLabel}>{t("dialog.host.protocol")}</div>
+                <div className={styles.segmented}>
+                    <button
+                        type="button"
+                        className={`${styles.seg} ${form.protocol === "ssh" ? styles.segOn : ""}`}
+                        onClick={() => update("protocol", "ssh")}
                     >
-                        <option value="ssh">SSH</option>
-                        <option value="rdp">RDP</option>
-                    </select>
-                    <Input
-                        type="number"
-                        min={1}
-                        max={65535}
-                        value={form.port}
-                        onChange={(e) => update("port", e.target.value)}
-                        placeholder={String(form.protocol === "ssh" ? 22 : 3389)}
-                        aria-label={t("dialog.host.port")}
-                        className={styles.portInput}
-                    />
+                        <Terminal size={14} /> SSH
+                    </button>
+                    <button
+                        type="button"
+                        className={`${styles.seg} ${form.protocol === "rdp" ? styles.segOn : ""}`}
+                        onClick={() => update("protocol", "rdp")}
+                    >
+                        <Monitor size={14} /> RDP
+                    </button>
                 </div>
             </section>
 
             <section className={styles.section}>
-                <div className={styles.twoCol}>
+                <div className={styles.addressRow}>
                     <div className={styles.colField}>
-                        <div className={styles.fieldLabel}>
-                            {t("dialog.host.label")}
-                        </div>
+                        <div className={styles.fieldLabel}>{t("dialog.host.address")}</div>
                         <Input
-                            value={form.label}
-                            onChange={(e) => update("label", e.target.value)}
-                            placeholder={
-                                form.hostname.trim() !== ""
-                                    ? form.hostname
-                                    : t("dialog.host.labelPlaceholder")
-                            }
+                            value={form.hostname}
+                            onChange={(e) => update("hostname", e.target.value)}
+                            placeholder={t("dialog.host.addressPlaceholder")}
+                            autoFocus={props.mode === "draft"}
                             spellCheck={false}
                         />
                     </div>
                     <div className={styles.colField}>
-                        <div className={styles.fieldLabel}>
-                            {t("dialog.host.groupField")}
-                        </div>
-                        <Combobox
-                            options={groupOptions}
-                            value={form.groupId}
-                            onChange={(v) => update("groupId", v)}
-                            onCreateNew={createGroup}
-                            placeholder={t("dialog.host.groupNone")}
-                            createLabel={t("dialog.host.createGroup")}
+                        <div className={styles.fieldLabel}>{t("dialog.host.port")}</div>
+                        <Input
+                            type="number"
+                            min={1}
+                            max={65535}
+                            value={form.port}
+                            onChange={(e) => update("port", e.target.value)}
+                            placeholder={String(form.protocol === "ssh" ? 22 : 3389)}
+                            aria-label={t("dialog.host.port")}
+                            className={styles.portInput}
                         />
                     </div>
                 </div>
             </section>
 
             <section className={styles.section}>
-                <div className={styles.sectionTitle}>
-                    {t("dialog.host.credentialsSection")}
-                </div>
                 <CredentialPanel
+                    protocol={form.protocol}
                     username={form.inlineUsername}
                     password={form.inlinePassword}
                     onUsername={(v) => update("inlineUsername", v)}
@@ -1085,10 +1186,24 @@ function HostForm(props: HostFormProps) {
                     onPasswordRevealed={onPasswordRevealed}
                     onPickSaved={linkCredential}
                     onAddKey={onAddKey}
+                    onUseAgent={onUseAgent}
                     onUnlink={unlinkCredential}
                     linkedPasswordId={linkedPwCred?.id ?? null}
                     linkedKeyId={linkedKeyCred?.id ?? null}
                     linkedKeyName={linkedKeyCred?.name ?? null}
+                    linkedAgentId={linkedAgentCred?.id ?? null}
+                />
+            </section>
+
+            <section className={styles.section}>
+                <div className={styles.fieldLabel}>{t("dialog.host.groupField")}</div>
+                <Combobox
+                    options={groupOptions}
+                    value={form.groupId}
+                    onChange={(v) => update("groupId", v)}
+                    onCreateNew={createGroup}
+                    placeholder={t("dialog.host.groupNone")}
+                    createLabel={t("dialog.host.createGroup")}
                 />
             </section>
 
@@ -1142,6 +1257,41 @@ function HostForm(props: HostFormProps) {
                             </div>
                         )}
 
+                        {form.protocol === "ssh" && props.mode === "edit" && (
+                            <div>
+                                <div className={styles.fieldLabel}>
+                                    {t("dialog.host.jumpHost")}
+                                </div>
+                                <Combobox
+                                    options={jumpOptions}
+                                    value={form.jumpHostId}
+                                    onChange={setJumpHost}
+                                    placeholder={t("dialog.host.jumpHostNone")}
+                                />
+                                <div className={styles.fieldHint}>
+                                    {t("dialog.host.jumpHostHint")}
+                                </div>
+                            </div>
+                        )}
+
+                        {form.protocol === "ssh" && props.mode === "edit" && (
+                            <div>
+                                <label className={styles.checkboxRow}>
+                                    <input
+                                        type="checkbox"
+                                        checked={form.agentForwarding}
+                                        onChange={(e) =>
+                                            setAgentForwarding(e.target.checked)
+                                        }
+                                    />
+                                    <span>{t("dialog.host.agentForwarding")}</span>
+                                </label>
+                                <div className={styles.fieldHint}>
+                                    {t("dialog.host.agentForwardingHint")}
+                                </div>
+                            </div>
+                        )}
+
                         <div>
                             <div className={styles.fieldLabel}>
                                 {t("dialog.host.envVars")}
@@ -1177,7 +1327,94 @@ function HostForm(props: HostFormProps) {
                 )}
             </section>
             </div>
+            <div className={styles.footer}>
+                <button
+                    type="button"
+                    className={styles.deleteBtn}
+                    onClick={handleDelete}
+                >
+                    <Trash2 size={14} />{" "}
+                    {props.mode === "draft"
+                        ? t("storage.cancelCreate")
+                        : t("common.delete")}
+                </button>
+                <span style={{ flex: 1 }} />
+                {props.mode === "edit" && (
+                    <button
+                        type="button"
+                        className={styles.headerIconButton}
+                        onClick={handleDuplicate}
+                        title={t("common.duplicate")}
+                        aria-label={t("common.duplicate")}
+                    >
+                        <Files size={15} />
+                    </button>
+                )}
+            </div>
+            </div>
         </main>
+    );
+}
+
+// =====================================================================
+// CopyableValue — monospace value with a click-to-copy affordance.
+// Used in the technical-info popover (host ID, host-key fingerprint).
+// =====================================================================
+
+function CopyableValue({
+    value,
+    display,
+    hint,
+}: {
+    value: string;
+    /** Shorter text to show instead of `value` (full value still copied). */
+    display?: string;
+    hint?: string;
+}) {
+    const { t } = useT();
+    const [copied, setCopied] = useState(false);
+    const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(
+        () => () => {
+            if (timer.current) clearTimeout(timer.current);
+        },
+        [],
+    );
+
+    const copy = useCallback(() => {
+        // navigator.clipboard needs a secure context; the Tauri webview
+        // qualifies. Fall back silently if it's somehow unavailable.
+        const text = value;
+        const done = () => {
+            setCopied(true);
+            if (timer.current) clearTimeout(timer.current);
+            timer.current = setTimeout(() => setCopied(false), 1500);
+        };
+        if (navigator.clipboard?.writeText) {
+            void navigator.clipboard.writeText(text).then(done).catch(() => {});
+        }
+    }, [value]);
+
+    return (
+        <span className={styles.copyable}>
+            <span
+                className={`${styles.infoValue} ${display ? styles.infoValueTruncated : ""}`}
+                title={display ? value : undefined}
+            >
+                {display ?? value}
+                {hint ? <span className={styles.infoHint}> {hint}</span> : null}
+            </span>
+            <button
+                type="button"
+                className={styles.copyButton}
+                onClick={copy}
+                title={t("common.copy")}
+                aria-label={t("common.copy")}
+            >
+                {copied ? <Check size={13} /> : <Copy size={13} />}
+            </button>
+        </span>
     );
 }
 
@@ -1195,6 +1432,7 @@ interface FormHeaderProps {
     hostId: string;
     createdAt: string;
     updatedAt: string;
+    lastConnectedAt: string | null;
     saveStatus: SaveStatus;
     onConnect: () => void;
     canConnect: boolean;
@@ -1206,6 +1444,28 @@ function FormHeader(p: FormHeaderProps) {
     const { t, formatDate } = useT();
     const [infoOpen, setInfoOpen] = useState(false);
     const infoRef = useRef<HTMLDivElement>(null);
+    // Pinned host key, lazily loaded when the info panel opens. `undefined`
+    // = not loaded yet, `null` = loaded but nothing pinned.
+    const [hostKey, setHostKey] = useState<KnownHostKeyDto | null | undefined>(
+        undefined,
+    );
+
+    useEffect(() => {
+        if (!infoOpen) return;
+        let cancelled = false;
+        setHostKey(undefined);
+        void hostsApi
+            .knownHostKey(p.hostId)
+            .then((r) => {
+                if (!cancelled) setHostKey(r.key);
+            })
+            .catch(() => {
+                if (!cancelled) setHostKey(null);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [infoOpen, p.hostId]);
 
     useEffect(() => {
         if (!infoOpen) return;
@@ -1219,101 +1479,100 @@ function FormHeader(p: FormHeaderProps) {
     }, [infoOpen]);
 
     const title = p.label.trim() || p.hostname.trim() || t("host.newHost");
-    const showAddress = p.hostname.trim() !== "";
-    const portDisplay =
-        p.port.trim() === "" ? (p.protocol === "ssh" ? 22 : 3389) : p.port;
+    const selectHost = useUiStore((s) => s.selectHost);
+    const clearDraft = useUiStore((s) => s.clearDraft);
+    const closeInspector = () => {
+        clearDraft();
+        selectHost(null);
+    };
 
     return (
-        <header className={styles.header}>
-            <div className={styles.headerLeft}>
-                <div className={styles.titleRow}>
-                    <h1 className={styles.title}>{title}</h1>
-                    <ProtocolBadge protocol={p.protocol} />
+        <>
+            <header className={styles.header}>
+                <div className={styles.headerIcon}>
+                    {p.protocol === "rdp" ? <Monitor size={16} /> : <Server size={16} />}
                 </div>
-                {showAddress && (
-                    <div className={styles.connection}>
-                        <span className={styles.address}>{p.hostname}</span>
-                        <span className={styles.port}>:{portDisplay}</span>
-                        {p.detectedOs && (
-                            <span className={styles.osChip} title={t("host.detectedOs")}>
-                                {p.detectedOs}
-                            </span>
-                        )}
+                <div className={styles.headerLeft}>
+                    <h1 className={styles.title}>{title}</h1>
+                    <div className={styles.saveChipWrap}>
+                        <SaveStatusIndicator status={p.saveStatus} />
                     </div>
-                )}
-            </div>
-
-            <div className={styles.headerActions}>
+                </div>
+                <div className={styles.headerActions}>
+                    {p.mode === "edit" && (
+                        <div ref={infoRef} className={styles.infoWrap}>
+                            <button
+                                className={styles.headerIconButton}
+                                onClick={() => setInfoOpen((v) => !v)}
+                                title={t("host.technicalInfo")}
+                                aria-label={t("host.technicalInfo")}
+                                type="button"
+                            >
+                                <Info size={15} />
+                            </button>
+                            {infoOpen && (
+                                <div className={styles.infoPopover}>
+                                    <div className={styles.infoRow}>
+                                        <span className={styles.infoLabel}>{t("host.created")}</span>
+                                        <span className={styles.infoValue}>{formatDate(p.createdAt)}</span>
+                                    </div>
+                                    <div className={styles.infoRow}>
+                                        <span className={styles.infoLabel}>{t("host.updated")}</span>
+                                        <span className={styles.infoValue}>{formatDate(p.updatedAt)}</span>
+                                    </div>
+                                    <div className={styles.infoRow}>
+                                        <span className={styles.infoLabel}>
+                                            {t("host.lastConnected")}
+                                        </span>
+                                        <span className={styles.infoValue}>
+                                            {p.lastConnectedAt
+                                                ? formatDate(p.lastConnectedAt)
+                                                : t("host.lastConnectedNever")}
+                                        </span>
+                                    </div>
+                                    <div className={styles.infoRow}>
+                                        <span className={styles.infoLabel}>
+                                            {t("host.fingerprint")}
+                                        </span>
+                                        {hostKey ? (
+                                            <CopyableValue
+                                                value={`SHA256:${hostKey.fingerprint_sha256}`}
+                                                hint={hostKey.key_type}
+                                            />
+                                        ) : (
+                                            <span className={styles.infoMuted}>
+                                                {hostKey === undefined
+                                                    ? "…"
+                                                    : t("host.fingerprintNone")}
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    <button
+                        className={styles.collapseBtn}
+                        onClick={closeInspector}
+                        title={t("common.close")}
+                        aria-label={t("common.close")}
+                        type="button"
+                    >
+                        <ArrowRightToLine size={16} />
+                    </button>
+                </div>
+            </header>
+            <div className={styles.connectRow}>
                 <Button
                     variant="primary"
                     onClick={p.onConnect}
                     disabled={!p.canConnect}
-                    title={
-                        p.canConnect
-                            ? t("host.connect")
-                            : p.protocol === "rdp"
-                              ? t("host.connectRdpSoon")
-                              : t("host.connectSaveFirst")
-                    }
+                    title={p.canConnect ? t("host.connect") : t("host.connectSaveFirst")}
                 >
                     <Zap size={14} /> {t("host.connect")}
                 </Button>
-
-                {p.mode === "edit" && (
-                    <button
-                        className={styles.headerIconButton}
-                        onClick={p.onDuplicate}
-                        title={t("common.duplicate")}
-                        aria-label={t("common.duplicate")}
-                        type="button"
-                    >
-                        <Files size={15} />
-                    </button>
-                )}
-
-                <button
-                    className={styles.headerIconButton}
-                    onClick={p.onRequestDelete}
-                    title={t("common.delete")}
-                    aria-label={t("common.delete")}
-                    type="button"
-                >
-                    <Trash2 size={15} />
-                </button>
-
-                <SaveStatusIndicator status={p.saveStatus} />
-
-                {p.mode === "edit" && (
-                    <div ref={infoRef} className={styles.infoWrap}>
-                        <button
-                            className={styles.headerIconButton}
-                            onClick={() => setInfoOpen((v) => !v)}
-                            title={t("host.technicalInfo")}
-                            aria-label={t("host.technicalInfo")}
-                            type="button"
-                        >
-                            <Info size={15} />
-                        </button>
-                        {infoOpen && (
-                            <div className={styles.infoPopover}>
-                                <div className={styles.infoRow}>
-                                    <span className={styles.infoLabel}>{t("host.created")}</span>
-                                    <span className={styles.infoValue}>{formatDate(p.createdAt)}</span>
-                                </div>
-                                <div className={styles.infoRow}>
-                                    <span className={styles.infoLabel}>{t("host.updated")}</span>
-                                    <span className={styles.infoValue}>{formatDate(p.updatedAt)}</span>
-                                </div>
-                                <div className={styles.infoRow}>
-                                    <span className={styles.infoLabel}>{t("host.id")}</span>
-                                    <span className={styles.infoValue}>{p.hostId}</span>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                )}
             </div>
-        </header>
+        </>
     );
 }
 
@@ -1325,6 +1584,7 @@ function FormHeader(p: FormHeaderProps) {
 // =====================================================================
 
 interface CredentialPanelProps {
+    protocol: Protocol;
     username: string;
     password: string;
     onUsername: (v: string) => void;
@@ -1340,6 +1600,8 @@ interface CredentialPanelProps {
         passphrase: string;
         name: string;
     }) => Promise<void>;
+    /** Link an `ssh_key_agent` credential (use the OS SSH agent). */
+    onUseAgent: () => Promise<void>;
     /** Unlink a linked credential (✕ on a method). */
     onUnlink: (credentialId: string) => void;
     /** Linked password credential id, if any — enables reveal + ✕. */
@@ -1347,6 +1609,8 @@ interface CredentialPanelProps {
     /** Linked SSH key credential, if any — shown as a chip with ✕. */
     linkedKeyId: string | null;
     linkedKeyName: string | null;
+    /** Linked SSH-agent credential id, if any — shown as an agent chip. */
+    linkedAgentId: string | null;
 }
 
 const REVEAL_SECONDS = 10;
@@ -1359,11 +1623,16 @@ function CredentialPanel(props: CredentialPanelProps) {
     // Saved methods are locked by default (protects against accidental
     // edits/removal). A pencil unlocks editing; only then is ✕ shown.
     const [pwEditing, setPwEditing] = useState(false);
-    const [keyEditing, setKeyEditing] = useState(false);
+    const [authMode, setAuthMode] = useState<"key" | "password">(
+        props.linkedKeyId !== null || props.linkedAgentId !== null
+            ? "key"
+            : "password",
+    );
 
     const keyLinked = props.linkedKeyId !== null;
+    const agentLinked = props.linkedAgentId !== null;
+    const methodLinked = keyLinked || agentLinked;
     const pwLocked = props.linkedPasswordId !== null && !pwEditing;
-    const keyLocked = keyLinked && !keyEditing;
 
     // Revealed stored password (plaintext from keychain), shown briefly.
     const [revealed, setRevealed] = useState<string | null>(null);
@@ -1388,8 +1657,10 @@ function CredentialPanel(props: CredentialPanelProps) {
         setPickerOpen(false);
         setAddKeyOpen(false);
         setPwEditing(false);
-        setKeyEditing(false);
-    }, [props.linkedPasswordId, props.linkedKeyId, stopReveal]);
+        if (props.linkedKeyId !== null || props.linkedAgentId !== null) {
+            setAuthMode("key");
+        }
+    }, [props.linkedPasswordId, props.linkedKeyId, props.linkedAgentId, stopReveal]);
 
     const revealStored = useCallback(async () => {
         if (!props.linkedPasswordId) return;
@@ -1461,22 +1732,9 @@ function CredentialPanel(props: CredentialPanelProps) {
     const fieldType = showPassword || valueShown ? "text" : "password";
     const fieldValue = valueShown ? revealed! : props.password;
 
-    return (
-        <div className={styles.credentialPanel}>
-            <div className={styles.iconField}>
-                <User size={14} className={styles.fieldIcon} />
-                <Input
-                    className={styles.iconInput}
-                    value={props.username}
-                    onChange={(e) => props.onUsername(e.target.value)}
-                    placeholder={t("dialog.host.credentialUsername")}
-                    autoComplete="off"
-                    spellCheck={false}
-                />
-            </div>
-
-            {/* Password — always available as a method. Full width like the
-                other fields; controls (timer/eye/✕) overlay at the right. */}
+    const passwordField = (
+        <div>
+            <div className={styles.fieldLabel}>{t("dialog.host.passwordLabel")}</div>
             <div
                 ref={pwRowRef}
                 className={`${styles.passwordWrap} ${props.linkedPasswordId ? styles.removable : ""}`}
@@ -1540,64 +1798,110 @@ function CredentialPanel(props: CredentialPanelProps) {
                     )}
                 </div>
             </div>
+        </div>
+    );
 
-            {/* SSH key — locked chip with a pencil; ✕ appears only in edit. */}
-            {keyLinked && (
-                <div className={styles.keyChipRow}>
-                    <KeyRound size={14} />
-                    <span className={styles.keyChipName}>
-                        {props.linkedKeyName}
-                    </span>
-                    {keyLocked ? (
-                        <button
-                            type="button"
-                            className={styles.methodRemove}
-                            onClick={() => setKeyEditing(true)}
-                            title={t("common.edit")}
-                            aria-label={t("common.edit")}
-                        >
-                            <Pencil size={14} />
-                        </button>
+    return (
+        <div className={styles.credentialPanel}>
+            {/* Login */}
+            <div>
+                <div className={styles.fieldLabel}>{t("dialog.host.loginLabel")}</div>
+                <div className={styles.iconField}>
+                    <User size={14} className={styles.fieldIcon} />
+                    <Input
+                        className={styles.iconInput}
+                        value={props.username}
+                        onChange={(e) => props.onUsername(e.target.value)}
+                        placeholder={t("dialog.host.credentialUsername")}
+                        autoComplete="off"
+                        spellCheck={false}
+                    />
+                </div>
+            </div>
+
+            {props.protocol === "ssh" ? (
+                <>
+                    {/* Authentication method */}
+                    <div>
+                        <div className={styles.fieldLabel}>
+                            {t("dialog.host.authLabel")}
+                        </div>
+                        <div className={styles.segmented}>
+                            <button
+                                type="button"
+                                className={`${styles.seg} ${authMode === "key" ? styles.segOn : ""}`}
+                                onClick={() => setAuthMode("key")}
+                            >
+                                <KeyRound size={14} /> {t("dialog.host.authKind.key")}
+                            </button>
+                            <button
+                                type="button"
+                                className={`${styles.seg} ${authMode === "password" ? styles.segOn : ""}`}
+                                onClick={() => setAuthMode("password")}
+                            >
+                                <Lock size={14} /> {t("dialog.host.authKind.password")}
+                            </button>
+                        </div>
+                    </div>
+
+                    {authMode === "key" ? (
+                        <div>
+                            <div className={styles.fieldLabel}>
+                                {t("dialog.host.keyLabel")}
+                            </div>
+                            <div className={styles.authTriggerWrap}>
+                                <button
+                                    type="button"
+                                    className={styles.keySelect}
+                                    onClick={() => setPickerOpen((v) => !v)}
+                                >
+                                    <KeyRound size={14} className={styles.keySelectIcon} />
+                                    <span
+                                        className={`${styles.keySelectName} ${methodLinked ? "" : styles.keySelectEmpty}`}
+                                    >
+                                        {props.linkedKeyName ??
+                                            (agentLinked
+                                                ? t("dialog.host.authKind.agent")
+                                                : t("dialog.host.keyNone"))}
+                                    </span>
+                                    <ChevronDown size={14} className={styles.keySelectChev} />
+                                </button>
+                                {pickerOpen && (
+                                    <SavedCredentialPicker
+                                        onClose={() => setPickerOpen(false)}
+                                        onPick={async (id) => {
+                                            setPickerOpen(false);
+                                            await props.onPickSaved(id);
+                                        }}
+                                        onAddNew={() => {
+                                            setPickerOpen(false);
+                                            setAddKeyOpen(true);
+                                        }}
+                                        onUseAgent={async () => {
+                                            setPickerOpen(false);
+                                            await props.onUseAgent();
+                                        }}
+                                        onClear={
+                                            methodLinked
+                                                ? () => {
+                                                      setPickerOpen(false);
+                                                      if (props.linkedKeyId)
+                                                          props.onUnlink(props.linkedKeyId);
+                                                      if (props.linkedAgentId)
+                                                          props.onUnlink(props.linkedAgentId);
+                                                  }
+                                                : undefined
+                                        }
+                                    />
+                                )}
+                            </div>
+                        </div>
                     ) : (
-                        <button
-                            type="button"
-                            className={styles.methodRemove}
-                            onClick={() => props.onUnlink(props.linkedKeyId!)}
-                            title={t("dialog.host.removeMethod")}
-                            aria-label={t("dialog.host.removeMethod")}
-                        >
-                            <X size={14} />
-                        </button>
+                        passwordField
                     )}
-                </div>
-            )}
-
-            {/* Add an SSH key: one click opens the picker of existing keys
-                with an "Add new" footer that opens the paste/import modal. */}
-            {!keyLinked && (
-                <div className={styles.authTriggerWrap}>
-                    <button
-                        type="button"
-                        className={styles.useSavedButton}
-                        onClick={() => setPickerOpen((v) => !v)}
-                    >
-                        <Plus size={13} />
-                        {t("dialog.host.authKind.key")}
-                    </button>
-                    {pickerOpen && (
-                        <SavedCredentialPicker
-                            onClose={() => setPickerOpen(false)}
-                            onPick={async (id) => {
-                                setPickerOpen(false);
-                                await props.onPickSaved(id);
-                            }}
-                            onAddNew={() => {
-                                setPickerOpen(false);
-                                setAddKeyOpen(true);
-                            }}
-                        />
-                    )}
-                </div>
+                </>
+            ) : (
+                passwordField
             )}
 
             {addKeyOpen && (
@@ -1616,10 +1920,16 @@ function CredentialPanel(props: CredentialPanelProps) {
 export function SavedCredentialPicker({
     onPick,
     onAddNew,
+    onUseAgent,
+    onClear,
     onClose,
 }: {
     onPick: (credentialId: string) => Promise<void>;
     onAddNew: () => void;
+    /** Optional — when provided, shows a "Use SSH agent" footer entry. */
+    onUseAgent?: () => void;
+    /** Optional — when provided, shows a "No key" entry that unlinks. */
+    onClear?: () => void;
     onClose: () => void;
 }) {
     const { t } = useT();
@@ -1658,6 +1968,30 @@ export function SavedCredentialPicker({
                     {t("dialog.host.addNewKey")}
                 </span>
             </button>
+            {onUseAgent && (
+                <button
+                    type="button"
+                    className={`${styles.savedPickerRow} ${styles.savedPickerAdd}`}
+                    onClick={onUseAgent}
+                >
+                    <Server size={14} />
+                    <span className={styles.savedPickerName}>
+                        {t("dialog.host.useAgent")}
+                    </span>
+                </button>
+            )}
+            {onClear && (
+                <button
+                    type="button"
+                    className={`${styles.savedPickerRow} ${styles.savedPickerAdd}`}
+                    onClick={onClear}
+                >
+                    <X size={14} />
+                    <span className={styles.savedPickerName}>
+                        {t("dialog.host.keyClear")}
+                    </span>
+                </button>
+            )}
         </div>
     );
 }
@@ -1809,6 +2143,8 @@ function buildFormState(
         tagsRaw: props.host.tags.join(", "),
         notes: props.host.notes ?? "",
         startupCommand: props.host.startup_command ?? "",
+        jumpHostId: props.host.jump_host_id ?? "",
+        agentForwarding: props.host.agent_forwarding,
         envRaw: formatEnv(props.host.env_vars),
         // Username lives on the host now. Prefer it; for drafts use the
         // remembered draft value; fall back to the linked credential's

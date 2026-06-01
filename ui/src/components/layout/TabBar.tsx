@@ -1,10 +1,9 @@
 import { useState } from "react";
-import { Columns2, Plus, Server, Settings, X } from "lucide-react";
+import { ChevronDown, Columns2, FolderOpen, Monitor, Plus, Server, Settings, Terminal, Wrench, X } from "lucide-react";
 
 import { useT } from "../../i18n";
 import { leafKeys } from "../../lib/paneTree";
-import { TERMINAL_THEMES } from "../../lib/terminalThemes";
-import { useSessionsStore, useSettingsStore, useUiStore } from "../../store";
+import { useSessionsStore, useUiStore } from "../../store";
 import { WindowControls } from "./WindowControls";
 import styles from "./TabBar.module.css";
 
@@ -38,19 +37,17 @@ export function TabBar() {
     const dragTabId = useSessionsStore((s) => s.dragTabId);
     const openLauncher = useUiStore((s) => s.setLauncherOpen);
     const setDialog = useUiStore((s) => s.setDialog);
-
-    // Active session tab borrows the terminal theme's colours so it merges
-    // visually with the terminal below (Windows-Terminal "profile colour").
-    const scheme = useSettingsStore(
-        (s) => s.settings?.terminal_color_scheme ?? "default",
-    );
-    const termTheme = TERMINAL_THEMES[scheme] ?? TERMINAL_THEMES.default;
+    const section = useUiStore((s) => s.section);
+    const setSection = useUiStore((s) => s.setSection);
 
     // The shown tab is the preview target while dragging, else the active.
     const shownTabId =
         dragging !== null && dragPreviewTabId !== null
             ? dragPreviewTabId
             : activeTabId;
+
+    // No session tab active → an app section (Vault / Tools) is shown.
+    const sectionActive = shownTabId === null;
 
     // Dragging a *pane* (not a tab) — the bar becomes a pop-out drop region.
     const paneDrag = dragging !== null && dragTabId === null;
@@ -84,23 +81,50 @@ export function TabBar() {
                 }
             }}
         >
+            {/* App sections — matte, square, neutral, not closable */}
             <button
                 type="button"
                 role="tab"
-                aria-selected={shownTabId === null}
-                className={`${styles.tab} ${styles.vault} ${shownTabId === null ? styles.active : ""} ${dragging && shownTabId !== null ? styles.dimmed : ""}`}
-                onClick={() => setActiveTab(null)}
+                aria-selected={sectionActive && section === "vault"}
+                className={`${styles.section} ${sectionActive && section === "vault" ? styles.sectionOn : ""}`}
+                onClick={() => {
+                    setActiveTab(null);
+                    setSection("vault");
+                }}
             >
-                <Server size={14} />
+                <Server size={14} className={styles.sectionIcon} />
                 <span className={styles.label}>{t("nav.vault")}</span>
+                <ChevronDown size={13} className={styles.chev} />
+            </button>
+            <button
+                type="button"
+                role="tab"
+                aria-selected={sectionActive && section === "tools"}
+                className={`${styles.section} ${sectionActive && section === "tools" ? styles.sectionOn : ""}`}
+                onClick={() => {
+                    setActiveTab(null);
+                    setSection("tools");
+                }}
+            >
+                <Wrench size={14} className={styles.sectionIcon} />
+                <span className={styles.label}>{t("nav.tools")}</span>
             </button>
 
+            <span className={styles.divider} aria-hidden="true" />
+
+            {/* Live session tabs — pill, accent icon, closable */}
             {tabs.map((tab) => {
                 const keys = leafKeys(tab.root);
                 const focused =
                     sessions.find((s) => s.key === tab.activePaneKey) ??
                     sessions.find((s) => s.key === keys[0]);
                 const paneCount = keys.length;
+                const SessIco = focused?.sftp ? FolderOpen : focused?.local ? Terminal : focused?.protocol === "rdp" ? Monitor : Server;
+                const connecting =
+                    !!focused &&
+                    ["resolving", "connecting", "authenticating", "host_key_pending"].includes(
+                        focused.state,
+                    );
                 return (
                     <button
                         key={tab.id}
@@ -108,15 +132,7 @@ export function TabBar() {
                         role="tab"
                         aria-selected={shownTabId === tab.id}
                         draggable
-                        className={`${styles.tab} ${shownTabId === tab.id ? styles.active : ""} ${dragging && shownTabId === tab.id ? styles.shown : ""} ${dragging && shownTabId !== tab.id ? styles.dimmed : ""} ${dragId === tab.id ? styles.dragging : ""}`}
-                        style={
-                            shownTabId === tab.id
-                                ? {
-                                      background: termTheme.background,
-                                      color: termTheme.foreground,
-                                  }
-                                : undefined
-                        }
+                        className={`${styles.sessionTab} ${shownTabId === tab.id ? styles.active : ""} ${dragging && shownTabId === tab.id ? styles.shown : ""} ${dragging && shownTabId !== tab.id ? styles.dimmed : ""} ${dragId === tab.id ? styles.dragging : ""}`}
                         onClick={() => setActiveTab(tab.id)}
                         onDragStart={(e) => {
                             setDragId(tab.id);
@@ -136,10 +152,6 @@ export function TabBar() {
                                 }
                                 return;
                             }
-                            // Live reorder: move the dragged tab toward the
-                            // hovered one once the cursor crosses its midpoint
-                            // (the midpoint guard prevents oscillation). Stay
-                            // in the bar → no split preview.
                             e.preventDefault();
                             e.dataTransfer.dropEffect = "move";
                             if (dragPreviewTabId !== null) setDragPreviewTabId(null);
@@ -151,15 +163,15 @@ export function TabBar() {
                             else if (from > over && !after) reorder(dragId, tab.id);
                         }}
                         onDrop={(e) => {
-                            // Dropped in the bar → reorder is already applied.
                             e.preventDefault();
                             e.stopPropagation();
                             endDrag();
                         }}
                         onDragEnd={endDrag}
                     >
-                        <span
-                            className={`${styles.dot} ${styles[`dot--${focused?.state ?? "connecting"}`] ?? ""}`}
+                        <SessIco
+                            size={13}
+                            className={`${styles.sessionIcon} ${connecting ? styles.connecting : ""}`}
                         />
                         <span className={styles.label}>
                             {paneCount > 1

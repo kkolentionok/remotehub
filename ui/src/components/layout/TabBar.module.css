@@ -1,26 +1,14 @@
 .bar {
     display: flex;
-    align-items: stretch;
+    align-items: center;
     gap: 2px;
-    height: 40px;
-    padding: 0 0 0 var(--space-2);
-    background: var(--color-canvas);
+    height: 38px;
+    padding: 0 8px;
+    background: var(--color-tabbar);
+    border-bottom: 1px solid var(--color-border);
     flex-shrink: 0;
     overflow: hidden;
     position: relative;
-}
-
-/* Bottom separator drawn as a pseudo so the active tab can paint over it
-   (Windows-Terminal style: the active tab merges into the content). */
-.bar::after {
-    content: "";
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    height: 1px;
-    background: var(--color-border);
-    z-index: 0;
 }
 
 .drag {
@@ -29,50 +17,99 @@
     min-width: var(--space-4);
 }
 
-.tab {
+/* ── App sections: matte, square, neutral, not closable ── */
+.section {
     display: inline-flex;
     align-items: center;
-    gap: var(--space-2);
+    gap: 7px;
+    height: 30px;
+    padding: 0 12px;
+    border-radius: var(--radius-md);
+    color: var(--text-3);
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background 0.1s, color 0.1s;
+}
+.section:hover {
+    background: var(--color-subtle);
+    color: var(--text-2);
+}
+.sectionOn {
+    background: var(--color-elevated);
+    color: var(--text-1);
+}
+.sectionIcon {
+    color: inherit;
+    flex: 0 0 auto;
+}
+.chev {
+    color: var(--text-4);
+    margin-left: -3px;
+    flex: 0 0 auto;
+}
+
+/* ── Divider ── */
+.divider {
+    width: 1px;
+    height: 16px;
+    background: var(--color-border);
+    margin: 0 8px;
+    flex: 0 0 auto;
+}
+
+/* ── Live session tabs: pill, accent icon, closable ── */
+.sessionTab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
     max-width: 220px;
-    padding: 0 var(--space-3);
-    margin: 0;
-    border-radius: var(--radius-md) var(--radius-md) 0 0;
-    color: var(--color-fg-muted);
-    font-size: var(--text-sm);
+    height: 30px;
+    padding: 0 10px;
+    border-radius: var(--radius-lg);
+    color: var(--text-3);
+    font-size: 13px;
     white-space: nowrap;
     flex-shrink: 0;
     position: relative;
+    transition: background 0.1s, color 0.1s;
 }
-
-.tab:not(.active):hover {
+.sessionTab:not(.active):hover {
     background: var(--color-subtle);
+    color: var(--text-2);
 }
-
 .active {
-    background: var(--color-surface);
-    color: var(--color-fg);
-    /* Sit above the bar separator so the tab merges into the content. */
+    background: var(--color-elevated);
+    color: var(--text-1);
+    font-weight: 500;
+    box-shadow: inset 0 -2px 0 var(--color-accent);
     z-index: 1;
 }
+.sessionIcon {
+    color: var(--color-accent);
+    flex: 0 0 auto;
+}
+.sessionIcon.connecting {
+    animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse {
+    0%,
+    100% {
+        opacity: 0.4;
+    }
+    50% {
+        opacity: 1;
+    }
+}
 
-/* While dragging, fade every tab except the one whose workspace is shown
-   (the split target), Termius-style — opacity carries the focus. */
+/* Drag states */
 .dimmed {
     opacity: 0.3;
 }
-
-/* The shown (split-target) tab during a drag: full opacity + a quiet
-   hairline so it reads as the focused one without a loud accent. */
 .shown {
     box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }
-
-
-/* Drag-to-reorder feedback. */
-.tab {
-    position: relative;
-}
-
 .dragging {
     opacity: 0.4;
 }
@@ -82,33 +119,8 @@
     align-items: center;
     gap: 2px;
     font-size: var(--text-xs);
-    color: var(--color-fg-faint);
+    color: var(--text-3);
     margin-left: 2px;
-}
-
-/* Soft gradient over the tab bar while dragging a pane out — a gentle hint
-   that this whole area accepts the drop (→ new tab). */
-.barDrop {
-    background-image: linear-gradient(
-        to bottom,
-        var(--color-accent-faint),
-        transparent
-    );
-}
-
-/* Merge target: dropping a dragged session here splits this tab with it. */
-.dropTarget {
-    box-shadow: inset 0 0 0 1px var(--color-accent);
-    background: var(--color-subtle);
-}
-
-/* Pinned vault tab: a touch of accent on its icon, no close button. */
-.vault {
-    color: var(--color-fg);
-}
-
-.vault.active {
-    background: var(--color-surface);
 }
 
 .label {
@@ -116,57 +128,52 @@
     text-overflow: ellipsis;
 }
 
-.dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--color-fg-faint);
-    flex-shrink: 0;
-}
-
-.dot--ready {
-    background: var(--color-success);
-}
-
-.dot--connecting,
-.dot--authenticating,
-.dot--host_key_pending {
-    background: #e0b341;
-}
-
-.dot--failed {
-    background: var(--color-danger);
-}
-
+/* Close: hidden until hover (always shown on the active tab), ≥20px hit area. */
 .close {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    width: 20px;
+    height: 20px;
     border-radius: var(--radius-sm);
-    color: var(--color-fg-faint);
-    padding: 2px;
+    color: var(--text-4);
     margin-right: -4px;
+    opacity: 0;
+    transition: opacity 0.1s, background 0.1s, color 0.1s;
 }
-
+.sessionTab:hover .close,
+.active .close {
+    opacity: 1;
+}
 .close:hover {
-    color: var(--color-fg);
-    background: var(--color-border);
+    color: var(--text-1);
+    background: var(--color-surface);
 }
 
+/* New-connection button */
 .add {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 30px;
-    margin: 6px 0 6px var(--space-1);
-    border-radius: var(--radius-sm);
-    color: var(--color-fg-muted);
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-md);
+    color: var(--text-3);
     flex-shrink: 0;
+    margin-left: 4px;
+}
+.add:hover {
+    background: var(--color-elevated);
+    color: var(--text-1);
 }
 
-.add:hover {
+/* Soft gradient while dragging a pane out → drop here for a new tab. */
+.barDrop {
+    background-image: linear-gradient(to bottom, var(--accent-soft), transparent);
+}
+.dropTarget {
+    box-shadow: inset 0 0 0 1px var(--color-accent);
     background: var(--color-subtle);
-    color: var(--color-fg);
 }
 
 .gear {
@@ -174,12 +181,11 @@
     align-items: center;
     justify-content: center;
     align-self: stretch;
-    width: 44px;
-    color: var(--color-fg-muted);
+    width: 40px;
+    color: var(--text-3);
     flex-shrink: 0;
 }
-
 .gear:hover {
     background: var(--color-subtle);
-    color: var(--color-fg);
+    color: var(--text-1);
 }

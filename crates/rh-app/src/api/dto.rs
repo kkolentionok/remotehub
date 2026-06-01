@@ -58,6 +58,11 @@ pub struct HostDto {
     pub color: Option<String>,
     pub detected_os: Option<String>,
     pub default_credential_id: Option<CredentialId>,
+    /// Optional bastion (ProxyJump): another saved host to route through.
+    pub jump_host_id: Option<HostId>,
+    pub agent_forwarding: bool,
+    /// RFC 3339, or `null` if never connected. Stamped on first Ready.
+    pub last_connected_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -77,6 +82,9 @@ impl From<Host> for HostDto {
             color: h.color,
             detected_os: h.detected_os,
             default_credential_id: h.default_credential_id,
+            jump_host_id: h.jump_host_id,
+            agent_forwarding: h.agent_forwarding,
+            last_connected_at: h.last_connected_at.map(|d| d.to_rfc3339()),
             created_at: h.created_at.to_rfc3339(),
             updated_at: h.updated_at.to_rfc3339(),
         }
@@ -140,6 +148,10 @@ pub struct HostCreateRequest {
     pub env_vars: Option<Vec<EnvVar>>,
     #[serde(default)]
     pub default_credential_id: Option<CredentialId>,
+    #[serde(default)]
+    pub jump_host_id: Option<HostId>,
+    #[serde(default)]
+    pub agent_forwarding: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -187,6 +199,10 @@ pub struct HostUpdateRequest {
     pub env_vars: Option<Vec<EnvVar>>,
     #[serde(default, deserialize_with = "deserialize_optional_optional")]
     pub default_credential_id: Option<Option<CredentialId>>,
+    #[serde(default, deserialize_with = "deserialize_optional_optional")]
+    pub jump_host_id: Option<Option<HostId>>,
+    #[serde(default)]
+    pub agent_forwarding: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -439,6 +455,127 @@ pub struct SessionInputRequest {
     pub data: Vec<u8>,
 }
 
+/// Open a local shell PTY at an initial terminal size (character cells).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalSessionOpenRequest {
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// Open an SFTP connection to a host.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SftpOpenRequest {
+    pub host_id: rh_core::HostId,
+}
+
+/// List a remote directory on an open SFTP session. Empty/"." path = home.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SftpListRequest {
+    pub session_id: rh_core::SessionId,
+    pub path: String,
+}
+
+/// Download a remote file into a local directory (keeps the file name).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SftpDownloadRequest {
+    pub session_id: rh_core::SessionId,
+    pub remote_path: String,
+    pub local_dir: String,
+}
+
+/// Upload a local file into a remote directory (keeps the file name).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SftpUploadRequest {
+    pub session_id: rh_core::SessionId,
+    pub local_path: String,
+    pub remote_dir: String,
+}
+
+/// Copy a file directly between two open SFTP sessions (streamed through
+/// the app — SFTP has no server-to-server copy).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SftpCopyRequest {
+    pub from_session: rh_core::SessionId,
+    pub remote_path: String,
+    pub to_session: rh_core::SessionId,
+    pub remote_dir: String,
+}
+
+/// Rename a remote entry in place (same directory).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SftpRenameRequest {
+    pub session_id: rh_core::SessionId,
+    pub path: String,
+    pub new_name: String,
+}
+
+/// Delete a remote file or directory (directories recursively).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SftpRemoveRequest {
+    pub session_id: rh_core::SessionId,
+    pub path: String,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SftpTransferKind {
+    Download,
+    Upload,
+    Copy,
+}
+
+/// A single streamed transfer with byte-progress events on a `Channel`.
+/// `session_id` is the remote endpoint (download source / upload dest /
+/// copy source); `to_session` is the copy destination.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SftpTransferRequest {
+    pub transfer_id: String,
+    pub kind: SftpTransferKind,
+    pub session_id: rh_core::SessionId,
+    pub to_session: Option<rh_core::SessionId>,
+    /// Source file: remote path for download/copy, local path for upload.
+    pub src_path: String,
+    /// Destination directory: local for download, remote for upload/copy.
+    pub dst_dir: String,
+    /// Optional destination filename (used for "keep both" conflict resolution);
+    /// defaults to the source basename.
+    pub dst_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SftpTransferCancelRequest {
+    pub transfer_id: String,
+}
+
+/// Create a directory `name` inside remote `parent`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SftpMkdirRequest {
+    pub session_id: rh_core::SessionId,
+    pub parent: String,
+    pub name: String,
+}
+
+/// RDP input event from the UI. `event` is the tagged `RdpInputEvent`
+/// union (mouse/keyboard/modifier-sync) deserialized by `rh-rdp`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RdpInputRequest {
+    pub session_id: rh_core::SessionId,
+    pub event: rh_rdp::RdpInputEvent,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionResizeRequest {
@@ -453,6 +590,80 @@ pub struct SessionAcceptHostKeyRequest {
     pub session_id: rh_core::SessionId,
     #[allow(dead_code)]
     pub fingerprint: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionReattachRequest {
+    pub session_id: rh_core::SessionId,
+}
+
+/// One live session, for restore-on-reload. `opened_at` is an RFC 3339
+/// string for a stable wire shape across chrono versions.
+#[derive(Debug, Serialize)]
+pub struct SessionSummaryDto {
+    pub session_id: rh_core::SessionId,
+    pub host_id: HostId,
+    pub hostname: String,
+    pub title: String,
+    pub protocol: Protocol,
+    pub state: rh_ssh::SessionState,
+    pub opened_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionListResponse {
+    pub sessions: Vec<SessionSummaryDto>,
+}
+
+/// Pinned host key for a host, for the technical-info panel.
+#[derive(Debug, Serialize)]
+pub struct KnownHostKeyDto {
+    pub key_type: String,
+    pub fingerprint_sha256: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnownHostGetResponse {
+    /// `None` if no key has been pinned for this host yet.
+    pub key: Option<KnownHostKeyDto>,
+}
+
+/// One pinned host key, for the management list.
+#[derive(Debug, Serialize)]
+pub struct KnownHostEntryDto {
+    pub hostname: String,
+    pub port: u16,
+    pub key_type: String,
+    pub fingerprint_sha256: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KnownHostsListResponse {
+    pub entries: Vec<KnownHostEntryDto>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnownHostForgetRequest {
+    pub hostname: String,
+    pub port: u16,
+}
+
+/// One trusted RDP server cert, for the management list.
+#[derive(Debug, Serialize)]
+pub struct RdpCertEntryDto {
+    pub hostname: String,
+    pub port: u16,
+    pub fingerprint_sha256: String,
+    pub subject: String,
+    pub trusted_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RdpCertsListResponse {
+    pub entries: Vec<RdpCertEntryDto>,
 }
 
 // =====================================================================

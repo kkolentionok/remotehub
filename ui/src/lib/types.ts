@@ -45,6 +45,9 @@ export interface HostDto {
     color: string | null;
     detected_os: string | null;
     default_credential_id: CredentialId | null;
+    jump_host_id: HostId | null;
+    agent_forwarding: boolean;
+    last_connected_at: string | null;
     created_at: string;
     updated_at: string;
 }
@@ -78,6 +81,7 @@ export interface CredentialDto {
 // =====================================================================
 
 export type SessionState =
+    | "resolving"
     | "connecting"
     | "authenticating"
     | "host_key_pending"
@@ -99,16 +103,24 @@ export type SshSessionEvent =
     | { kind: "state_changed"; state: SessionState }
     | { kind: "data"; bytes: number[] }
     | { kind: "auth_failed"; method: string }
-    | { kind: "host_key_prompt"; fingerprint_sha256: string; key_type: string }
+    | { kind: "host_key_prompt"; fingerprint_sha256: string; key_type: string; changed: boolean }
     | { kind: "error"; message: string }
     | { kind: "closed"; reason: CloseReason };
 
-export type SessionOpenOptions = {
-    protocol: "ssh";
-    cols: number;
-    rows: number;
-    term: string;
-};
+export type SessionOpenOptions =
+    | {
+          protocol: "ssh";
+          cols: number;
+          rows: number;
+          term: string;
+      }
+    | {
+          protocol: "rdp";
+          width: number;
+          height: number;
+          color_depth: number;
+          keyboard_layout: string;
+      };
 
 export interface SessionOpenRequest {
     host_id: HostId;
@@ -135,6 +147,59 @@ export interface SessionResizeRequest {
 export interface SessionAcceptHostKeyRequest {
     session_id: SessionId;
     fingerprint: string;
+}
+
+/** One live session returned by `session_list` (restore-on-reload). */
+export interface SessionSummaryDto {
+    session_id: SessionId;
+    host_id: HostId;
+    hostname: string;
+    title: string;
+    protocol: Protocol;
+    state: SessionState;
+    /** RFC 3339 timestamp. */
+    opened_at: string;
+}
+
+export interface SessionListResponse {
+    sessions: SessionSummaryDto[];
+}
+
+export interface SessionReattachRequest {
+    session_id: SessionId;
+}
+
+export interface KnownHostKeyDto {
+    key_type: string;
+    fingerprint_sha256: string;
+}
+
+export interface KnownHostGetResponse {
+    key: KnownHostKeyDto | null;
+}
+
+export interface KnownHostEntryDto {
+    hostname: string;
+    port: number;
+    key_type: string;
+    fingerprint_sha256: string;
+    created_at: string;
+}
+
+export interface KnownHostsListResponse {
+    entries: KnownHostEntryDto[];
+}
+
+export interface RdpCertEntryDto {
+    hostname: string;
+    port: number;
+    fingerprint_sha256: string;
+    subject: string;
+    trusted_at: string;
+}
+
+export interface RdpCertsListResponse {
+    entries: RdpCertEntryDto[];
 }
 
 // =====================================================================
@@ -179,6 +244,7 @@ export interface Settings {
     app_startup_screen: StartupScreen;
     ssh_keepalive_interval_secs: number;
     ssh_known_hosts_strict: boolean;
+    local_shell: string;
 }
 
 // =====================================================================
@@ -206,6 +272,8 @@ export interface HostCreateRequest {
     startup_command?: string | null;
     env_vars?: EnvVar[] | null;
     default_credential_id?: CredentialId | null;
+    jump_host_id?: HostId | null;
+    agent_forwarding?: boolean;
 }
 
 /**
@@ -233,6 +301,8 @@ export interface HostUpdateRequest {
     startup_command?: string | null;
     env_vars?: EnvVar[];
     default_credential_id?: CredentialId | null;
+    jump_host_id?: HostId | null;
+    agent_forwarding?: boolean;
 }
 
 export interface GroupCreateRequest {
@@ -388,3 +458,93 @@ export const EVENT_HOSTS_CHANGED = "hosts:changed";
 export const EVENT_GROUPS_CHANGED = "groups:changed";
 export const EVENT_CREDENTIALS_CHANGED = "credentials:changed";
 export const EVENT_SETTINGS_CHANGED = "settings:changed";
+
+// =====================================================================
+// RDP session contract (Stage 4) — mirrors crates/rh-rdp/src/lib.rs
+// =====================================================================
+
+export type RdpMouseButton = "left" | "middle" | "right";
+
+/** Input the UI sends to the RDP actor. `kind`-tagged to match Rust. */
+export type RdpInputEvent =
+    | { kind: "mouse_move"; x: number; y: number }
+    | {
+          kind: "mouse_button";
+          button: RdpMouseButton;
+          pressed: boolean;
+          x: number;
+          y: number;
+      }
+    | { kind: "mouse_wheel"; delta: number; x: number; y: number }
+    | { kind: "key"; code: string; pressed: boolean; repeat?: boolean }
+    | {
+          kind: "sync_modifiers";
+          ctrl: boolean;
+          alt: boolean;
+          shift: boolean;
+          meta: boolean;
+          caps_lock: boolean;
+          num_lock: boolean;
+          scroll_lock: boolean;
+      }
+    | { kind: "release_all_modifiers" };
+
+/** Request payload for the `rdp_session_input` command. */
+export interface RdpInputRequest {
+    session_id: SessionId;
+    event: RdpInputEvent;
+}
+
+export type RdpPixelFormat = "bgra8" | "rgba8";
+export type RdpState = "resolving" | "connecting" | "authenticating" | "ready" | "closed";
+
+export interface RdpFrameRegion {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
+/** Events the RDP actor emits to the UI. `data` is the framebuffer
+ *  region's pixels (length === width*height*4). */
+export type RdpSessionEvent =
+    | { kind: "state_changed"; state: RdpState }
+    | {
+          kind: "frame";
+          region: RdpFrameRegion;
+          format: RdpPixelFormat;
+          data: number[] | Uint8Array;
+      }
+    | {
+          kind: "frame_batch";
+          tiles: {
+              x: number;
+              y: number;
+              width: number;
+              height: number;
+              format: "png" | "jpeg";
+              base64: string;
+          }[];
+      }
+    | { kind: "resized"; width: number; height: number }
+    | { kind: "pointer_position"; x: number; y: number }
+    | { kind: "cert_prompt"; fingerprint_sha256: string; subject: string }
+    | { kind: "clipboard"; mime: string; data: string }
+    | { kind: "error"; message: string }
+    | { kind: "closed"; reason: { kind: string; code?: number } };
+
+// --- Local filesystem (SFTP left pane) ---
+export interface FsEntry {
+    name: string;
+    path: string;
+    is_dir: boolean;
+    size: number;
+    modified: number | null;
+    perms: string | null;
+}
+
+export interface FsListResponse {
+    path: string;
+    parent: string | null;
+    entries: FsEntry[];
+}

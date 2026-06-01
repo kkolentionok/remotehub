@@ -285,7 +285,7 @@ function HostRow({
                 title={host.protocol === "ssh" ? t("host.doubleClickConnect") : undefined}
                 type="button"
             >
-                <HostIcon />
+                <HostIcon detectedOs={host.detected_os} />
                 <span className={styles.hostName}>{host.name}</span>
                 <ProtocolBadge protocol={host.protocol} size="sm" />
             </button>

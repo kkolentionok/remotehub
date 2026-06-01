@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import { useSessionsStore } from "../../store";
 import type { PaneNode } from "../../lib/paneTree";
 import { SessionView } from "../session/SessionView";
+import { SftpView } from "../sftp/SftpView";
 import styles from "./PaneGroup.module.css";
 
 interface Ctx {
@@ -145,12 +146,16 @@ function PaneLeaf({ sessionKey, ctx }: { sessionKey: string; ctx: Ctx }) {
                 if (!focused) setActivePane(ctx.tabId, sessionKey);
             }}
         >
-            <SessionView
-                session={session}
-                visible={ctx.tabVisible}
-                focused={ctx.tabVisible && focused}
-                showHeader={ctx.paneCount > 1}
-            />
+            {session.sftp ? (
+                <SftpView session={session} visible={ctx.tabVisible} />
+            ) : (
+                <SessionView
+                    session={session}
+                    visible={ctx.tabVisible}
+                    focused={ctx.tabVisible && focused}
+                    showHeader={ctx.paneCount > 1}
+                />
+            )}
             {dropActive && (
                 <div
                     className={styles.dropOverlay}

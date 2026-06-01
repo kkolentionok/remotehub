@@ -11,43 +11,47 @@ export type SaveStatus =
     | { kind: "error"; message: string };
 
 /**
- * Small indicator displayed alongside other header buttons.
- *
- * - `idle` renders an empty box (preserves layout so neighbouring
- *   icons don't shift when status appears/disappears).
- * - `pending` shows a small muted dot — the user is still typing,
- *   the debounce timer hasn't fired yet.
- * - `saving` shows a spinner.
- * - `saved` shows a check; the caller transitions back to `idle`
- *   after a short delay (handled in the parent's reducer).
- * - `error` shows a red circle with a tooltip containing the message.
+ * Save status as an always-visible pill under the inspector title:
+ *  - idle / pending → muted check + "All changes saved" (resting state)
+ *  - saving         → spinner + "Saving…"
+ *  - saved          → green check + "Saved" (parent flips back to idle ~1.5s)
+ *  - error          → red icon + label, full message in the tooltip
  */
 export function SaveStatusIndicator({ status }: { status: SaveStatus }) {
     const { t } = useT();
+
+    if (status.kind === "saving") {
+        return (
+            <span className={styles.pill} aria-live="polite">
+                <Loader2 size={12} className={styles.spinner} />
+                {t("host.save.saving")}…
+            </span>
+        );
+    }
+    if (status.kind === "saved") {
+        return (
+            <span className={`${styles.pill} ${styles.saved}`} aria-live="polite">
+                <Check size={12} />
+                {t("host.save.saved")}
+            </span>
+        );
+    }
+    if (status.kind === "error") {
+        return (
+            <span
+                className={`${styles.pill} ${styles.error}`}
+                title={status.message}
+                aria-live="polite"
+            >
+                <XCircle size={12} />
+                {t("host.save.error")}
+            </span>
+        );
+    }
     return (
-        <div className={styles.wrap} aria-live="polite">
-            {status.kind === "pending" && (
-                <span className={styles.pendingDot} title={t("host.save.pending")} />
-            )}
-            {status.kind === "saving" && (
-                <Loader2 size={15} className={styles.spinner} aria-label={t("host.save.saving")} />
-            )}
-            {status.kind === "saved" && (
-                <Check
-                    size={15}
-                    className={styles.saved}
-                    aria-label={t("host.save.saved")}
-                />
-            )}
-            {status.kind === "error" && (
-                <span title={status.message} className={styles.errorWrap}>
-                    <XCircle
-                        size={15}
-                        className={styles.error}
-                        aria-label={t("host.save.error")}
-                    />
-                </span>
-            )}
-        </div>
+        <span className={styles.pill} aria-live="polite">
+            <Check size={12} className={styles.mute} />
+            {t("host.save.allSaved")}
+        </span>
     );
 }

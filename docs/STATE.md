@@ -1,8 +1,143 @@
 # RemoteHub — Project State & Handoff
 
-**Last updated:** Credential-safety + re-auth UX pass. Saved password is locked/muted (eye reveals & copies, pencil edits, no ✕ — delete by clearing the revealed text), SSH-key add via dropdown + paste/import modal, inline re-auth screen on auth failure (password + SSH-key picker, both saved to the host), passwordless fallback, split-tab label. SSH (Stage 2) done & live-verified.
+**Last updated:** Host info-panel polish — dropped the debug ULID `ID` row; added **"Last connection"** (`last_connected_at`, stamped when a session reaches Ready) and the copyable host-key fingerprint. SSH hardening (TOFU/agent/restore/env) below. **All live-verified on Windows** (compiled + manually tested).
 
-## Latest — credential safety, key-add UX, inline re-auth (DONE, frontend, tsc+vite green)
+**Follow-up 2 (region-diff — the real fix):** instrumentation revealed the smoking gun — full-frame JPEG encode was **~130ms** each (the RGBA→RGB copy ran in *unoptimized* rh-rdp; the dev profile only optimized dependencies, not our own crate), capping fps at ~7 and blocking the worker; and full ~130KB base64 frames congested the single webview IPC bridge, so input invokes (clicks) queued behind them and arrived 3-15s late. Fixes: (1) **region-diff** — compute the changed bounding box vs the last frame and JPEG only that rectangle (`FrameJpeg` now carries x,y); a click/keystroke touches a tiny area → tiny encode + tiny payload → no IPC congestion. Frame coalescing was *removed* (each region is a distinct rect; dropping one leaves a stale patch). (2) `[profile.dev.package.rh-rdp] opt-level = 3` so the hot pixel loops are optimized in dev too. Added `rdp frame stats` (fps / avg encode ms / payload KB) + per-click logging for diagnosis.
+
+## Latest — RDP perf pass: JPEG frame transport + tight input poll
+
+First report of real-world lag (vs native mstsc). Two fixes for the two causes:
+- **Input latency** — the worker's idle read timeout was 400ms, so a click sent during an idle read waited up to 400ms before the worker drained + forwarded it. Dropped `READ_POLL` to **16ms** (read_pdu still returns immediately on data; this only bounds the idle wait). This is the dominant click-responsiveness fix.
+- **Frame transport** — we were shipping the full 1280×800×4 = 4MB RGBA framebuffer as a serde-JSON number array (~14MB of text) every 100ms (the bottleneck flagged in `rdp-session.md` Open-Q #1). Now: JPEG-compress (quality 72) + base64 → new `RdpSessionEvent::FrameJpeg`, ~40-60KB/frame (~250× smaller), **only sent when the framebuffer actually changed** (raw compare against the last-sent buffer → zero traffic when idle), ~15fps cap. `image` + `base64` moved into `rh-rdp` deps. Frontend decodes the data URL via `Image`/`drawImage`.
+
+Native mstsc will still edge it out (hardware codecs + protocol-level region diffing), but this closes the big gap. Region-diffed frames + an off-thread encoder are the next perf step if needed.
+
+**Follow-up (input backlog + debug-build perf):** first real test showed >10s click latency. Root causes + fixes:
+- **Mouse-move flood** — every DOM mousemove was one IPC call; the queue grew faster than the worker drained it, so a click sat behind a flood of moves. Fixed at both ends: frontend throttles `mouse_move` to ~25/s (clicks/wheel/keys still immediate; clicks carry their own coords so dropping intermediate moves is safe), and the worker **coalesces consecutive moves** when draining (only the latest is sent).
+- **Debug-build codec cost** — `cargo tauri dev` is unoptimized, making JPEG encode + graphics decode 10-30× slower. Added `[profile.dev.package."*"] opt-level = 3` so dependencies are optimized even in dev (our crates stay unoptimized for fast iteration). First rebuild after this is slow (deps recompile once), then cached.
+
+## Latest — RDP round 2b-2 (mouse input): interactive pointer in the app
+
+Input API **validated by the spike first** (the project's rule for unproven IronRDP surface): extended `rdp_spike` to inject a right-click — it compiled clean (confirming `ironrdp-input 0.5`: `Database::new/apply`, `Operation::MouseMove/MouseButtonPressed/MouseButtonReleased`, `MousePosition`, `ActiveStage::process_fastpath_input` → `ResponseFrame`) and the context menu appeared in the captured PNG. Timing lesson baked in: pointer-move and click must be separated by a beat (in the live app this is natural — real user motion).
+
+Ported the proven mouse path into the app:
+- **Actor**: command bridge added — `run` forwards `RdpCommand::Input` to the worker via a std channel; the worker drains it each loop iteration and encodes via `send_input` (mouse move / button / wheel). Keyboard + modifier-sync events are accepted but ignored (next slice — they need the scancode map + `Scancode` API, still unproven).
+- **rh-app**: `rdp_session_input` command + `RdpInputRequest` DTO → `RdpSessionManager::send_input` → `RdpCommand::Input`.
+- **Frontend** (FE verified): `rdpSession.sendInput` ipc + `RdpInputRequest` type; `SessionView.handleRdpInput` now forwards viewport events to the actor (fire-and-forget). The `ironrdp` meta-crate needs the **`input`** feature (added to `rh-rdp/Cargo.toml`).
+
+You can now **click and scroll** the live desktop. Keyboard is 2b-2b. (Known MVP: mouse-move fires one IPC per event — fine now, throttle/coalesce later with the transport work.)
+
+## Latest — RDP round 2b-1: live desktop in the app (read-only) — spike PROVEN
+
+**Spike (2a) succeeded against the real Windows test server** — `rdp_spike` connected (TLS + NTLM/CredSSP), decoded graphics and saved a full-colour 1280×800 desktop PNG. The IronRDP 0.14 wave + the exact `connector::Config` field set + the blocking connect sequence are confirmed end-to-end on Windows.
+
+**2b-1 ports that proven path into the app as a read-only live viewer.** Because the validated code is *blocking*, the actor runs it on a dedicated OS thread and bridges to async: events out via the Tokio `UnboundedSender` (its `send` is sync), shutdown in via a shared `AtomicBool`. No async-IronRDP API guessing — it's the spike code, verbatim, behind a poll loop (400 ms read timeout so it notices shutdown; full framebuffer pushed at ~10 fps — MVP, region-diff + faster transport deferred per spec Open-Q #1).
+
+- IronRDP moved `rh-rdp` **[dev-dependencies] → [dependencies]** (so the app build pulls it now; the `rdp_spike` example still builds via its remaining dev-deps). First `cargo tauri dev` compile will be slow and *may* surface minor API drift in `actor.rs`, but the connect code is identical to the proven spike, so risk is low.
+- `rh-rdp/src/actor.rs` rewritten: `spawn_session` → worker thread (`blocking_session`) doing connect + ActiveStage loop, emitting `StateChanged`(Connecting→Authenticating→Ready)/`Frame`/`Closed`/`Error`. Input/Resize accepted but dropped (2b-2).
+- `rh-app`: new `RdpSessionManager` (thin registry, no scrollback — a framebuffer isn't replayable) + `rdp_session_open`/`rdp_session_close` commands (resolve host+password cred, reveal, spawn, forward events→`Channel<RdpSessionEvent>`). Wired into `AppState` + `main.rs`.
+- Frontend (FE verified — tsc + vite clean): `SessionOpenOptions` now a ssh|rdp union; `rdpSession` ipc namespace; store routes RDP events (frame-sink keyed by session, latest-frame buffer until the viewport mounts) and branches `createSession`/`teardownSession` on protocol; `RdpViewport` self-registers its frame sink via `registerSessionViewport`. Opening an RDP host now shows the **live remote desktop** (read-only, ~10 fps, no input yet).
+
+Run: `cargo tauri dev`, then open the RDP host in RemoteHub → live desktop. **2b-2 next: input** (mouse/keyboard + modifier-sync) via IronRDP's `input` API — new/unproven, so it's a separate pass.
+
+## Latest — RDP connectivity spike (round 2a): isolated IronRDP connect → PNG
+
+Before wiring IronRDP into the actor/app, validate it in isolation. Added `crates/rh-rdp/examples/rdp_spike.rs` — a near-verbatim port of IronRDP's official blocking `screenshot.rs`: connects (TLS + CredSSP), decodes graphics until idle, saves the desktop to PNG. IronRDP lives in `rh-rdp` **[dev-dependencies]** only (`ironrdp 0.14` + `ironrdp-blocking` + `sspi` + `tokio-rustls` + `x509-cert` + `image`), so the normal app build is unaffected — only `cargo run -p rh-rdp --example rdp_spike` pulls it.
+
+Run: `cargo run -p rh-rdp --example rdp_spike -- --host <IP> -u <USER> -p <PASS> [-d <DOMAIN>] -o shot.png`. If `shot.png` shows the desktop → IronRDP connects to this server and the exact 0.14 API/versions are confirmed. Round 2b then ports the validated connect into the async `rh-rdp` actor + rh-app session path + frontend viewport routing, and adds input. Expect possible version/feature drift on first compile (the spike's purpose is to surface it).
+
+## Latest — RDP actor shell (round 1; compiles, no IronRDP yet)
+
+`rh-rdp` now has the actor shell mirroring rh-ssh: `spawn_session` + `RdpCommand` channel + lifecycle events. No IronRDP deps yet — it reaches `Authenticating` then emits a graceful "not wired" close. Clean compile; round 2 fills `connect_and_pump` (TLS+CredSSP connect, ActiveStage graphics→Frame, input→fastpath) against the real `ironrdp-client` async source, plus the rh-app session wiring + frontend live-routing.
+
+## Latest — RDP trusted-cert store (TOFU for RDP), frontend verified; Rust mirrors known_hosts
+
+Spike-independent prep for RDP. Trusted RDP server certificates get a TOFU store — the exact analog of known_hosts: `RdpCertStore` trait + `TrustedCert`/`RdpCertEntry` (rh-core), `SqliteRdpCertStore` + `rdp_known_certs` table (migration **v7→v8**, additive, `CURRENT_SCHEMA_VERSION=8`), `rdp_certs_list`/`rdp_cert_forget` commands, wired into `AppState`. The actor will use `lookup`/`remember` for cert pinning when it lands. Surfaced as a third tab ("RDP certificates") in the Security dialog (empty until you connect, like Known Hosts was). All a mirror of the SSH known_hosts work — low risk.
+
+## Latest — RDP foundation: contract types + viewport (frontend verified; RUST = types only)
+
+First RDP slice. Deliberately **no IronRDP yet**: the spec mandates a connectivity/transport spike first (run `ironrdp-client` against a real RDP server; benchmark frame transport — Tauri Channel `Vec<u8>`→JSON is too slow at 1080p60, candidates are custom-protocol / localhost WS / SharedArrayBuffer; Open-Qs #1/#5). That spike needs real hardware (yours), so the connect/decode actor is the next slice.
+
+**Contract types** (`crates/rh-rdp/src/lib.rs`, pure types, no IronRDP — compiles as a normal rh-app dep): `RdpInputEvent` (MouseMove/MouseButton/MouseWheel/Key + **SyncModifiers**/**ReleaseAllModifiers** for focus-sync), `RdpSessionEvent` (StateChanged/Frame{region,format,data}/PointerPosition/CertPrompt/Clipboard/Error/Closed), `RdpState`, `PixelFormat`, `FrameRegion`, `RdpCloseReason`, `ColorDepth`, `RdpOpenOptions`, `RevealedRdpCredential`, `RdpSpawnParams`, `ModifierState`, `RdpError(+into_close_reason)`. Layering like rh-ssh (events over mpsc; rh-app bridges to Tauri Channel — NOT tauri in rh-rdp). Mirrored in `ui/src/lib/types.ts`.
+
+**`RdpViewport`** (`ui/src/components/session/RdpViewport.tsx`, verified): `<canvas>` + imperative `applyEvent(frame)` (builds `ImageData`, BGRA→RGBA swap when needed, `putImageData` at region) + full mouse/keyboard capture (display→backing coord mapping) + **focus/modifier sync** — the spec's required-in-foundation fix for stuck modifiers: `blur`→`release_all_modifiers`, `focus`→`sync_modifiers` from last-known physical state (tracked via `getModifierState` on every mouse/key event). Wired into `SessionView` (RDP protocol branch); `onInput` currently routes to a placeholder (`handleRdpInput`) — the backend input channel lands with the actor. RDP sessions still can't be created (session_open → not_implemented) so the branch is dormant but type-complete.
+
+### Next RDP slice (needs your spike): IronRDP connect + decode actor
+1. Spike: `ironrdp-client` vs a Windows VM / xrdp — confirm happy-path + pin exact crate versions.
+2. Pick frame transport (bench the three options).
+3. `rh-rdp` actor: connector + `ActiveStage` loop + cert store (analog of known_hosts) + input mapping (browser code→PS/2 scancode) + frame coalescing. `rh-app`: RDP path in `session_open`, `rdp_session_input` command, bridge events→Channel. Wire `RdpViewport` to live frames + `handleRdpInput` to the channel.
+
+
+
+Last SSH item. `ssh -A`: forward the local agent so onward auth on the remote works.
+
+**Data model:** `Host.agent_forwarding: bool`. Migration **v6→v7** `ALTER TABLE hosts ADD COLUMN agent_forwarding INTEGER NOT NULL DEFAULT 0` (`CURRENT_SCHEMA_VERSION=7`, v1.sql bumped + column). Wired through host_store (bool↔INTEGER, `i64::from` / `!= 0`), HostDto, Host{Create,Update}Request (plain `Option<bool>`).
+
+**rh-ssh:** `SshSpawnParams.agent_forwarding`. The actor calls `channel.agent_forward(false)` after channel-open when enabled (confirmed russh API — advertises acceptance). ⚠️ **Serving side deferred:** russh 0.45's client callback is `server_channel_open_agent_forward(&mut self, channel: ChannelId, _)` — it hands a `ChannelId`, not a `Channel`, so back-channel bytes arrive via the `data()` callback and replies go through `session.handle().data(...)`. That stateful relay needs its own tested pass; for now we only advertise (request-only). My first attempt used a `Channel` arg → E0053; removed.
+
+**UI:** "Forward SSH agent (ssh -A)" checkbox in the host form's Advanced section (edit mode only), saved immediately via `host_update` (same pattern as jump host). `.checkboxRow` style added.
+
+### SSH hardening status: ✅ COMPLETE
+TOFU/known_hosts + management UI, SSH-agent auth, restore-on-reload, env passthrough, keepalive, OS auto-detect (+ sidebar icon), last_connected, ProxyJump, agent forwarding. Next major: **Stage 4 — RDP via IronRDP** (see `docs/specs/rdp-session.md`, sticky-modifier focus-sync requirement), or Sync/master-password.
+
+
+
+A host can now route through a **bastion** — another saved SSH host used as a jump. Agent-forwarding is the next (last) SSH item; kept separate (russh-heavy).
+
+**Data model:** `Host.jump_host_id: Option<HostId>` (plain nullable TEXT, no FK — a deleted bastion is handled at connect time). Migration **v5→v6** `ALTER TABLE hosts ADD COLUMN jump_host_id TEXT` (chained runner; `CURRENT_SCHEMA_VERSION=6`, v1.sql bumped + column added). Wired through host_store INSERT/UPDATE/SELECT/row_to_host, HostDto/HostFullDto, Host{Create,Update}Request (update guards against self-reference).
+
+**Connect flow (actor):** `SshSpawnParams.jump: Option<JumpParams{hostname,port,host_id,credentials}>`. When set, the actor connects the bastion (`russh::client::connect`, auth via `try_all_auth`), opens `channel_open_direct_tcpip(target,…)`, wraps it `into_stream()`, and runs the target transport over it via `connect_stream` — then proceeds identically (auth/PTY/shell/pump). The bastion `Handle` is kept alive (`_bastion_keepalive`) for the session. Refactor: `ClientHandler.auto_accept` (bastion pins its key silently — no double prompt; target keeps normal interactive TOFU); new helpers `ConnectOutcome` + `drive_target_connect` (drives either connect future while forwarding host-key decisions) + `try_all_auth`. ⚠️ russh-version-sensitive calls flagged: `channel_open_direct_tcpip`, `Channel::into_stream`, `connect_stream`.
+
+**rh-app:** `session_open` resolves the jump host (must exist + be SSH), reveals its creds via new self-contained helper `revealed_creds_for` (mirrors target reveal: passwordless fallback, key→agent→password order). One level only (a bastion's own `jump_host_id` is ignored).
+
+**UI:** "Jump host" combobox in the host form's **Advanced** section (edit mode only), listing other SSH hosts (excludes self); empty = direct. Reuses the `Combobox` (clearable). Saved **immediately** on change via `host_update` (not threaded through the debounced text-field autosave — lower risk). Spec appended to `docs/specs/ssh-session.md`.
+
+
+
+Two of the four remaining SSH items (jump-host + agent-forwarding are the next, dedicated pass — they restructure the connect path and are the most russh-fragile, so they're kept separate).
+
+**OS auto-detect (Stage 2.2):** the actor runs a best-effort probe on a *separate* exec channel right after Ready (doesn't touch the PTY): `uname -s; ___RH___; cat /etc/os-release`, parsed by `parse_os_slug` (5 unit tests) → "ubuntu"/"debian"/"macos"/"windows"/"linux"/… Emits a new `SshSessionEvent::DetectedOs { os }` which the `SessionManager` pump **consumes** (not forwarded to the UI) and persists via the new `HostStore::mark_detected_os` (targeted UPDATE, like `mark_connected`). The OS chip in the host header (already built) shows it on the next `host_get`. The **sidebar host icon** now switches to the OS logo too: `HostIcon` maps the slug → a Simple Icons glyph via `react-icons/si` (new dep; rendered MONOCHROME via currentColor — no brand colors, per the design language), fallback to the generic `Server`. To refresh the sidebar live after the first connect, the detect path emits `hosts:changed` (AppHandle plumbed into `SessionManager::register`), which the UI already reloads on. ⚠️ The exec probe (`Channel::exec`) is russh-version-sensitive — flagged in `detect_os`.
+
+**Known Hosts management:** `KnownHostsStore::list()` + `KnownHostEntry` (rh-core), `known_hosts_list`/`known_host_forget` commands, `knownHosts` ipc namespace. Surfaced as a **second tab in the key/credentials dialog** (now titled "Security"/"Безопасность"): tab 1 = Credentials (unchanged), tab 2 = Known hosts — list of `hostname:port · key_type · SHA256:… · trusted-date` with a trash button to forget (next connect re-prompts TOFU). Per-host jump/agent-forward will be host-form fields, NOT here (deliberately kept the footer clean — confirmed UX call).
+
+
+
+The ⓘ technical-info popover now shows Created / Updated / **Last connection** / Fingerprint. The opaque ULID `ID` row was removed (debug-only; kept the value out of the user's face). Fingerprint is copy-to-clipboard (`SHA256:<fp>` + key-type hint).
+
+- **`last_connected_at: Option<DateTime<Utc>>` on `Host`** (rh-core), machine-set — never written through create/update. New `HostStore::mark_connected(id, when)` does a targeted `UPDATE hosts SET last_connected_at=?`. The `SessionManager` event pump stamps it once, on the first `Ready` event (so it means *connected*, not *attempted*); `Hub.connected_stamped` guards against repeats.
+- **Migration v4 → v5**: additive `ALTER TABLE hosts ADD COLUMN last_connected_at TEXT`. `db.rs` `init_or_migrate` was refactored into a **chained runner** (`MIGRATIONS: &[(from, sql)]` + `has_migration_chain`): any DB with a contiguous path (v2→v3→v4→v5) migrates forward with no data loss; only a gap (pre-v2) drop-recreates. `host_store` INSERT/SELECT/`row_to_host` updated for the column; `v1.sql` carries it + version '5'.
+- Exposed as `HostDto.last_connected_at` (RFC 3339 string | null). Frontend shows `formatDate(...)` or "Never"/"Ещё не подключались". Info-label column widened to 104px; RU "Подключение".
+
+
+
+## Latest — SSH hardening: TOFU, agent, restore-on-reload, env (DONE, live-verified)
+
+Closes the Stage-2 follow-ups before RDP. **Compiled & live-verified on Windows**: TOFU prompt (unknown/changed/reject + silent on known), SSH-agent auth, restore-on-reload (F5 brings sessions back with scrollback), env passthrough, last-connection stamp, copyable fingerprint. The agent block compiled against russh 0.45 as written.
+
+**known_hosts / TOFU (rh-core + rh-storage + rh-ssh + rh-app):**
+- New `KnownHostsStore` trait (`rh-core/store.rs`) + `KnownHostKey { key_type, fingerprint_sha256 }` (OpenSSH SHA256, base64 no-pad). `SqliteKnownHostsStore` (`rh-storage/known_hosts_store.rs`, upsert by `(hostname, port)`, 5 tests). New `known_hosts` table.
+- **Migration v3→v4 is incremental, data-preserving** (`db.rs` `CURRENT_SCHEMA_VERSION = 4`): `Some(3)` → `CREATE TABLE known_hosts`; plus a chained `Some(2)` → v3 ALTER then v4 CREATE so a two-versions-behind DB isn't wiped. `v1.sql` updated for fresh installs (known_hosts table + version '4'). **Same rule as before: additive change = incremental ALTER/CREATE path, never a bare v1.sql bump.**
+- Actor (`rh-ssh/actor.rs`): `check_server_key` now computes the SHA256 fingerprint, looks up the pin, and — on unknown (when `strict`) or **changed** (always) — emits `HostKeyPrompt { fingerprint_sha256, key_type, changed }`, sets state `host_key_pending`, and **blocks** on a decision. The decision arrives as `SessionCommand::HostKeyDecision(bool)`, forwarded into the handler from the command channel while the connect future is in flight (select loop in `connect_and_pump`). Accept → pin + `Ok(true)`; reject → `Ok(false)` → mapped to `CloseReason::HostKeyRejected` via a `rejected` flag + new `SshError::HostKeyRejected`.
+- `session_accept_host_key`/`session_reject_host_key` now send `HostKeyDecision(true/false)` (no longer no-ops / hard close). Frontend prompt surface already existed; added a `changed` flag → red-accented warning banner + `session.hostKey.changedPrompt` string (EN/RU).
+- `strict_host_key` comes from `Settings.ssh_known_hosts_strict` (default true). Non-strict auto-pins unknown keys silently but **still prompts on a changed key**.
+- **Pinned fingerprint shown in the host technical-info panel** (the ⓘ popover): new `known_host_get` command (resolves host_id → hostname/port → `KnownHostsStore::lookup`) + `hosts.knownHostKey` ipc. The popover's ID and fingerprint rows are now copy-to-clipboard (`CopyableValue` in HostDetail.tsx; `SHA256:<fp>` + key-type hint). Shows "not pinned yet" until first trust.
+
+- **SSH-agent auth (rh-ssh + rh-app):**
+- `RevealedCredential::Agent { username }`; `CredentialKind::SshKeyAgent` now produces it (was skipped). Actor `try_auth_agent`: connect to agent (unix `$SSH_AUTH_SOCK` via `AgentClient::connect_env`; **windows** `\\.\pipe\openssh-ssh-agent` named pipe — covers OpenSSH agent and modern Pageant), `request_identities`, then `authenticate_future` per identity. **Best-effort & non-fatal** — any agent failure returns `Ok(false)` so other methods still run. ⚠️ **This is the most russh-version-fragile block** — if it doesn't compile, the fix is local to `try_auth_agent` (and possibly a russh `agent` feature flag); TOFU/restore/env are independent of it.
+- Auth order is keys → agent → password.
+- **Agent UI (HostDetail credential panel):** the "+ SSH-ключ" picker now has a **"Use SSH agent"** footer → creates/reuses an `ssh_key_agent` credential (no secret) and links it; shows as a `Server`-icon chip with ✕ to unlink. Key and agent share the one "method slot" (mutually exclusive in the UI; password is always its own field). This is the only way to create an agent credential — before, `ssh_key_agent` was reachable only via the IPC console.
+
+**Restore-on-reload (rh-app `SessionManager` rewrite + frontend):**
+- The Rust process survives a webview reload, so actors stay alive. `SessionManager` now holds a per-session `Hub` { tx_cmd, abort, meta, state, **256 KB output ring**, current `Channel` sink }. `register` absorbs the old event-bridge: it pumps actor events → records into the ring + forwards to the live channel. New `list()` (→ `session_list` returns real `SessionSummaryDto[]`) and `reattach(id, channel)` (→ new `session_reattach` command) which swaps the sink and replays buffered scrollback + current state.
+- Frontend: `restoreSessions()` store action (called from `AppShell` mount) calls `session_list`, rebuilds one tab per live session, and `session_reattach`es a fresh channel; dead/closed sessions are skipped, and a reattach miss drops the stale tab. **Split layouts are NOT reconstructed** — each restored session comes back as its own tab (flat). **Edge:** a session reloaded mid host-key-prompt restores without the prompt object (fingerprint isn't buffered) — rare; user reconnects.
+
+**Env + keepalive (rh-ssh + rh-app):**
+- `SshSpawnParams.env_vars: Vec<(String,String)>` from `host.env_vars`; actor sends `channel.set_env(false, k, v)` before the shell (servers honor only their `AcceptEnv`; want_reply=false so an unaccepted var can't fail the channel).
+- Keepalive interval now from `Settings.ssh_keepalive_interval_secs` (0 = disabled) instead of a hardcoded default.
+
+**Build/run after pulling this:** `cargo tauri dev` (Rust + migration changed). The v3→v4 migration is additive — existing hosts/creds/settings are preserved; only a brand-new `known_hosts` table is added.
+
+
 
 UX pass on top of the auth work below. All frontend; verified `tsc --noEmit` + `vite build`.
 
@@ -83,7 +218,7 @@ Replaced the permanent left-sidebar shell with a Termius/Windows-Terminal-style 
 - **v1 simplifications (to land a working connect first):** password auth only (SSH-key/agent → friendly not-implemented); host key auto-accepted TOFU (no `known_hosts` pinning, no interactive prompt blocking inside the russh handler — UI prompt surface stays dormant); no keepalive.
 - ✅ **COMPILED & LIVE-VERIFIED.** russh pinned `0.45`. Auth has since grown to multi-method (key/.ppk/password/passwordless) — see the "Latest" section at the top. Keep a known-good zip as rollback when touching the backend.
 
-**Part 2 follow-ups (after it connects):** known_hosts pinning + interactive TOFU (wire `host_key_prompt`/`session_accept_host_key`), SSH-key auth, keepalive, `session_list` restore-on-reload.
+**Part 2 follow-ups:** ✅ all done — known_hosts pinning + interactive TOFU, SSH-key auth, SSH-agent auth, keepalive, `session_list` restore-on-reload, env passthrough (see the SSH-hardening "Latest" section at top). Next is Stage 4 (RDP).
 
 ---
 
@@ -161,9 +296,18 @@ remotehub/
 | 1.9 | Command bar (top, search + user@host:port parser) | ✅ Done |
 | 1.10 | Import .rdp files | ⬜ Future |
 | 1.12 | Export/Import JSON (our format) | ⬜ Future |
-| 2.x | SSH session actors (russh) | ⬜ Future |
-| 2.2 | OS auto-detect after connect → HostIcon switches to Simple Icons SVG | ⬜ Future |
-| 4.x | RDP (IronRDP) | ⬜ Future |
+| 2.x | SSH session actors (russh) | ✅ Done |
+| 2.2 | OS auto-detect after connect (exec probe → detected_os) | ✅ Done (pending compile) |
+| 2.3 | SSH hardening: ProxyJump (jump host) + agent forwarding (request-only; serving side TODO) | ✅ Done (compiles) |
+| QA-2 | **Manual end-to-end QA of SSH hardening on real hosts** — agent-forward (`ssh -A` chain), ProxyJump through a bastion, OS-detect icon, known-hosts forget/re-pin, TOFU change warning. None of 2.2/2.3 verified by the user yet; agent-forward client callback name unconfirmed. | ⬜ TODO |
+| 2.4 | Agent-forward **serving** side (ChannelId relay via data() + session.handle()) | ⬜ TODO |
+| 4.0 | RDP foundation: contract types + viewport (focus/modifier-sync) | ✅ Done (FE verified; rh-rdp = types) |
+| 4.0b | RDP trusted-cert store (TOFU) + Security-dialog tab | ✅ Done (FE verified) |
+| 4.1a | RDP actor shell (spawn + command channel + lifecycle) | ✅ Done |
+| 4.1b | RDP connectivity spike (isolated IronRDP → PNG) | ✅ Done (PROVEN on real server) |
+| 4.1c | Read-only live desktop in app (2b-1: actor+rh-app+FE) | ✅ Done (FE verified; Rust pending Win compile) |
+| 4.1d | RDP mouse input (2b-2: click/scroll, spike-proven) | ✅ Done (FE verified; Rust pending Win compile) |
+| 4.1e | RDP keyboard input (2b-2b: scancode map + modifier-sync) | ⬜ Next |
 | 5.x | Personal/Team Vault via S3 — cloud sync, identity, e2e crypto | ⬜ Future |
 
 ~119 Rust tests (run `cargo test` on Windows to confirm; +10 in Stage 1.8). Vite + tsc strict build green. **DB schema is v2** as of Stage 1.8 — opening an old v1 DB drops & recreates it (alpha policy, data loss expected).

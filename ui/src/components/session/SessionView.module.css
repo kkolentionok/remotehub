@@ -83,6 +83,16 @@
     min-width: 0;
 }
 
+/* A changed key is a security-relevant event — flag it with the danger
+ * accent and a left rule so it reads louder than a first-time prompt. */
+.hostKeyChanged {
+    border-left: 2px solid var(--color-danger);
+}
+
+.hostKeyChanged .hostKeyText {
+    color: var(--color-danger);
+}
+
 .fingerprint {
     display: block;
     margin-top: var(--space-1);

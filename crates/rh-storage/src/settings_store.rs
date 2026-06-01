@@ -106,6 +106,9 @@ impl SettingsStore for SqliteSettingsStore {
         if let Some(v) = map.get(keys::SSH_KNOWN_HOSTS_STRICT) {
             out.ssh_known_hosts_strict = parse_field(keys::SSH_KNOWN_HOSTS_STRICT, v)?;
         }
+        if let Some(v) = map.get(keys::LOCAL_SHELL) {
+            out.local_shell = parse_field(keys::LOCAL_SHELL, v)?;
+        }
 
         Ok(out)
     }
@@ -186,6 +189,7 @@ fn storage_key_for(field: &str) -> Option<&'static str> {
         "app_startup_screen" => keys::APP_STARTUP_SCREEN,
         "ssh_keepalive_interval_secs" => keys::SSH_KEEPALIVE_INTERVAL_SECS,
         "ssh_known_hosts_strict" => keys::SSH_KNOWN_HOSTS_STRICT,
+        "local_shell" => keys::LOCAL_SHELL,
         _ => return None,
     })
 }

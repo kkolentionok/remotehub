@@ -53,8 +53,8 @@ impl HostStore for SqliteHostStore {
             INSERT INTO hosts (
                 id, name, display_name, group_id, protocol, hostname, port,
                 username, tags_json, color, notes, startup_command, env_vars_json,
-                detected_os, default_credential_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                detected_os, default_credential_id, jump_host_id, agent_forwarding, last_connected_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ",
         )
         .bind(host.id.as_str())
@@ -72,6 +72,9 @@ impl HostStore for SqliteHostStore {
         .bind(&env_vars_json)
         .bind(host.detected_os.as_deref())
         .bind(host.default_credential_id.as_ref().map(|c| c.as_str()))
+        .bind(host.jump_host_id.as_ref().map(|h| h.as_str()))
+        .bind(i64::from(host.agent_forwarding))
+        .bind(host.last_connected_at.map(|d| d.to_rfc3339()))
         .bind(host.created_at.to_rfc3339())
         .bind(host.updated_at.to_rfc3339())
         .execute(self.db.pool())
@@ -171,6 +174,8 @@ impl HostStore for SqliteHostStore {
                 env_vars_json = ?,
                 detected_os = ?,
                 default_credential_id = ?,
+                jump_host_id = ?,
+                agent_forwarding = ?,
                 updated_at = ?
             WHERE id = ?
             ",
@@ -189,6 +194,8 @@ impl HostStore for SqliteHostStore {
         .bind(&env_vars_json)
         .bind(host.detected_os.as_deref())
         .bind(host.default_credential_id.as_ref().map(|c| c.as_str()))
+        .bind(host.jump_host_id.as_ref().map(|h| h.as_str()))
+        .bind(i64::from(host.agent_forwarding))
         .bind(host.updated_at.to_rfc3339())
         .bind(host.id.as_str())
         .execute(self.db.pool())
@@ -222,6 +229,34 @@ impl HostStore for SqliteHostStore {
 
         Ok(())
     }
+
+    #[instrument(level = "debug", skip(self), fields(host_id = %id))]
+    async fn mark_connected(
+        &self,
+        id: &HostId,
+        when: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), StorageError> {
+        // Targeted write: only last_connected_at, leaving updated_at and
+        // everything else untouched (this isn't a user edit).
+        sqlx::query("UPDATE hosts SET last_connected_at = ? WHERE id = ?")
+            .bind(when.to_rfc3339())
+            .bind(id.as_str())
+            .execute(self.db.pool())
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    #[instrument(level = "debug", skip(self), fields(host_id = %id))]
+    async fn mark_detected_os(&self, id: &HostId, os: &str) -> Result<(), StorageError> {
+        sqlx::query("UPDATE hosts SET detected_os = ? WHERE id = ?")
+            .bind(os)
+            .bind(id.as_str())
+            .execute(self.db.pool())
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
 }
 
 // ---- Helpers -------------------------------------------------------
@@ -231,7 +266,7 @@ const SELECT_HOST_PREFIX: &str = "
     SELECT
         id, name, display_name, group_id, protocol, hostname, port,
         username, tags_json, color, notes, startup_command, env_vars_json,
-        detected_os, default_credential_id, created_at, updated_at
+        detected_os, default_credential_id, jump_host_id, agent_forwarding, last_connected_at, created_at, updated_at
     FROM hosts
 ";
 
@@ -239,7 +274,7 @@ const SELECT_HOST_COLUMNS: &str = "
     SELECT
         id, name, display_name, group_id, protocol, hostname, port,
         username, tags_json, color, notes, startup_command, env_vars_json,
-        detected_os, default_credential_id, created_at, updated_at
+        detected_os, default_credential_id, jump_host_id, agent_forwarding, last_connected_at, created_at, updated_at
     FROM hosts
     WHERE id = ?
 ";
@@ -290,6 +325,15 @@ fn row_to_host(row: &sqlx::sqlite::SqliteRow) -> Result<Host, StorageError> {
     let default_credential_id: Option<String> = row
         .try_get("default_credential_id")
         .map_err(|e| StorageError::Backend(format!("read default_credential_id: {e}")))?;
+    let jump_host_id: Option<String> = row
+        .try_get("jump_host_id")
+        .map_err(|e| StorageError::Backend(format!("read jump_host_id: {e}")))?;
+    let agent_forwarding: i64 = row
+        .try_get("agent_forwarding")
+        .map_err(|e| StorageError::Backend(format!("read agent_forwarding: {e}")))?;
+    let last_connected_at_s: Option<String> = row
+        .try_get("last_connected_at")
+        .map_err(|e| StorageError::Backend(format!("read last_connected_at: {e}")))?;
     let created_at_s: String = row
         .try_get("created_at")
         .map_err(|e| StorageError::Backend(format!("read created_at: {e}")))?;
@@ -326,6 +370,10 @@ fn row_to_host(row: &sqlx::sqlite::SqliteRow) -> Result<Host, StorageError> {
 
     let created_at = parse_datetime("hosts.created_at", &created_at_s)?;
     let updated_at = parse_datetime("hosts.updated_at", &updated_at_s)?;
+    let last_connected_at = match last_connected_at_s {
+        Some(s) => Some(parse_datetime("hosts.last_connected_at", &s)?),
+        None => None,
+    };
 
     Ok(Host {
         id: HostId::from_raw(id),
@@ -343,6 +391,9 @@ fn row_to_host(row: &sqlx::sqlite::SqliteRow) -> Result<Host, StorageError> {
         env_vars,
         detected_os,
         default_credential_id: default_credential_id.map(CredentialId::from_raw),
+        jump_host_id: jump_host_id.map(HostId::from_raw),
+        agent_forwarding: agent_forwarding != 0,
+        last_connected_at,
         created_at,
         updated_at,
     })

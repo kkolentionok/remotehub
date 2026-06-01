@@ -13,14 +13,14 @@ use std::path::{Path, PathBuf};
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Executor, Row, SqlitePool};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use rh_core::StorageError;
 
 /// Schema version this binary expects. Bumping this triggers either an
 /// incremental migration (when a path exists, e.g. v2 → v3) or, for any
 /// other mismatch, a drop-recreate in alpha mode.
-pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+pub const CURRENT_SCHEMA_VERSION: u32 = 8;
 
 /// Embedded migration script for the current version.
 const V1_SQL: &str = include_str!("migrations/v1.sql");
@@ -32,6 +32,50 @@ const V1_SQL: &str = include_str!("migrations/v1.sql");
 /// the host. This `ALTER TABLE` keeps all existing rows intact.
 const MIGRATE_V2_TO_V3: &str =
     "ALTER TABLE hosts ADD COLUMN username TEXT NOT NULL DEFAULT '';";
+
+/// Incremental, data-preserving migration v3 → v4: pinned SSH host keys
+/// (TOFU). Purely additive — a new table, no existing rows touched.
+const MIGRATE_V3_TO_V4: &str = "\
+CREATE TABLE known_hosts (\
+    hostname            TEXT NOT NULL,\
+    port                INTEGER NOT NULL,\
+    key_type            TEXT NOT NULL,\
+    fingerprint_sha256  TEXT NOT NULL,\
+    created_at          TEXT NOT NULL,\
+    PRIMARY KEY (hostname, port)\
+);";
+
+/// Incremental, data-preserving migration v4 → v5: `last_connected_at`
+/// on hosts (stamped when a session reaches Ready). Additive column.
+const MIGRATE_V4_TO_V5: &str = "ALTER TABLE hosts ADD COLUMN last_connected_at TEXT;";
+
+/// Incremental, data-preserving migration v5 → v6: `jump_host_id` on
+/// hosts (ProxyJump bastion reference). Additive nullable column; no FK
+/// enforcement (a deleted bastion is handled at connect time).
+const MIGRATE_V5_TO_V6: &str = "ALTER TABLE hosts ADD COLUMN jump_host_id TEXT;";
+
+/// Incremental, data-preserving migration v6 → v7: `agent_forwarding`
+/// on hosts (ssh -A). Additive NOT NULL column with a 0 default.
+const MIGRATE_V6_TO_V7: &str =
+    "ALTER TABLE hosts ADD COLUMN agent_forwarding INTEGER NOT NULL DEFAULT 0;";
+
+/// Incremental, data-preserving migration v7 → v8: `rdp_known_certs`
+/// table (TOFU pins for RDP server certificates). New table, no data loss.
+const MIGRATE_V7_TO_V8: &str = "CREATE TABLE rdp_known_certs (\n    hostname            TEXT NOT NULL,\n    port                INTEGER NOT NULL,\n    fingerprint_sha256  TEXT NOT NULL,\n    subject             TEXT NOT NULL,\n    trusted_at          TEXT NOT NULL,\n    PRIMARY KEY (hostname, port)\n);";
+
+/// Ordered forward migrations `(from_version, sql)`. The runner applies
+/// every step whose `from_version >= existing` in sequence, so a DB any
+/// number of versions behind (as long as the chain is contiguous from
+/// its version up to current) migrates without data loss. A gap (e.g. a
+/// pre-v2 database) falls back to drop-recreate in alpha mode.
+const MIGRATIONS: &[(u32, &str)] = &[
+    (2, MIGRATE_V2_TO_V3),
+    (3, MIGRATE_V3_TO_V4),
+    (4, MIGRATE_V4_TO_V5),
+    (5, MIGRATE_V5_TO_V6),
+    (6, MIGRATE_V6_TO_V7),
+    (7, MIGRATE_V7_TO_V8),
+];
 
 /// What [`Db::open`] decided to do with the schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,14 +189,21 @@ impl Db {
                 info!(source = %self.source, version = v, "schema already at current version");
                 Ok(InitOutcome::AlreadyCurrent)
             }
-            Some(2) if CURRENT_SCHEMA_VERSION == 3 => {
+            // Forward, data-preserving migration when a contiguous chain
+            // exists from `v` up to current (see MIGRATIONS).
+            Some(v) if v < CURRENT_SCHEMA_VERSION && has_migration_chain(v) => {
                 info!(
                     source = %self.source,
-                    "migrating schema v2 → v3 (per-host username, data preserved)"
+                    old_version = v,
+                    new_version = CURRENT_SCHEMA_VERSION,
+                    "migrating schema (data preserved)"
                 );
-                self.apply_migration(MIGRATE_V2_TO_V3).await?;
-                self.set_schema_version(3).await?;
-                Ok(InitOutcome::Migrated { old_version: 2 })
+                for (from, sql) in MIGRATIONS.iter().filter(|(from, _)| *from >= v) {
+                    debug!(from, to = from + 1, "applying migration");
+                    self.apply_migration(sql).await?;
+                }
+                self.set_schema_version(CURRENT_SCHEMA_VERSION).await?;
+                Ok(InitOutcome::Migrated { old_version: v })
             }
             Some(v) => {
                 warn!(
@@ -257,6 +308,7 @@ impl Db {
             DROP TABLE IF EXISTS hosts;
             DROP TABLE IF EXISTS credentials;
             DROP TABLE IF EXISTS host_groups;
+            DROP TABLE IF EXISTS known_hosts;
             DROP TABLE IF EXISTS settings;
             DROP TABLE IF EXISTS schema_meta;
             PRAGMA foreign_keys = ON;
@@ -279,6 +331,13 @@ impl Db {
 enum SourceKind {
     File(PathBuf),
     Memory,
+}
+
+/// Whether a contiguous forward migration chain exists from `from` up to
+/// [`CURRENT_SCHEMA_VERSION`] (every intermediate step has an entry in
+/// [`MIGRATIONS`]). If not, the caller falls back to drop-recreate.
+fn has_migration_chain(from: u32) -> bool {
+    (from..CURRENT_SCHEMA_VERSION).all(|k| MIGRATIONS.iter().any(|(f, _)| *f == k))
 }
 
 #[cfg(test)]
@@ -313,6 +372,7 @@ mod tests {
             "host_credentials",
             "host_groups",
             "hosts",
+            "known_hosts",
             "schema_meta",
             "settings",
         ] {

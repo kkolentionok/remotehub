@@ -4,7 +4,10 @@
 mod api;
 mod logging;
 mod paths;
+mod local_pty;
+mod rdp_session;
 mod session;
+mod sftp_session;
 mod state;
 
 use std::sync::Arc;
@@ -12,9 +15,10 @@ use std::sync::Arc;
 use tauri::Manager;
 use tracing::{error, info};
 
-use rh_core::{CredentialStore, GroupStore, HostStore, SettingsStore};
+use rh_core::{CredentialStore, GroupStore, HostStore, KnownHostsStore, RdpCertStore, SettingsStore};
 use rh_storage::{
-    Db, OsKeychain, SqliteCredentialStore, SqliteGroupStore, SqliteHostStore, SqliteSettingsStore,
+    Db, OsKeychain, SqliteCredentialStore, SqliteGroupStore, SqliteHostStore,
+    SqliteKnownHostsStore, SqliteRdpCertStore, SqliteSettingsStore,
 };
 
 use crate::state::AppState;
@@ -59,6 +63,11 @@ fn main() {
             // Hosts
             api::hosts::host_list,
             api::hosts::host_get,
+            api::hosts::known_host_get,
+            api::hosts::known_hosts_list,
+            api::hosts::known_host_forget,
+            api::hosts::rdp_certs_list,
+            api::hosts::rdp_cert_forget,
             api::hosts::host_create,
             api::hosts::host_update,
             api::hosts::host_delete,
@@ -88,6 +97,34 @@ fn main() {
             api::sessions::session_accept_host_key,
             api::sessions::session_reject_host_key,
             api::sessions::session_list,
+            api::sessions::session_reattach,
+            api::rdp_sessions::rdp_session_open,
+            api::rdp_sessions::rdp_session_close,
+            api::rdp_sessions::rdp_session_input,
+            // Sessions (local shell PTY)
+            api::local_sessions::local_session_open,
+            api::local_sessions::local_session_close,
+            api::local_sessions::local_session_input,
+            api::local_sessions::local_session_resize,
+            // Local filesystem (SFTP left pane)
+            api::local_fs::fs_home,
+            api::local_fs::fs_list,
+            api::local_fs::fs_drives,
+            api::local_fs::fs_rename,
+            api::local_fs::fs_remove,
+            api::local_fs::fs_mkdir,
+            // SFTP (remote file browsing)
+            api::sftp_sessions::sftp_open,
+            api::sftp_sessions::sftp_list,
+            api::sftp_sessions::sftp_close,
+            api::sftp_sessions::sftp_download,
+            api::sftp_sessions::sftp_upload,
+            api::sftp_sessions::sftp_copy,
+            api::sftp_sessions::sftp_rename,
+            api::sftp_sessions::sftp_remove,
+            api::sftp_sessions::sftp_transfer,
+            api::sftp_sessions::sftp_transfer_cancel,
+            api::sftp_sessions::sftp_mkdir,
             // Meta
             api::meta::app_version,
         ])
@@ -130,7 +167,11 @@ async fn build_state(_app: &tauri::AppHandle) -> Result<AppState, String> {
     let keychain = Arc::new(OsKeychain::new());
     let credentials: Arc<dyn CredentialStore> =
         Arc::new(SqliteCredentialStore::new(db.clone(), keychain));
-    let settings: Arc<dyn SettingsStore> = Arc::new(SqliteSettingsStore::new(db));
+    let settings: Arc<dyn SettingsStore> = Arc::new(SqliteSettingsStore::new(db.clone()));
+    let known_hosts: Arc<dyn KnownHostsStore> = Arc::new(SqliteKnownHostsStore::new(db.clone()));
+    let rdp_certs: Arc<dyn RdpCertStore> = Arc::new(SqliteRdpCertStore::new(db));
 
-    Ok(AppState::new(hosts, groups, credentials, settings))
+    Ok(AppState::new(
+        hosts, groups, credentials, settings, known_hosts, rdp_certs,
+    ))
 }

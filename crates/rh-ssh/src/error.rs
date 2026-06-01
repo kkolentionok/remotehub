@@ -14,11 +14,17 @@ pub enum SshError {
     #[error("authentication failed ({method})")]
     AuthFailed { method: String },
 
+    #[error("host key rejected by user")]
+    HostKeyRejected,
+
     #[error("could not decode the private key (wrong passphrase or unsupported format)")]
     KeyDecode,
 
     #[error("channel closed")]
     ChannelClosed,
+
+    #[error("sftp error: {0}")]
+    Sftp(String),
 }
 
 impl SshError {
@@ -34,7 +40,9 @@ impl SshError {
             SshError::AuthFailed { .. } | SshError::KeyDecode => {
                 CloseReason::AuthFailed
             }
+            SshError::HostKeyRejected => CloseReason::HostKeyRejected,
             SshError::ChannelClosed => CloseReason::ServerDisconnected { message: None },
+            SshError::Sftp(message) => CloseReason::Crashed { message },
         }
     }
 }
