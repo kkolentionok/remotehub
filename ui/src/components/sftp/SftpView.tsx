@@ -20,6 +20,7 @@ import {
     FolderOpen,
     FolderPlus,
     Home,
+    Lock,
     Monitor,
     Pencil,
     RotateCw,
@@ -122,6 +123,7 @@ interface Panel {
     selectLocal: () => Promise<void>;
     selectHost: (h: HostDto) => Promise<void>;
     openDir: (path: string) => Promise<void>;
+    navigateTo: (path: string) => Promise<string | null>;
     navHome: () => Promise<void>;
     navComputer: () => Promise<void>;
     refresh: () => Promise<void>;
@@ -140,6 +142,7 @@ interface Panel {
     setFolderValue: (v: string) => void;
     cancelCreateFolder: () => void;
     commitCreateFolder: () => Promise<void>;
+    chmod: (path: string, mode: number) => Promise<void>;
 }
 
 function usePanel(): Panel {
@@ -235,6 +238,32 @@ function usePanel(): Panel {
         }
     };
 
+    // Navigate to a typed path. Returns an error message on failure WITHOUT
+    // clobbering the current listing; returns null on success.
+    const navigateTo = async (path: string): Promise<string | null> => {
+        setBusy(true);
+        try {
+            const r =
+                source.kind === "local"
+                    ? await localFs.list(path)
+                    : sessionId
+                      ? await sftp.list(sessionId, path)
+                      : null;
+            if (r) {
+                setListing(r);
+                setSel(new Set());
+                setFilter("");
+                setCreatingFolder(null);
+                setErr(null);
+            }
+            return null;
+        } catch (e: unknown) {
+            return formatApiError(e);
+        } finally {
+            setBusy(false);
+        }
+    };
+
     const navHome = async () => {
         if (source.kind === "local") {
             await loadLocal(null);
@@ -324,6 +353,7 @@ function usePanel(): Panel {
         selectLocal,
         selectHost,
         openDir,
+        navigateTo,
         navHome,
         navComputer,
         refresh,
@@ -343,6 +373,10 @@ function usePanel(): Panel {
         setFolderValue: (v) => setCreatingFolder(v),
         cancelCreateFolder: () => setCreatingFolder(null),
         commitCreateFolder,
+        chmod: async (path, mode) => {
+            if (sessionId) await sftp.chmod(sessionId, path, mode);
+            await refresh();
+        },
     };
 }
 
@@ -413,6 +447,7 @@ function Pane({
     onRequestDelete,
     onDragStartFiles,
     onDropToPane,
+    onRequestChmod,
 }: {
     panel: Panel;
     hosts: HostDto[];
@@ -423,11 +458,15 @@ function Pane({
     onRequestDelete: (panel: Panel, entries: { path: string; is_dir: boolean }[]) => void;
     onDragStartFiles: (files: FsEntry[]) => void;
     onDropToPane: () => void;
+    onRequestChmod: (panel: Panel, entry: FsEntry) => void;
 }) {
     const { t, locale } = useT();
     const { listing, sort, showHidden, sel, isLocal } = panel;
     const [dropping, setDropping] = useState(false);
     const [menu, setMenu] = useState<{ x: number; y: number; entry: FsEntry } | null>(null);
+    const [editingPath, setEditingPath] = useState(false);
+    const [pathDraft, setPathDraft] = useState("");
+    const [pathErr, setPathErr] = useState(false);
 
     const entries = useMemo(() => {
         if (!listing) return [];
@@ -481,6 +520,18 @@ function Pane({
     const closeMenu = () => setMenu(null);
     const menuEntry = menu?.entry;
     const copyPath = (p: string) => void navigator.clipboard?.writeText(p);
+
+    const beginEditPath = () => {
+        if (atComputer) return;
+        setPathDraft(listing?.path ?? "");
+        setPathErr(false);
+        setEditingPath(true);
+    };
+    const commitPath = async () => {
+        const err = await panel.navigateTo(pathDraft.trim());
+        if (err) setPathErr(true);
+        else setEditingPath(false);
+    };
 
     return (
         <div
@@ -562,32 +613,56 @@ function Pane({
                 >
                     <CornerLeftUp size={16} />
                 </button>
-                <div className={styles.crumbs}>
-                    {isLocal && (
-                        <button
-                            className={`${styles.crumb} ${atComputer ? styles.crumbLast : ""}`}
-                            title={t("sftp.thisMachine")}
-                            onClick={() => void panel.navComputer()}
-                        >
-                            <Monitor size={13} />
-                        </button>
-                    )}
-                    {pathCrumbs.map((c, i) => (
-                        <div key={c.full + i} style={{ display: "flex", alignItems: "center" }}>
-                            {(isLocal || i > 0) && (
-                                <span className={styles.crumbSep}>
-                                    <ChevronRight size={12} />
-                                </span>
-                            )}
+                {editingPath ? (
+                    <input
+                        className={`${styles.pathInput} ${pathErr ? styles.pathInputErr : ""}`}
+                        autoFocus
+                        value={pathDraft}
+                        spellCheck={false}
+                        onChange={(e) => {
+                            setPathDraft(e.target.value);
+                            setPathErr(false);
+                        }}
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter") void commitPath();
+                            else if (e.key === "Escape") setEditingPath(false);
+                        }}
+                        onBlur={() => setEditingPath(false)}
+                    />
+                ) : (
+                    <div className={styles.crumbs} onClick={beginEditPath} title={t("sftp.editPath")}>
+                        {isLocal && (
                             <button
-                                className={`${styles.crumb} ${i === pathCrumbs.length - 1 ? styles.crumbLast : ""}`}
-                                onClick={() => void panel.openDir(c.full)}
+                                className={`${styles.crumb} ${atComputer ? styles.crumbLast : ""}`}
+                                title={t("sftp.thisMachine")}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    void panel.navComputer();
+                                }}
                             >
-                                {c.label}
+                                <Monitor size={13} />
                             </button>
-                        </div>
-                    ))}
-                </div>
+                        )}
+                        {pathCrumbs.map((c, i) => (
+                            <div key={c.full + i} style={{ display: "flex", alignItems: "center" }}>
+                                {(isLocal || i > 0) && (
+                                    <span className={styles.crumbSep}>
+                                        <ChevronRight size={12} />
+                                    </span>
+                                )}
+                                <button
+                                    className={`${styles.crumb} ${i === pathCrumbs.length - 1 ? styles.crumbLast : ""}`}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        void panel.openDir(c.full);
+                                    }}
+                                >
+                                    {c.label}
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
                 <button
                     className={styles.pbarBtn}
                     title={t("sftp.newFolder")}
@@ -778,6 +853,11 @@ function Pane({
                         <button className={styles.ctxItem} onClick={() => { closeMenu(); copyPath(menuEntry.path); }}>
                             <Copy size={15} /> <span>{t("sftp.ctxCopyPath")}</span>
                         </button>
+                        {!isLocal && (
+                            <button className={styles.ctxItem} onClick={() => { closeMenu(); onRequestChmod(panel, menuEntry); }}>
+                                <Lock size={15} /> <span>{t("sftp.ctxPerms")}</span>
+                            </button>
+                        )}
                         <div className={styles.ctxSep} />
                         <button
                             className={`${styles.ctxItem} ${styles.ctxItemDanger}`}
@@ -788,6 +868,75 @@ function Pane({
                     </div>
                 </>
             )}
+        </div>
+    );
+}
+
+function permsToBits(perms: string | null): boolean[] {
+    const p = (perms ?? "").slice(-9).padEnd(9, "-");
+    return p.split("").map((c) => c !== "-");
+}
+function bitsToMode(bits: boolean[]): number {
+    let mode = 0;
+    bits.forEach((b, i) => {
+        if (b) mode |= 1 << (8 - i);
+    });
+    return mode;
+}
+
+function ChmodDialog({
+    entry,
+    onApply,
+    onClose,
+}: {
+    entry: FsEntry;
+    onApply: (mode: number) => void;
+    onClose: () => void;
+}) {
+    const { t } = useT();
+    const [bits, setBits] = useState(() => permsToBits(entry.perms));
+    const mode = bitsToMode(bits);
+    const rows = [t("sftp.permsOwner"), t("sftp.permsGroup"), t("sftp.permsOther")];
+    const cols = ["r", "w", "x"];
+    return (
+        <div className={styles.scrim} onClick={onClose}>
+            <div className={styles.confirm} onClick={(e) => e.stopPropagation()}>
+                <div className={styles.confirmTitle}>{t("sftp.permsTitle")}</div>
+                <div className={styles.permsName}>{entry.name}</div>
+                <div className={styles.permsGrid}>
+                    <div />
+                    {cols.map((c) => (
+                        <div key={c} className={styles.permsCol}>{c}</div>
+                    ))}
+                    {rows.map((label, r) => (
+                        <div key={label} style={{ display: "contents" }}>
+                            <div className={styles.permsRow}>{label}</div>
+                            {cols.map((_, c) => {
+                                const i = r * 3 + c;
+                                return (
+                                    <button
+                                        key={c}
+                                        type="button"
+                                        className={`${styles.permsCell} ${bits[i] ? styles.permsCellOn : ""}`}
+                                        onClick={() => setBits((b) => b.map((v, idx) => (idx === i ? !v : v)))}
+                                    >
+                                        {bits[i] ? cols[c] : "–"}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    ))}
+                </div>
+                <div className={styles.permsOctal}>
+                    {t("sftp.permsMode")}: <span className={styles.mono}>{mode.toString(8).padStart(3, "0")}</span>
+                </div>
+                <div className={styles.confirmActions}>
+                    <button className={styles.btnGhost} onClick={onClose}>{t("common.cancel")}</button>
+                    <button className={styles.btnDanger} style={{ background: "var(--color-accent)" }} onClick={() => onApply(mode)}>
+                        {t("sftp.permsApply")}
+                    </button>
+                </div>
+            </div>
         </div>
     );
 }
@@ -831,6 +980,7 @@ interface TItem {
         src_path: string;
         dst_dir: string;
         dst_name?: string;
+        resume?: boolean;
     };
 }
 
@@ -889,7 +1039,29 @@ function useTransfers() {
             return;
         }
         cancelledIds.current.add(id);
-        void sftp.transferCancel(id);
+        void sftp.transferCancel(it.req.transfer_id);
+    };
+
+    const retry = (id: string) => {
+        const it = ref.current.find((i) => i.id === id);
+        if (!it || (it.state !== "error" && it.state !== "cancelled")) return;
+        cancelledIds.current.delete(id);
+        const newTid = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+        patch(id, {
+            state: "queued",
+            transferred: 0,
+            speed: 0,
+            error: undefined,
+            startedAt: 0,
+            req: { ...it.req, transfer_id: newTid, resume: true },
+        });
+        pump();
+    };
+
+    const retryAll = () => {
+        for (const it of ref.current) {
+            if (it.state === "error" || it.state === "cancelled") retry(it.id);
+        }
     };
 
     const clearDone = () => {
@@ -904,7 +1076,7 @@ function useTransfers() {
         return () => window.clearInterval(id);
     }, [anyActive]);
 
-    return { items: ref.current, enqueue, cancel, clearDone };
+    return { items: ref.current, enqueue, cancel, retry, retryAll, clearDone };
 }
 
 function fmtSpeed(bps: number, locale: string): string {
@@ -921,10 +1093,14 @@ function fmtEta(sec: number): string {
 function TransferQueue({
     items,
     onCancel,
+    onRetry,
+    onRetryAll,
     onClear,
 }: {
     items: TItem[];
     onCancel: (id: string) => void;
+    onRetry: (id: string) => void;
+    onRetryAll: () => void;
     onClear: () => void;
 }) {
     const { t, locale } = useT();
@@ -933,6 +1109,7 @@ function TransferQueue({
     const queued = items.filter((i) => i.state === "queued");
     const totalSpeed = active.reduce((s, i) => s + i.speed, 0);
     const hasDone = items.some((i) => i.state === "done" || i.state === "error" || i.state === "cancelled");
+    const hasFailed = items.some((i) => i.state === "error" || i.state === "cancelled");
 
     return (
         <div className={styles.queue}>
@@ -947,6 +1124,17 @@ function TransferQueue({
                 </span>
                 <span className={styles.queueSp} />
                 {totalSpeed > 0 && <span className={styles.queueSpeed}>{fmtSpeed(totalSpeed, locale)}</span>}
+                {hasFailed && (
+                    <button
+                        className={styles.queueRetry}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            onRetryAll();
+                        }}
+                    >
+                        {t("sftp.qRetryAll")}
+                    </button>
+                )}
                 {hasDone && (
                     <button
                         className={styles.queueClear}
@@ -996,6 +1184,10 @@ function TransferQueue({
                                         <button className={styles.qx} title={t("common.cancel")} onClick={() => onCancel(it.id)}>
                                             <X size={14} />
                                         </button>
+                                    ) : it.state === "error" || it.state === "cancelled" ? (
+                                        <button className={styles.qretry} title={t("sftp.qRetry")} onClick={() => onRetry(it.id)}>
+                                            <RotateCw size={13} />
+                                        </button>
                                     ) : (
                                         <span className={styles.qx} />
                                     )}
@@ -1038,6 +1230,7 @@ export function SftpView({
         existing: Set<string>;
         names: string[];
     } | null>(null);
+    const [chmodTarget, setChmodTarget] = useState<{ panel: Panel; entry: FsEntry } | null>(null);
 
     const resolveConflict = (mode: "replace" | "keep" | "skip") => {
         if (!conflict) return;
@@ -1161,6 +1354,7 @@ export function SftpView({
                         dragRef.current = null;
                         if (d && d.from === "right") transferFiles(d.files, right, left);
                     }}
+                    onRequestChmod={(panel, entry) => setChmodTarget({ panel, entry })}
                 />
                 <div className={styles.prail}>
                     <span className={styles.prailLbl}>{epName(right)}</span>
@@ -1198,10 +1392,11 @@ export function SftpView({
                         dragRef.current = null;
                         if (d && d.from === "left") transferFiles(d.files, left, right);
                     }}
+                    onRequestChmod={(panel, entry) => setChmodTarget({ panel, entry })}
                 />
             </div>
             {transfers.items.length > 0 && (
-                <TransferQueue items={transfers.items} onCancel={transfers.cancel} onClear={transfers.clearDone} />
+                <TransferQueue items={transfers.items} onCancel={transfers.cancel} onRetry={transfers.retry} onRetryAll={transfers.retryAll} onClear={transfers.clearDone} />
             )}
             {status.kind !== "idle" && (
                 <div className={`${styles.status} ${styles[`status${status.kind === "busy" ? "Busy" : status.kind === "done" ? "Done" : "Error"}`]}`}>
@@ -1277,6 +1472,19 @@ export function SftpView({
                         </div>
                     </div>
                 </div>
+            )}
+            {chmodTarget && (
+                <ChmodDialog
+                    entry={chmodTarget.entry}
+                    onClose={() => setChmodTarget(null)}
+                    onApply={(mode) => {
+                        const { panel, entry } = chmodTarget;
+                        setChmodTarget(null);
+                        panel
+                            .chmod(entry.path, mode)
+                            .catch((e: unknown) => setStatus({ kind: "error", text: formatApiError(e) }));
+                    }}
+                />
             )}
         </div>
     );

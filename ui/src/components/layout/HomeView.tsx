@@ -156,7 +156,7 @@ export function HomeView() {
             <div className={styles.header}>
                 {/* command hero — fixed */}
                 <div className={styles.hero}>
-                        <div className={styles.cmd}>
+                        <label className={styles.cmd}>
                             <Search size={20} className={styles.cmdIcon} />
                             <input
                                 className={styles.cmdInput}
@@ -171,7 +171,7 @@ export function HomeView() {
                                 spellCheck={false}
                             />
                             <kbd className={styles.kbd}>⌘K</kbd>
-                        </div>
+                        </label>
                         <div className={styles.hint}>
                             <span>
                                 <kbd className={styles.kbd}>↵</kbd> {t("storage.hint.connect")}

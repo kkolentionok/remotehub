@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRightToLine, Check, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Files, Info, KeyRound, Lock, Monitor, Pencil, Plus, Server, Terminal, Trash2, Upload, User, X, Zap } from "lucide-react";
+import { ArrowRightToLine, Check, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Files, Info, KeyRound, Lock, Monitor, Pencil, Plus, Server, Star, Terminal, Trash2, Upload, User, X, Zap } from "lucide-react";
 
 import { useT } from "../../i18n";
 import {
@@ -123,6 +123,7 @@ export function HostDetail() {
             default_credential_id: draft.pickedCredentialId,
             jump_host_id: null,
             agent_forwarding: false,
+            favorite: false,
             last_connected_at: null,
             credential_ids: draft.pickedCredentialId
                 ? [draft.pickedCredentialId]
@@ -221,6 +222,8 @@ interface FormState {
     jumpHostId: string;
     /** Forward the local SSH agent to this host (ssh -A). */
     agentForwarding: boolean;
+    /** User-pinned favorite (star). */
+    favorite: boolean;
     /** Raw textarea contents: one `KEY=VALUE` per line. */
     envRaw: string;
     inlineUsername: string;
@@ -1030,6 +1033,19 @@ function HostForm(props: HostFormProps) {
         [props.mode, props.host.id, flashSaved],
     );
 
+    // Favorite is a header toggle — persist immediately (no debounce).
+    const toggleFavorite = useCallback(() => {
+        const value = !form.favorite;
+        setForm((f) => ({ ...f, favorite: value }));
+        if (props.mode !== "edit") return;
+        void hostsApi
+            .update({ id: props.host.id, favorite: value })
+            .then(() => flashSaved())
+            .catch((e: unknown) =>
+                setSaveStatus({ kind: "error", message: formatApiError(e) }),
+            );
+    }, [props.mode, props.host.id, form.favorite, flashSaved]);
+
     // ---------- Inline action handlers --------------------------------
 
     const handleDuplicate = useCallback(() => {
@@ -1106,6 +1122,8 @@ function HostForm(props: HostFormProps) {
                 updatedAt={props.host.updated_at}
                 lastConnectedAt={props.host.last_connected_at}
                 saveStatus={saveStatus}
+                favorite={form.favorite}
+                onToggleFavorite={toggleFavorite}
                 onConnect={handleConnect}
                 canConnect={props.mode === "edit"}
                 onDuplicate={handleDuplicate}
@@ -1434,6 +1452,8 @@ interface FormHeaderProps {
     updatedAt: string;
     lastConnectedAt: string | null;
     saveStatus: SaveStatus;
+    favorite: boolean;
+    onToggleFavorite: () => void;
     onConnect: () => void;
     canConnect: boolean;
     onDuplicate: () => void;
@@ -1499,6 +1519,18 @@ function FormHeader(p: FormHeaderProps) {
                     </div>
                 </div>
                 <div className={styles.headerActions}>
+                    {p.mode === "edit" && (
+                        <button
+                            className={`${styles.headerIconButton} ${p.favorite ? styles.favActive : ""}`}
+                            onClick={p.onToggleFavorite}
+                            title={t("host.favorite")}
+                            aria-label={t("host.favorite")}
+                            aria-pressed={p.favorite}
+                            type="button"
+                        >
+                            <Star size={15} fill={p.favorite ? "currentColor" : "none"} />
+                        </button>
+                    )}
                     {p.mode === "edit" && (
                         <div ref={infoRef} className={styles.infoWrap}>
                             <button
@@ -2145,6 +2177,7 @@ function buildFormState(
         startupCommand: props.host.startup_command ?? "",
         jumpHostId: props.host.jump_host_id ?? "",
         agentForwarding: props.host.agent_forwarding,
+        favorite: props.host.favorite,
         envRaw: formatEnv(props.host.env_vars),
         // Username lives on the host now. Prefer it; for drafts use the
         // remembered draft value; fall back to the linked credential's

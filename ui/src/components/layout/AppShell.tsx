@@ -86,6 +86,18 @@ export function AppShell() {
     }, []);
 
     useEffect(() => {
+        let unlisten: (() => void) | undefined;
+        void (async () => {
+            const { listen } = await import("@tauri-apps/api/event");
+            unlisten = await listen<string>("tray:connect", (e) => {
+                const host = useHostsStore.getState().items.find((h) => h.id === e.payload);
+                if (host) void useSessionsStore.getState().open(host);
+            });
+        })();
+        return () => unlisten?.();
+    }, []);
+
+    useEffect(() => {
         if (!settingsLanguage) return;
         if (settingsLanguage !== locale) {
             setLocale(settingsLanguage);
@@ -95,7 +107,7 @@ export function AppShell() {
     // Drive the app color theme from settings (overrides the OS media
     // query). "system" defers to the OS.
     useEffect(() => {
-        document.documentElement.setAttribute("data-theme", theme ?? "system");
+        document.documentElement.setAttribute("data-theme", theme ?? "navy");
     }, [theme]);
 
     // Split shortcuts: Ctrl+Shift+E splits right, Ctrl+Shift+D splits down.

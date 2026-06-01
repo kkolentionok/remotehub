@@ -823,3 +823,6 @@
     color: var(--text-3);
     flex: 0 0 auto;
 }
+
+/* Favorite star — accent when pinned. */
+.favActive { color: var(--color-accent); }

@@ -6,34 +6,64 @@
 //! IPC entry points differ.
 //!
 //! Like RDP, this gets its own thin registry rather than going through the
-//! SSH `SessionManager`: a local shell has no host, no host-key TOFU and no
-//! restore-on-reload, so the scrollback/ring-buffer machinery there doesn't
-//! apply. We just spawn the worker, forward its events to the UI `Channel`,
-//! and keep the command sender so the UI can type / resize / close.
+//! SSH `SessionManager` (no host, no host-key TOFU). It *does* keep a bounded
+//! output ring + swappable sink, mirroring the SSH hub, so local shells also
+//! survive a webview reload via [`LocalPtyManager::list`] + `reattach`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use tauri::ipc::Channel;
 use tokio::sync::{mpsc, Mutex};
-use tokio::task::JoinHandle;
 use tracing::instrument;
 
 use rh_core::SessionId;
 use rh_ssh::{CloseReason, SessionCommand, SessionState, SshSessionEvent};
 
-struct LocalHandle {
+/// How much raw PTY output to retain per session for replay on reattach.
+const OUTPUT_RING_BYTES: usize = 256 * 1024;
+
+/// A snapshot of one live local shell for `local_session_list`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LocalSessionSummary {
+    pub session_id: SessionId,
+    pub title: String,
+}
+
+/// Per-session live state: the command sender, a bounded output ring for
+/// replay, and the current UI sink (None between a reload and reattach).
+struct LocalHub {
     tx_cmd: mpsc::Sender<SessionCommand>,
-    /// The event forwarder task. Dropping the handle drops `tx_cmd`,
-    /// which closes the command channel and lets the worker wind down.
-    _join: JoinHandle<()>,
+    title: String,
+    output: VecDeque<u8>,
+    sink: Option<Channel<SshSessionEvent>>,
+    state: SessionState,
+    opened_at: DateTime<Utc>,
+}
+
+impl LocalHub {
+    fn record(&mut self, ev: &SshSessionEvent) {
+        match ev {
+            SshSessionEvent::StateChanged { state } => self.state = *state,
+            SshSessionEvent::Data { bytes } => {
+                self.output.extend(bytes.iter().copied());
+                let overflow = self.output.len().saturating_sub(OUTPUT_RING_BYTES);
+                if overflow > 0 {
+                    self.output.drain(0..overflow);
+                }
+            }
+            SshSessionEvent::Closed { .. } => self.state = SessionState::Closed,
+            _ => {}
+        }
+    }
 }
 
 #[derive(Clone, Default)]
 pub struct LocalPtyManager {
-    inner: Arc<Mutex<HashMap<SessionId, LocalHandle>>>,
+    inner: Arc<Mutex<HashMap<SessionId, Arc<Mutex<LocalHub>>>>>,
 }
 
 impl LocalPtyManager {
@@ -56,42 +86,109 @@ impl LocalPtyManager {
         let (tx_events, mut rx_events) = mpsc::unbounded_channel::<SshSessionEvent>();
         let (tx_cmd, rx_cmd) = mpsc::channel::<SessionCommand>(64);
 
+        // Title for the restored tab: the chosen shell's basename (or the
+        // system default). Computed before `spawn_pty` consumes `shell`.
+        let program = shell
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(default_shell);
+        let title = program
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(&program)
+            .to_string();
+
         // Open the PTY + spawn worker threads. Fails fast (e.g. shell not
         // found) so the caller can surface an error before registering.
         spawn_pty(cols, rows, shell, rx_cmd, tx_events)?;
 
-        // Forward events to the UI channel in order; clean up the registry
-        // once the event stream ends (worker gone).
+        let hub = Arc::new(Mutex::new(LocalHub {
+            tx_cmd,
+            title,
+            output: VecDeque::new(),
+            sink: Some(on_event),
+            state: SessionState::Ready,
+            opened_at: Utc::now(),
+        }));
+        self.inner.lock().await.insert(id.clone(), hub.clone());
+
+        // Pump: record into the ring, forward to the live sink. When the
+        // worker's event stream ends (shell gone), evict the entry.
         let inner = self.inner.clone();
-        let id_cleanup = id.clone();
-        let forwarder = tokio::spawn(async move {
+        let pump_hub = hub.clone();
+        tokio::spawn(async move {
             while let Some(ev) = rx_events.recv().await {
-                if on_event.send(ev).is_err() {
-                    break; // UI channel gone (tab closed / webview reload)
+                let mut h = pump_hub.lock().await;
+                h.record(&ev);
+                if let Some(sink) = &h.sink {
+                    let _ = sink.send(ev);
                 }
             }
-            inner.lock().await.remove(&id_cleanup);
+            inner.lock().await.remove(&id);
         });
-
-        self.inner
-            .lock()
-            .await
-            .insert(id, LocalHandle { tx_cmd, _join: forwarder });
         Ok(())
     }
 
     #[instrument(level = "debug", skip(self, cmd))]
     pub async fn send(&self, id: &SessionId, cmd: SessionCommand) {
-        if let Some(h) = self.inner.lock().await.get(id) {
-            let _ = h.tx_cmd.send(cmd).await;
-        }
+        let tx = {
+            let reg = self.inner.lock().await;
+            match reg.get(id) {
+                Some(hub) => hub.lock().await.tx_cmd.clone(),
+                None => return,
+            }
+        };
+        let _ = tx.send(cmd).await;
     }
 
     #[instrument(level = "debug", skip(self))]
     pub async fn close(&self, id: &SessionId) {
-        if let Some(h) = self.inner.lock().await.remove(id) {
-            let _ = h.tx_cmd.send(SessionCommand::Shutdown).await;
+        let hub = self.inner.lock().await.remove(id);
+        if let Some(hub) = hub {
+            let tx = hub.lock().await.tx_cmd.clone();
+            let _ = tx.send(SessionCommand::Shutdown).await;
         }
+    }
+
+    /// Snapshot live local shells for restore-on-reload.
+    pub async fn list(&self) -> Vec<LocalSessionSummary> {
+        let reg = self.inner.lock().await;
+        let mut out = Vec::with_capacity(reg.len());
+        let mut rows: Vec<(DateTime<Utc>, LocalSessionSummary)> = Vec::new();
+        for (id, hub) in reg.iter() {
+            let h = hub.lock().await;
+            rows.push((
+                h.opened_at,
+                LocalSessionSummary {
+                    session_id: id.clone(),
+                    title: h.title.clone(),
+                },
+            ));
+        }
+        rows.sort_by_key(|(t, _)| *t);
+        out.extend(rows.into_iter().map(|(_, s)| s));
+        out
+    }
+
+    /// Point a session at a fresh UI channel after a reload: replay the
+    /// buffered output + current state, then wire the channel for live
+    /// events. Returns `false` if the session is gone.
+    pub async fn reattach(&self, id: &SessionId, channel: Channel<SshSessionEvent>) -> bool {
+        let hub = {
+            let reg = self.inner.lock().await;
+            match reg.get(id) {
+                Some(hub) => hub.clone(),
+                None => return false,
+            }
+        };
+        let mut h = hub.lock().await;
+        if !h.output.is_empty() {
+            let bytes: Vec<u8> = h.output.iter().copied().collect();
+            let _ = channel.send(SshSessionEvent::Data { bytes });
+        }
+        let _ = channel.send(SshSessionEvent::StateChanged { state: h.state });
+        h.sink = Some(channel);
+        true
     }
 }
 

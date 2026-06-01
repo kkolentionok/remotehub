@@ -205,6 +205,7 @@ pub async fn host_create(
     host.default_credential_id = req.default_credential_id;
     host.jump_host_id = req.jump_host_id;
     host.agent_forwarding = req.agent_forwarding.unwrap_or(false);
+    host.favorite = req.favorite.unwrap_or(false);
 
     let id = host.id.clone();
     state.hosts.create(&host).await?;
@@ -290,6 +291,9 @@ pub async fn host_update(
     }
     if let Some(af) = req.agent_forwarding {
         host.agent_forwarding = af;
+    }
+    if let Some(fav) = req.favorite {
+        host.favorite = fav;
     }
     host.touch();
 

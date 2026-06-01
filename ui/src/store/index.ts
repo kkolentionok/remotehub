@@ -1130,15 +1130,14 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
             // double-run (StrictMode / re-mounts) by bailing if we already
             // hold sessions.
             if (get().sessions.length > 0) return;
-            let list;
+            let sshList: Awaited<ReturnType<typeof sessionsApi.list>> | null = null;
             try {
-                list = await sessionsApi.list();
+                sshList = await sessionsApi.list();
             } catch {
-                return;
+                /* ignore — still attempt local restore below */
             }
-            if (list.sessions.length === 0) return;
 
-            for (const summary of list.sessions) {
+            for (const summary of sshList?.sessions ?? []) {
                 // Skip sessions the backend reports as already finished.
                 if (summary.state === "closed" || summary.state === "failed") {
                     continue;
@@ -1174,6 +1173,50 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
                             // Died between list and reattach — drop the tab.
                             void get().close(key);
                         }
+                    } catch {
+                        patch(key, { state: "failed", message: "reattach failed" });
+                    }
+                })();
+            }
+
+            // Local shells survive a reload too: rebuild a tab per live PTY
+            // and reattach a fresh channel (backend replays its scrollback).
+            let localList: Awaited<ReturnType<typeof localSessionApi.list>> | null = null;
+            try {
+                localList = await localSessionApi.list();
+            } catch {
+                /* none live */
+            }
+            for (const summary of localList?.sessions ?? []) {
+                const key = genId();
+                const tab: SessionTab = {
+                    key,
+                    sessionId: summary.session_id,
+                    hostId: "__local__",
+                    title: summary.title,
+                    protocol: "ssh",
+                    state: "ready",
+                    message: null,
+                    hostKey: null,
+                    local: true,
+                };
+                sessionOutput.set(key, { buffer: [], writer: null });
+                const id = genId();
+                set((s) => ({
+                    sessions: [...s.sessions, tab],
+                    tabs: [
+                        ...s.tabs,
+                        { id, root: { t: "leaf", key }, activePaneKey: key },
+                    ],
+                }));
+
+                void (async () => {
+                    try {
+                        const ok = await localSessionApi.reattach(
+                            summary.session_id,
+                            (ev) => handleEvent(key, ev),
+                        );
+                        if (!ok) void get().close(key);
                     } catch {
                         patch(key, { state: "failed", message: "reattach failed" });
                     }

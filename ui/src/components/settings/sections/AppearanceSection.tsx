@@ -88,6 +88,20 @@ export function AppearanceSection({ settings }: Props) {
                     >
                         {t("settings.appearance.themeDark")}
                     </button>
+                    <button
+                        type="button"
+                        className={`${styles.segment} ${settings.theme === "navy" ? styles.segmentActive : ""}`}
+                        onClick={() => void setTheme("navy")}
+                    >
+                        {t("settings.appearance.themeNavy")}
+                    </button>
+                    <button
+                        type="button"
+                        className={`${styles.segment} ${settings.theme === "redpanda" ? styles.segmentActive : ""}`}
+                        onClick={() => void setTheme("redpanda")}
+                    >
+                        {t("settings.appearance.themeRedpanda")}
+                    </button>
                 </div>
                 <span className={styles.fieldHint}>
                     {t("settings.appearance.themeHint")}

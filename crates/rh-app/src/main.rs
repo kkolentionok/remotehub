@@ -9,6 +9,7 @@ mod rdp_session;
 mod session;
 mod sftp_session;
 mod state;
+mod tray;
 
 use std::sync::Arc;
 
@@ -36,6 +37,17 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .on_window_event(|window, event| {
+            // Closing the window must NOT quit the app: live SSH/RDP/SFTP
+            // sessions (and any mounted drives / port-forwards) would drop.
+            // Hide to the tray instead; real quit is via the tray menu.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(|app| {
             // Build AppState synchronously on the Tokio runtime Tauri
             // already provides via tauri::async_runtime.
@@ -48,6 +60,9 @@ fn main() {
                 Ok(s) => {
                     app.manage(s);
                     info!("storage initialized; app ready");
+                    if let Err(e) = tray::build(&app.handle().clone()) {
+                        error!(error = %e, "failed to build system tray");
+                    }
                 }
                 Err(e) => {
                     error!(error = %e, "FATAL: storage initialization failed; app cannot start");
@@ -106,6 +121,8 @@ fn main() {
             api::local_sessions::local_session_close,
             api::local_sessions::local_session_input,
             api::local_sessions::local_session_resize,
+            api::local_sessions::local_session_list,
+            api::local_sessions::local_session_reattach,
             // Local filesystem (SFTP left pane)
             api::local_fs::fs_home,
             api::local_fs::fs_list,
@@ -125,6 +142,7 @@ fn main() {
             api::sftp_sessions::sftp_transfer,
             api::sftp_sessions::sftp_transfer_cancel,
             api::sftp_sessions::sftp_mkdir,
+            api::sftp_sessions::sftp_chmod,
             // Meta
             api::meta::app_version,
         ])

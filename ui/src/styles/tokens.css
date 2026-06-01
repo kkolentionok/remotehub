@@ -111,8 +111,79 @@
     --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.45);
 }
 
-/* Light values — applied for explicit "light" and for "system"/unset on
- * a light-preferring OS. Same accent + group palette; surfaces invert. */
+/* Navy — the "in-between" dark: deep blue surfaces instead of near-black.
+ * Same accent + foreground scale; only the neutral surfaces shift to navy. */
+:root[data-theme="navy"] {
+    --color-canvas: #0b0e18;
+    --color-surface: #141a2b;
+    --color-elevated: #1f2742;
+    --color-subtle: rgba(255, 255, 255, 0.05);
+    --color-border: rgba(255, 255, 255, 0.09);
+    --color-border-strong: rgba(255, 255, 255, 0.15);
+    --color-tabbar: #090c14;
+
+    --color-scrollbar: rgba(255, 255, 255, 0.12);
+    --color-scrollbar-hover: rgba(255, 255, 255, 0.2);
+
+    --text-1: rgba(255, 255, 255, 0.92);
+    --text-2: rgba(255, 255, 255, 0.6);
+    --text-3: rgba(255, 255, 255, 0.4);
+    --text-4: rgba(255, 255, 255, 0.27);
+
+    --color-accent-faint: rgba(76, 142, 255, 0.16);
+    --accent-soft: rgba(76, 142, 255, 0.16);
+
+    --color-danger: #f87171;
+    --color-danger-bg: rgba(248, 113, 113, 0.12);
+    --color-success: #4ade80;
+    --color-success-bg: rgba(74, 222, 128, 0.1);
+    --color-warning: #fbbf24;
+    --color-warn: #e6c07b;
+
+    --color-ssh: #4ade80;
+    --color-rdp: #60a5fa;
+    --color-ssh-bg: rgba(74, 222, 128, 0.11);
+    --color-rdp-bg: rgba(96, 165, 250, 0.11);
+
+    --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+:root[data-theme="redpanda"] {
+    --color-accent: #f0552f;
+    --color-accent-hover: #ff6a47;
+
+    --color-canvas: #110d0c;
+    --color-surface: #1b1513;
+    --color-elevated: #271e1a;
+    --color-subtle: rgba(255, 255, 255, 0.045);
+    --color-border: rgba(255, 255, 255, 0.08);
+    --color-border-strong: rgba(255, 255, 255, 0.14);
+    --color-tabbar: #0d0a09;
+
+    --color-scrollbar: rgba(255, 255, 255, 0.11);
+    --color-scrollbar-hover: rgba(255, 255, 255, 0.2);
+
+    --text-1: rgba(255, 255, 255, 0.92);
+    --text-2: rgba(255, 255, 255, 0.6);
+    --text-3: rgba(255, 255, 255, 0.4);
+    --text-4: rgba(255, 255, 255, 0.27);
+
+    --color-accent-faint: rgba(240, 85, 47, 0.15);
+    --accent-soft: rgba(240, 85, 47, 0.15);
+
+    --color-danger: #f87171;
+    --color-danger-bg: rgba(248, 113, 113, 0.12);
+    --color-success: #4ade80;
+    --color-success-bg: rgba(74, 222, 128, 0.1);
+    --color-warning: #fbbf24;
+    --color-warn: #e6c07b;
+
+    --color-ssh: #4ade80;
+    --color-rdp: #60a5fa;
+    --color-ssh-bg: rgba(74, 222, 128, 0.11);
+    --color-rdp-bg: rgba(96, 165, 250, 0.11);
+
+    --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
 :root[data-theme="light"] {
     --color-canvas: #f6f6f7;
     --color-surface: #ffffff;

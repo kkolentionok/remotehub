@@ -47,6 +47,7 @@ export interface HostDto {
     default_credential_id: CredentialId | null;
     jump_host_id: HostId | null;
     agent_forwarding: boolean;
+    favorite: boolean;
     last_connected_at: string | null;
     created_at: string;
     updated_at: string;
@@ -165,6 +166,15 @@ export interface SessionListResponse {
     sessions: SessionSummaryDto[];
 }
 
+export interface LocalSessionSummaryDto {
+    session_id: SessionId;
+    title: string;
+}
+
+export interface LocalSessionListResponse {
+    sessions: LocalSessionSummaryDto[];
+}
+
 export interface SessionReattachRequest {
     session_id: SessionId;
 }
@@ -207,7 +217,7 @@ export interface RdpCertsListResponse {
 // =====================================================================
 
 export type Language = "en" | "ru";
-export type Theme = "light" | "dark" | "system";
+export type Theme = "light" | "dark" | "navy" | "redpanda" | "system";
 export type CursorStyle = "block" | "underline" | "bar";
 export type TerminalColorScheme =
     | "default"
@@ -274,6 +284,7 @@ export interface HostCreateRequest {
     default_credential_id?: CredentialId | null;
     jump_host_id?: HostId | null;
     agent_forwarding?: boolean;
+    favorite?: boolean;
 }
 
 /**
@@ -303,6 +314,7 @@ export interface HostUpdateRequest {
     default_credential_id?: CredentialId | null;
     jump_host_id?: HostId | null;
     agent_forwarding?: boolean;
+    favorite?: boolean;
 }
 
 export interface GroupCreateRequest {

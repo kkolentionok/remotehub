@@ -31,8 +31,12 @@ pub enum Language {
 pub enum Theme {
     Light,
     Dark,
-    /// Follow the OS theme.
+    /// Dark, but with deep navy-blue surfaces instead of near-black.
     #[default]
+    Navy,
+    /// Dark with a warm red-panda accent (coral-red) on near-black surfaces.
+    Redpanda,
+    /// Follow the OS theme.
     System,
 }
 
@@ -205,7 +209,7 @@ mod tests {
         // contracts. Changing any of them should be a deliberate decision.
         let s = Settings::default();
         assert_eq!(s.language, Language::En);
-        assert_eq!(s.theme, Theme::System);
+        assert_eq!(s.theme, Theme::Navy);
         assert_eq!(s.default_ssh_port, 22);
         assert_eq!(s.default_rdp_port, 3389);
         assert_eq!(s.terminal_font_size, 14);

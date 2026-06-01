@@ -14,8 +14,8 @@ use rh_core::SessionId;
 use rh_ssh::{SessionCommand, SshSessionEvent};
 
 use crate::api::dto::{
-    LocalSessionOpenRequest, SessionIdRequest, SessionInputRequest, SessionOpenResponse,
-    SessionResizeRequest,
+    LocalSessionListResponse, LocalSessionOpenRequest, SessionIdRequest, SessionInputRequest,
+    SessionOpenResponse, SessionReattachRequest, SessionResizeRequest,
 };
 use crate::api::error::ApiError;
 use crate::api::error::ApiResult;
@@ -85,4 +85,27 @@ pub async fn local_session_resize(
         )
         .await;
     Ok(())
+}
+
+#[tauri::command]
+#[instrument(level = "debug", skip(state))]
+pub async fn local_session_list(
+    state: State<'_, AppState>,
+) -> ApiResult<LocalSessionListResponse> {
+    Ok(LocalSessionListResponse {
+        sessions: state.local_sessions.list().await,
+    })
+}
+
+#[tauri::command]
+#[instrument(level = "debug", skip(state, on_event))]
+pub async fn local_session_reattach(
+    state: State<'_, AppState>,
+    req: SessionReattachRequest,
+    on_event: Channel<SshSessionEvent>,
+) -> ApiResult<bool> {
+    Ok(state
+        .local_sessions
+        .reattach(&req.session_id, on_event)
+        .await)
 }

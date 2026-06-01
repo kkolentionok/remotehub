@@ -61,6 +61,7 @@ pub struct HostDto {
     /// Optional bastion (ProxyJump): another saved host to route through.
     pub jump_host_id: Option<HostId>,
     pub agent_forwarding: bool,
+    pub favorite: bool,
     /// RFC 3339, or `null` if never connected. Stamped on first Ready.
     pub last_connected_at: Option<String>,
     pub created_at: String,
@@ -84,6 +85,7 @@ impl From<Host> for HostDto {
             default_credential_id: h.default_credential_id,
             jump_host_id: h.jump_host_id,
             agent_forwarding: h.agent_forwarding,
+            favorite: h.favorite,
             last_connected_at: h.last_connected_at.map(|d| d.to_rfc3339()),
             created_at: h.created_at.to_rfc3339(),
             updated_at: h.updated_at.to_rfc3339(),
@@ -152,6 +154,8 @@ pub struct HostCreateRequest {
     pub jump_host_id: Option<HostId>,
     #[serde(default)]
     pub agent_forwarding: Option<bool>,
+    #[serde(default)]
+    pub favorite: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -203,6 +207,8 @@ pub struct HostUpdateRequest {
     pub jump_host_id: Option<Option<HostId>>,
     #[serde(default)]
     pub agent_forwarding: Option<bool>,
+    #[serde(default)]
+    pub favorite: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -550,6 +556,10 @@ pub struct SftpTransferRequest {
     /// Optional destination filename (used for "keep both" conflict resolution);
     /// defaults to the source basename.
     pub dst_name: Option<String>,
+    /// Resume an interrupted transfer from the destination's current size
+    /// (byte-offset) instead of restarting from zero.
+    #[serde(default)]
+    pub resume: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -565,6 +575,15 @@ pub struct SftpMkdirRequest {
     pub session_id: rh_core::SessionId,
     pub parent: String,
     pub name: String,
+}
+
+/// Change POSIX permission bits on a remote entry.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SftpChmodRequest {
+    pub session_id: rh_core::SessionId,
+    pub path: String,
+    pub mode: u32,
 }
 
 /// RDP input event from the UI. `event` is the tagged `RdpInputEvent`
@@ -609,6 +628,12 @@ pub struct SessionSummaryDto {
     pub protocol: Protocol,
     pub state: rh_ssh::SessionState,
     pub opened_at: String,
+}
+
+/// Live local-shell sessions for restore-on-reload.
+#[derive(Debug, Serialize)]
+pub struct LocalSessionListResponse {
+    pub sessions: Vec<crate::local_pty::LocalSessionSummary>,
 }
 
 #[derive(Debug, Serialize)]

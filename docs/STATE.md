@@ -4,7 +4,48 @@
 
 **Follow-up 2 (region-diff — the real fix):** instrumentation revealed the smoking gun — full-frame JPEG encode was **~130ms** each (the RGBA→RGB copy ran in *unoptimized* rh-rdp; the dev profile only optimized dependencies, not our own crate), capping fps at ~7 and blocking the worker; and full ~130KB base64 frames congested the single webview IPC bridge, so input invokes (clicks) queued behind them and arrived 3-15s late. Fixes: (1) **region-diff** — compute the changed bounding box vs the last frame and JPEG only that rectangle (`FrameJpeg` now carries x,y); a click/keystroke touches a tiny area → tiny encode + tiny payload → no IPC congestion. Frame coalescing was *removed* (each region is a distinct rect; dropping one leaves a stale patch). (2) `[profile.dev.package.rh-rdp] opt-level = 3` so the hot pixel loops are optimized in dev too. Added `rdp frame stats` (fps / avg encode ms / payload KB) + per-click logging for diagnosis.
 
-## Latest — SFTP file explorer (full two-pane commander)
+## Latest — tab-bar scroll, storage scope switcher, SFTP byte-resume
+
+- **Tab-bar horizontal scroll** — session tabs live in a `.scroller` (flex, `overflow-x:auto`, hidden scrollbar); wheel scrolls horizontally; the active tab auto-scrolls into view. Vault/Tools + `+`/gear/window-controls stay pinned.
+- **Storage scope switcher** — the Vault chevron opens a Personal/Team dropdown (`storage:scope`). **Personal** is active; **Team** is disabled ("needs sync") — the UI seam for the future sync feature. No backend yet.
+- **SFTP byte-offset resume** — transfers now resume from the destination's current size instead of restarting. `download/upload/copy_stream` gained an `offset` param; `SftpConn::size()` stats the remote partial. `SftpTransferRequest.resume` (default false); the dock's ↻ retry sets `resume:true`. Offset=0 path is unchanged (normal transfers unaffected).
+  - **Risk (unproven russh-sftp, user compiles):** resume branch uses `File` `AsyncSeek` (remote read seek) + `open_with_flags(WRITE|CREATE|APPEND)` / `russh_sftp::protocol::OpenFlags`. If these names differ, only resume is affected.
+- **SSH agent-forward serving — deferred to a spike.** Needs the client-`Handler` forwarded-agent-channel hook + an OS-agent byte bridge (security-sensitive, unproven API). Spike first (like sftp/rdp), then implement.
+
+
+
+- **App icons** — real `rhub` icon set generated into `crates/rh-app/icons/` (32 / 128 / 128@2x / `icon.ico` multi-res / `icon.icns` / `icon.png`) from the designer's 1024² PNG. Window + tray now show the brand icon.
+- **Favorites** — new `Host.favorite: bool` (rh-core). Migration **v9** (`ALTER TABLE hosts ADD COLUMN favorite … DEFAULT 0`; `CURRENT_SCHEMA_VERSION = 9`; v1.sql fresh schema updated). Runtime SQL in `host_store` (INSERT/UPDATE/SELECT + row map — no sqlx-macro/offline-cache impact). DTOs: `favorite` on full/create/update; handlers set/patch it. Frontend: `favorite` on `HostDto` + create/update; a **star toggle** in the HostDetail header (live-saves immediately, like agent-forwarding). Tray gained a **Favorites** submenu (pinned hosts, by name), rebuilt on `hosts:changed`.
+
+
+
+Added a system-tray icon (`rh-app/src/tray.rs`, `tray-icon` feature on the tauri dep). Right-click menu: **Open RemoteHub**, **Recent** (hosts by `last_connected_at`, newest 8), **Groups** (nested submenu per group), separator, **Quit**. Left-click shows/focuses the window. Selecting a host emits `tray:connect <host_id>`; `AppShell` listens and opens it via the normal `sessions.open` flow (connect logic stays in one place). Menu rebuilds on `hosts:changed` / `groups:changed`.
+
+- **Favorites** submenu is NOT wired — `Host` has no favorite flag yet (only `tags`, `group_id`, `last_connected_at`). Needs a `favorite` bool (migration + star toggle in the editor) — small follow-up.
+- **App icons** still the Tauri placeholders; tray reuses `default_window_icon()`. Drop a 1024² `rhub.png` and regenerate the `icons/` set (32 / 128 / 128@2x / icon.ico / icon.icns).
+- **Risk (Tauri 2.1 menu/tray API, user compiles):** `show_menu_on_left_click` (was `menu_on_left_click` pre-2.1), `SubmenuBuilder`/`MenuItemBuilder` shapes, `tray_by_id`/`set_menu`. Spike-grade surface — report compile errors.
+
+
+
+- **Resume/retry interrupted transfers** — failed/cancelled queue rows get a ↻ retry (fresh `transfer_id`, re-enqueued); dock header gains "Retry failed". Cancel now keys on the item's current `transfer_id` (survives retry). (True byte-offset resume is still a follow-up — retry restarts from 0.)
+- **Editable path field** — clicking the breadcrumb's empty area turns it into a path input (`navigateTo`): Enter validates by listing — success navigates, failure shows a red border and keeps the current listing (no clobber). Crumb buttons still navigate per-segment.
+- **Local-terminal restore-on-reload** — `LocalPtyManager` now mirrors the SSH hub: per-session 256 KiB output ring + swappable sink + `list()`/`reattach()`. New commands `local_session_list` / `local_session_reattach`; `restoreSessions` rebuilds local tabs and replays scrollback after a webview reload (was SSH-only). Local shells no longer vanish on reload.
+
+
+
+Closed the SFTP backlog from the roadmap's item 2:
+- **Streaming host↔host copy** — `rh_ssh::sftp::copy_stream(src_conn, dst_conn, …)` chunks A→B with real byte-progress + cancel (was buffered 0→full). run_transfer locks by session-id order (A==B → one lock; A≠B → ordered, no deadlock).
+- **TOFU host-key pinning** — `SftpConn::connect` now takes `Arc<dyn KnownHostsStore>`; `SftpHostKey` handler does silent trust-on-first-use against the shared `known_hosts` store (matches the SSH path), **rejects a changed key**. Replaces trust-all. `fingerprint_sha256` is now `pub(crate)` in `actor.rs` and reused.
+- **SSH-agent auth for SFTP** — `try_auth` handles `RevealedCredential::Agent` (Pageant / OpenSSH pipe), mirroring the shell actor's agent block.
+- **chmod** — `SftpConn::chmod(path, mode)` (`set_metadata` w/ `FileAttributes.permissions`), `sftp_chmod` command, context-menu "Permissions…" (host only) → a 3×3 rwx grid dialog with live octal.
+
+**New risk flags (unproven russh-sftp surface):** `set_metadata` + `russh_sftp::protocol::FileAttributes` path (chmod). Agent path mirrors the proven actor code; copy_stream reuses already-compiled open/create/read/write/shutdown.
+
+## Latest — Navy default + Redpanda theme; search-field click target
+
+Theme picker gained **Navy** (deep-blue surfaces) — now the **default** (`Theme::Navy` `#[default]`) — and **Redpanda** (near-black warm surfaces + coral-red accent `#f0552f`, the only theme that shifts the accent). Both are `:root[data-theme=…]` token blocks; applied via `AppShell` `data-theme`. The Storage search hero is now a `<label>` so the whole 54px frame focuses the input (no more narrow hit area).
+
+
 
 A complete Termius/commander-style SFTP browser, built incrementally and live-verified. Spec/pipeline reference: **`docs/specs/sftp.md`**.
 

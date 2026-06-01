@@ -53,8 +53,8 @@ impl HostStore for SqliteHostStore {
             INSERT INTO hosts (
                 id, name, display_name, group_id, protocol, hostname, port,
                 username, tags_json, color, notes, startup_command, env_vars_json,
-                detected_os, default_credential_id, jump_host_id, agent_forwarding, last_connected_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                detected_os, default_credential_id, jump_host_id, agent_forwarding, favorite, last_connected_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ",
         )
         .bind(host.id.as_str())
@@ -74,6 +74,7 @@ impl HostStore for SqliteHostStore {
         .bind(host.default_credential_id.as_ref().map(|c| c.as_str()))
         .bind(host.jump_host_id.as_ref().map(|h| h.as_str()))
         .bind(i64::from(host.agent_forwarding))
+        .bind(i64::from(host.favorite))
         .bind(host.last_connected_at.map(|d| d.to_rfc3339()))
         .bind(host.created_at.to_rfc3339())
         .bind(host.updated_at.to_rfc3339())
@@ -176,6 +177,7 @@ impl HostStore for SqliteHostStore {
                 default_credential_id = ?,
                 jump_host_id = ?,
                 agent_forwarding = ?,
+                favorite = ?,
                 updated_at = ?
             WHERE id = ?
             ",
@@ -196,6 +198,7 @@ impl HostStore for SqliteHostStore {
         .bind(host.default_credential_id.as_ref().map(|c| c.as_str()))
         .bind(host.jump_host_id.as_ref().map(|h| h.as_str()))
         .bind(i64::from(host.agent_forwarding))
+        .bind(i64::from(host.favorite))
         .bind(host.updated_at.to_rfc3339())
         .bind(host.id.as_str())
         .execute(self.db.pool())
@@ -266,7 +269,7 @@ const SELECT_HOST_PREFIX: &str = "
     SELECT
         id, name, display_name, group_id, protocol, hostname, port,
         username, tags_json, color, notes, startup_command, env_vars_json,
-        detected_os, default_credential_id, jump_host_id, agent_forwarding, last_connected_at, created_at, updated_at
+        detected_os, default_credential_id, jump_host_id, agent_forwarding, favorite, last_connected_at, created_at, updated_at
     FROM hosts
 ";
 
@@ -274,7 +277,7 @@ const SELECT_HOST_COLUMNS: &str = "
     SELECT
         id, name, display_name, group_id, protocol, hostname, port,
         username, tags_json, color, notes, startup_command, env_vars_json,
-        detected_os, default_credential_id, jump_host_id, agent_forwarding, last_connected_at, created_at, updated_at
+        detected_os, default_credential_id, jump_host_id, agent_forwarding, favorite, last_connected_at, created_at, updated_at
     FROM hosts
     WHERE id = ?
 ";
@@ -331,6 +334,9 @@ fn row_to_host(row: &sqlx::sqlite::SqliteRow) -> Result<Host, StorageError> {
     let agent_forwarding: i64 = row
         .try_get("agent_forwarding")
         .map_err(|e| StorageError::Backend(format!("read agent_forwarding: {e}")))?;
+    let favorite: i64 = row
+        .try_get("favorite")
+        .map_err(|e| StorageError::Backend(format!("read favorite: {e}")))?;
     let last_connected_at_s: Option<String> = row
         .try_get("last_connected_at")
         .map_err(|e| StorageError::Backend(format!("read last_connected_at: {e}")))?;
@@ -393,6 +399,7 @@ fn row_to_host(row: &sqlx::sqlite::SqliteRow) -> Result<Host, StorageError> {
         default_credential_id: default_credential_id.map(CredentialId::from_raw),
         jump_host_id: jump_host_id.map(HostId::from_raw),
         agent_forwarding: agent_forwarding != 0,
+        favorite: favorite != 0,
         last_connected_at,
         created_at,
         updated_at,

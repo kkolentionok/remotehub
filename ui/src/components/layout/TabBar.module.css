@@ -189,3 +189,44 @@
     background: var(--color-subtle);
     color: var(--text-1);
 }
+
+/* Session-tab strip: scrolls horizontally when tabs overflow. */
+.scroller {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    align-self: stretch;
+}
+.scroller::-webkit-scrollbar { height: 0; width: 0; display: none; }
+
+/* Storage scope switcher (Personal / Team). */
+.vaultWrap { position: relative; flex-shrink: 0; display: inline-flex; }
+.chevBtn { display: inline-flex; align-items: center; padding: 2px; margin-left: 1px; border-radius: 3px; }
+.chevBtn:hover { background: var(--color-subtle); }
+.scopeMenu {
+    position: fixed; z-index: 200;
+    min-width: 196px; padding: 4px;
+    background: var(--color-elevated); border: 1px solid var(--color-border);
+    border-radius: var(--radius-md); box-shadow: var(--shadow-pop);
+}
+.scopeHeader {
+    font-size: var(--text-xs, 11px); text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-4); font-weight: 600; padding: 6px 8px 4px;
+}
+.scopeItem {
+    display: flex; align-items: center; gap: 9px; width: 100%;
+    padding: 7px 8px; border-radius: var(--radius-sm); color: var(--text-1);
+    font-size: 13px; text-align: left;
+}
+.scopeItem:not(:disabled):hover { background: var(--color-subtle); }
+.scopeItem:disabled { color: var(--text-3); cursor: default; }
+.scopeItem span { flex: 1; }
+.scopeItemOn { color: var(--color-accent); }
+.scopeCheck { color: var(--color-accent); }
+.scopeLock { color: var(--text-4); }
+.scopeHint { font-size: 11px; color: var(--text-4); padding: 4px 8px 6px; }

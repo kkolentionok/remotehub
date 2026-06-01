@@ -16,6 +16,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use crate::{RevealedCredential, SshError};
+use rh_core::{KnownHostKey, KnownHostsStore};
 
 /// One remote directory entry (wire-compatible with the UI `FsEntry`).
 #[derive(Debug, Serialize)]
@@ -38,19 +39,37 @@ pub struct SftpListing {
     pub entries: Vec<SftpEntry>,
 }
 
-/// Host-key handler for SFTP connections. Trust-all for now (see module
-/// docs); real TOFU pinning is a follow-up.
-struct TrustAll;
+/// Host-key handler for SFTP connections. Silent TOFU against the shared
+/// `known_hosts` store: first sight pins the key, a matching key is accepted,
+/// a *changed* key is rejected (the interactive prompt lives on the shell
+/// path; SFTP reuses whatever that pinned).
+struct SftpHostKey {
+    known: Arc<dyn KnownHostsStore>,
+    hostname: String,
+    port: u16,
+}
 
 #[async_trait::async_trait]
-impl russh::client::Handler for TrustAll {
+impl russh::client::Handler for SftpHostKey {
     type Error = russh::Error;
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh::keys::key::PublicKey,
+        server_public_key: &russh::keys::key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        Ok(true)
+        let fingerprint = crate::actor::fingerprint_sha256(server_public_key);
+        let key_type = server_public_key.name().to_string();
+        match self.known.lookup(&self.hostname, self.port).await {
+            Ok(Some(k)) if k.fingerprint_sha256 == fingerprint => Ok(true),
+            Ok(Some(_)) => Ok(false), // changed key → refuse
+            Ok(None) => {
+                // trust on first use
+                let entry = KnownHostKey { key_type, fingerprint_sha256: fingerprint };
+                let _ = self.known.remember(&self.hostname, self.port, &entry).await;
+                Ok(true)
+            }
+            Err(_) => Ok(true), // store unavailable → don't lock the user out
+        }
     }
 }
 
@@ -59,19 +78,25 @@ impl russh::client::Handler for TrustAll {
 pub struct SftpConn {
     sftp: russh_sftp::client::SftpSession,
     /// Keep the SSH transport alive for the session's lifetime.
-    _handle: russh::client::Handle<TrustAll>,
+    _handle: russh::client::Handle<SftpHostKey>,
 }
 
 impl SftpConn {
     /// Connect, authenticate (trying each credential in order), and open
-    /// the `sftp` subsystem.
+    /// the `sftp` subsystem. Host key is TOFU-pinned via `known`.
     pub async fn connect(
         hostname: &str,
         port: u16,
         credentials: Vec<RevealedCredential>,
+        known: Arc<dyn KnownHostsStore>,
     ) -> Result<Self, SshError> {
         let config = Arc::new(russh::client::Config::default());
-        let mut handle = russh::client::connect(config, (hostname, port), TrustAll).await?;
+        let handler = SftpHostKey {
+            known,
+            hostname: hostname.to_string(),
+            port,
+        };
+        let mut handle = russh::client::connect(config, (hostname, port), handler).await?;
 
         let mut authed = false;
         for cred in credentials {
@@ -209,11 +234,12 @@ impl SftpConn {
         remote: &str,
         local_dir: &str,
         dst_name: Option<&str>,
+        offset: u64,
         cancel: &std::sync::atomic::AtomicBool,
         progress: &mut (dyn FnMut(u64) + Send),
     ) -> Result<String, SshError> {
         use std::io::Write;
-        use tokio::io::AsyncReadExt;
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
         let name = dst_name.unwrap_or_else(|| remote.rsplit('/').next().unwrap_or(remote));
         let dest = std::path::Path::new(local_dir).join(name);
         let mut rf = self
@@ -221,9 +247,19 @@ impl SftpConn {
             .open(remote)
             .await
             .map_err(|e| SshError::Sftp(format!("open {remote}: {e}")))?;
-        let mut lf = std::fs::File::create(&dest)?;
+        // Resume: seek the remote read cursor and append to the local file
+        // instead of truncating it.
+        let mut lf = if offset > 0 {
+            rf.seek(std::io::SeekFrom::Start(offset))
+                .await
+                .map_err(|e| SshError::Sftp(format!("seek {remote}: {e}")))?;
+            std::fs::OpenOptions::new().create(true).append(true).open(&dest)?
+        } else {
+            std::fs::File::create(&dest)?
+        };
         let mut buf = vec![0u8; TRANSFER_CHUNK];
-        let mut total: u64 = 0;
+        let mut total: u64 = offset;
+        progress(total);
         loop {
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 return Err(SshError::Sftp("cancelled".to_string()));
@@ -247,10 +283,11 @@ impl SftpConn {
         local: &str,
         remote_dir: &str,
         dst_name: Option<&str>,
+        offset: u64,
         cancel: &std::sync::atomic::AtomicBool,
         progress: &mut (dyn FnMut(u64) + Send),
     ) -> Result<String, SshError> {
-        use std::io::Read;
+        use std::io::{Read, Seek};
         use tokio::io::AsyncWriteExt;
         let name = match dst_name {
             Some(n) => n.to_string(),
@@ -261,13 +298,27 @@ impl SftpConn {
         };
         let dest = join_posix(remote_dir, &name);
         let mut lf = std::fs::File::open(local)?;
-        let mut rf = self
-            .sftp
-            .create(dest.clone())
-            .await
-            .map_err(|e| SshError::Sftp(format!("create {dest}: {e}")))?;
+        // Resume: skip the already-uploaded prefix locally and append on the
+        // remote (open WRITE|CREATE|APPEND) instead of truncating.
+        let mut rf = if offset > 0 {
+            lf.seek(std::io::SeekFrom::Start(offset))?;
+            use russh_sftp::protocol::OpenFlags;
+            self.sftp
+                .open_with_flags(
+                    dest.clone(),
+                    OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::APPEND,
+                )
+                .await
+                .map_err(|e| SshError::Sftp(format!("open(append) {dest}: {e}")))?
+        } else {
+            self.sftp
+                .create(dest.clone())
+                .await
+                .map_err(|e| SshError::Sftp(format!("create {dest}: {e}")))?
+        };
         let mut buf = vec![0u8; TRANSFER_CHUNK];
-        let mut total: u64 = 0;
+        let mut total: u64 = offset;
+        progress(total);
         loop {
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 return Err(SshError::Sftp("cancelled".to_string()));
@@ -292,6 +343,30 @@ impl SftpConn {
             .await
             .map_err(|e| SshError::Sftp(format!("mkdir {dest}: {e}")))?;
         Ok(())
+    }
+
+    /// Change POSIX permission bits on a remote entry.
+    pub async fn chmod(&self, path: &str, mode: u32) -> Result<(), SshError> {
+        let attrs = russh_sftp::protocol::FileAttributes {
+            permissions: Some(mode),
+            ..Default::default()
+        };
+        self.sftp
+            .set_metadata(path.to_string(), attrs)
+            .await
+            .map_err(|e| SshError::Sftp(format!("chmod {path}: {e}")))?;
+        Ok(())
+    }
+
+    /// Size of a remote file in bytes (0 if missing/unknown). Used to
+    /// compute the resume offset for an interrupted transfer.
+    pub async fn size(&self, path: &str) -> u64 {
+        self.sftp
+            .metadata(path.to_string())
+            .await
+            .ok()
+            .and_then(|m| m.size)
+            .unwrap_or(0)
     }
 
     /// Rename a remote entry in place (same parent directory).
@@ -353,7 +428,7 @@ impl SftpConn {
 
 /// Try one credential. Returns `true` on a successful authentication.
 async fn try_auth(
-    handle: &mut russh::client::Handle<TrustAll>,
+    handle: &mut russh::client::Handle<SftpHostKey>,
     cred: RevealedCredential,
 ) -> bool {
     match cred {
@@ -392,9 +467,110 @@ async fn try_auth(
                 .await
                 .unwrap_or(false)
         }
-        // Agent auth for SFTP is a follow-up.
-        RevealedCredential::Agent { .. } => false,
+        // SSH-agent auth (Pageant / OpenSSH agent), mirroring the shell actor.
+        RevealedCredential::Agent { username } => try_auth_agent(handle, &username).await,
     }
+}
+
+/// SSH-agent auth for the SFTP transport. Best-effort: any failure to reach
+/// the agent or sign returns `false` so the next credential is tried.
+async fn try_auth_agent(handle: &mut russh::client::Handle<SftpHostKey>, username: &str) -> bool {
+    use russh::keys::agent::client::AgentClient;
+
+    #[cfg(unix)]
+    let mut agent = match AgentClient::connect_env().await {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    #[cfg(windows)]
+    let mut agent = {
+        use tokio::net::windows::named_pipe::ClientOptions;
+        match ClientOptions::new().open(r"\\.\pipe\openssh-ssh-agent") {
+            Ok(pipe) => AgentClient::connect(pipe),
+            Err(_) => return false,
+        }
+    };
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (handle, username);
+        return false;
+    }
+
+    #[cfg(any(unix, windows))]
+    {
+        let identities = match agent.request_identities().await {
+            Ok(ids) => ids,
+            Err(_) => return false,
+        };
+        for key in identities {
+            let (returned, res) = handle.authenticate_future(username, key, agent).await;
+            agent = returned;
+            if matches!(res, Ok(true)) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// Stream a file directly between two SFTP connections in chunks, reporting
+/// bytes copied and honouring the cancel flag. The caller holds whatever
+/// locks guard the two connections. Returns the remote destination path.
+pub async fn copy_stream(
+    src_conn: &SftpConn,
+    dst_conn: &SftpConn,
+    src_path: &str,
+    dst_dir: &str,
+    dst_name: Option<&str>,
+    offset: u64,
+    cancel: &std::sync::atomic::AtomicBool,
+    progress: &mut (dyn FnMut(u64) + Send),
+) -> Result<String, SshError> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+    let name = dst_name.unwrap_or_else(|| src_path.rsplit('/').next().unwrap_or(src_path));
+    let dest = join_posix(dst_dir, name);
+    let mut rf = src_conn
+        .sftp
+        .open(src_path)
+        .await
+        .map_err(|e| SshError::Sftp(format!("open {src_path}: {e}")))?;
+    let mut wf = if offset > 0 {
+        rf.seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(|e| SshError::Sftp(format!("seek {src_path}: {e}")))?;
+        use russh_sftp::protocol::OpenFlags;
+        dst_conn
+            .sftp
+            .open_with_flags(
+                dest.clone(),
+                OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::APPEND,
+            )
+            .await
+            .map_err(|e| SshError::Sftp(format!("open(append) {dest}: {e}")))?
+    } else {
+        dst_conn
+            .sftp
+            .create(dest.clone())
+            .await
+            .map_err(|e| SshError::Sftp(format!("create {dest}: {e}")))?
+    };
+    let mut buf = vec![0u8; TRANSFER_CHUNK];
+    let mut total: u64 = offset;
+    progress(total);
+    loop {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(SshError::Sftp("cancelled".to_string()));
+        }
+        let n = rf.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        wf.write_all(&buf[..n]).await?;
+        total += n as u64;
+        progress(total);
+    }
+    wf.shutdown().await?;
+    Ok(dest)
 }
 
 /// Chunk size for streamed transfers (256 KiB).

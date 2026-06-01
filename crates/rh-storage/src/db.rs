@@ -20,7 +20,7 @@ use rh_core::StorageError;
 /// Schema version this binary expects. Bumping this triggers either an
 /// incremental migration (when a path exists, e.g. v2 → v3) or, for any
 /// other mismatch, a drop-recreate in alpha mode.
-pub const CURRENT_SCHEMA_VERSION: u32 = 8;
+pub const CURRENT_SCHEMA_VERSION: u32 = 9;
 
 /// Embedded migration script for the current version.
 const V1_SQL: &str = include_str!("migrations/v1.sql");
@@ -63,6 +63,12 @@ const MIGRATE_V6_TO_V7: &str =
 /// table (TOFU pins for RDP server certificates). New table, no data loss.
 const MIGRATE_V7_TO_V8: &str = "CREATE TABLE rdp_known_certs (\n    hostname            TEXT NOT NULL,\n    port                INTEGER NOT NULL,\n    fingerprint_sha256  TEXT NOT NULL,\n    subject             TEXT NOT NULL,\n    trusted_at          TEXT NOT NULL,\n    PRIMARY KEY (hostname, port)\n);";
 
+/// Incremental, data-preserving migration v8 → v9: `favorite` on hosts
+/// (user-pinned, drives the tray Favorites submenu). Additive NOT NULL
+/// column with a 0 default.
+const MIGRATE_V8_TO_V9: &str =
+    "ALTER TABLE hosts ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0;";
+
 /// Ordered forward migrations `(from_version, sql)`. The runner applies
 /// every step whose `from_version >= existing` in sequence, so a DB any
 /// number of versions behind (as long as the chain is contiguous from
@@ -75,6 +81,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (5, MIGRATE_V5_TO_V6),
     (6, MIGRATE_V6_TO_V7),
     (7, MIGRATE_V7_TO_V8),
+    (8, MIGRATE_V8_TO_V9),
 ];
 
 /// What [`Db::open`] decided to do with the schema.

@@ -47,6 +47,7 @@ import type {
     SessionId,
     SessionInputRequest,
     SessionListResponse,
+    LocalSessionListResponse,
     SessionOpenRequest,
     SessionOpenResponse,
     SessionResizeRequest,
@@ -263,6 +264,22 @@ export const localSession = {
 
     resize: (req: SessionResizeRequest): Promise<void> =>
         call("local_session_resize", req),
+
+    /** Live local shells (for restore-on-reload). */
+    list: (): Promise<LocalSessionListResponse> => call("local_session_list"),
+
+    /** Re-bind a live local shell to a fresh channel after a reload. */
+    reattach: (
+        sessionId: SessionId,
+        onEvent: (e: SshSessionEvent) => void,
+    ): Promise<boolean> => {
+        const channel = new Channel<SshSessionEvent>();
+        channel.onmessage = onEvent;
+        return invoke<boolean>("local_session_reattach", {
+            req: { session_id: sessionId },
+            onEvent: channel,
+        });
+    },
 };
 
 export const localFs = {
@@ -323,6 +340,7 @@ export const sftp = {
             src_path: string;
             dst_dir: string;
             dst_name?: string;
+            resume?: boolean;
         },
         onProgress: (bytes: number) => void,
     ): Promise<void> => {
@@ -334,6 +352,8 @@ export const sftp = {
         call("sftp_transfer_cancel", { transfer_id: transferId }),
     mkdir: (sessionId: SessionId, parent: string, name: string): Promise<void> =>
         call("sftp_mkdir", { session_id: sessionId, parent, name }),
+    chmod: (sessionId: SessionId, path: string, mode: number): Promise<void> =>
+        call("sftp_chmod", { session_id: sessionId, path, mode }),
 };
 
 // =====================================================================

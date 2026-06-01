@@ -146,7 +146,7 @@ impl russh::client::Handler for ClientHandler {
 /// NOTE (russh version-sensitive): `public_key_bytes()` comes from the
 /// `russh::keys::PublicKeyBase64` trait. If the trait/method moved,
 /// adjust the import and call below — the hashing itself is stable.
-fn fingerprint_sha256(key: &russh::keys::key::PublicKey) -> String {
+pub(crate) fn fingerprint_sha256(key: &russh::keys::key::PublicKey) -> String {
     use russh::keys::PublicKeyBase64;
     let blob = key.public_key_bytes();
     let digest = Sha256::digest(&blob);

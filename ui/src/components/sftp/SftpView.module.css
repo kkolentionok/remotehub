@@ -209,3 +209,27 @@ button.qx:hover { background: var(--color-elevated); color: var(--text-1); }
 .cfOpt:hover { border-color: var(--color-accent); background: var(--color-subtle); }
 .cfOptT { font-size: 13.5px; font-weight: 500; color: var(--text-1); }
 .cfOptS { font-size: 11.5px; color: var(--text-3); }
+
+/* ── chmod dialog ── */
+.permsName { padding: 0 20px 4px; font-size: 12.5px; color: var(--text-3); font-family: var(--font-mono); }
+.permsGrid { display: grid; grid-template-columns: 1fr 44px 44px 44px; gap: 6px; align-items: center; padding: 12px 20px 4px; }
+.permsCol { text-align: center; font-size: 11px; color: var(--text-4); text-transform: uppercase; }
+.permsRow { font-size: 13px; color: var(--text-2); }
+.permsCell { height: 32px; border-radius: var(--radius-md); border: 1px solid var(--color-border);
+    background: var(--color-surface); color: var(--text-4); font-family: var(--font-mono); font-size: 13px; }
+.permsCell:hover { border-color: var(--color-border-strong); }
+.permsCellOn { background: var(--accent-soft); border-color: var(--color-accent); color: var(--color-accent); }
+.permsOctal { padding: 10px 20px 0; font-size: 12.5px; color: var(--text-3); }
+
+/* ── editable path input ── */
+.pathInput { flex: 1; min-width: 0; height: 30px; background: var(--color-canvas);
+    border: 1px solid var(--color-accent); border-radius: var(--radius-md); padding: 0 8px;
+    color: var(--text-1); font-family: var(--font-mono); font-size: 12.5px; outline: none; }
+.pathInputErr { border-color: var(--color-danger); }
+.crumbs { cursor: text; }
+
+/* ── queue retry ── */
+.qretry { width: 24px; height: 24px; border-radius: 5px; display: flex; align-items: center; justify-content: center; color: var(--text-3); }
+.qretry:hover { background: var(--color-elevated); color: var(--color-accent); }
+.queueRetry { font-size: 12px; color: var(--color-accent); padding: 5px 9px; border-radius: var(--radius-md); }
+.queueRetry:hover { background: var(--color-elevated); }

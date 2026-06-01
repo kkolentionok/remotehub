@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ChevronDown, Columns2, FolderOpen, Monitor, Plus, Server, Settings, Terminal, Wrench, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, ChevronDown, Columns2, FolderOpen, HardDrive, Lock, Monitor, Plus, Server, Settings, Terminal, Users, Wrench, X } from "lucide-react";
 
 import { useT } from "../../i18n";
 import { leafKeys } from "../../lib/paneTree";
@@ -54,6 +54,31 @@ export function TabBar() {
 
     const [dragId, setDragId] = useState<string | null>(null);
 
+    // Horizontal-scrolling strip for session tabs (overflow when many).
+    const scrollerRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        const el = scrollerRef.current;
+        if (!el || activeTabId === null) return;
+        const active = el.querySelector<HTMLElement>(`[data-tabid="${activeTabId}"]`);
+        active?.scrollIntoView({ inline: "nearest", block: "nearest" });
+    }, [activeTabId, tabs.length]);
+
+    // Storage scope switcher (Personal / Team). Team is the seam for the
+    // future sync feature — disabled until a backend exists.
+    const [scopeOpen, setScopeOpen] = useState(false);
+    const [scopePos, setScopePos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+    const vaultRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        if (!scopeOpen) return;
+        const onDoc = (e: MouseEvent) => {
+            if (vaultRef.current && !vaultRef.current.contains(e.target as Node)) {
+                setScopeOpen(false);
+            }
+        };
+        document.addEventListener("mousedown", onDoc);
+        return () => document.removeEventListener("mousedown", onDoc);
+    }, [scopeOpen]);
+
     const endDrag = () => {
         setDragId(null);
         endDragStore();
@@ -82,20 +107,57 @@ export function TabBar() {
             }}
         >
             {/* App sections — matte, square, neutral, not closable */}
-            <button
-                type="button"
-                role="tab"
-                aria-selected={sectionActive && section === "vault"}
-                className={`${styles.section} ${sectionActive && section === "vault" ? styles.sectionOn : ""}`}
-                onClick={() => {
-                    setActiveTab(null);
-                    setSection("vault");
-                }}
-            >
-                <Server size={14} className={styles.sectionIcon} />
-                <span className={styles.label}>{t("nav.vault")}</span>
-                <ChevronDown size={13} className={styles.chev} />
-            </button>
+            <div className={styles.vaultWrap} ref={vaultRef}>
+                <button
+                    type="button"
+                    role="tab"
+                    aria-selected={sectionActive && section === "vault"}
+                    className={`${styles.section} ${sectionActive && section === "vault" ? styles.sectionOn : ""}`}
+                    onClick={() => {
+                        setActiveTab(null);
+                        setSection("vault");
+                    }}
+                >
+                    <Server size={14} className={styles.sectionIcon} />
+                    <span className={styles.label}>{t("nav.vault")}</span>
+                    <span
+                        className={styles.chevBtn}
+                        role="button"
+                        aria-label={t("storage.scope")}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            const r = vaultRef.current?.getBoundingClientRect();
+                            if (r) setScopePos({ top: r.bottom + 4, left: r.left });
+                            setScopeOpen((v) => !v);
+                        }}
+                    >
+                        <ChevronDown size={13} className={styles.chev} />
+                    </span>
+                </button>
+                {scopeOpen && (
+                    <div
+                        className={styles.scopeMenu}
+                        style={{ top: scopePos.top, left: scopePos.left }}
+                    >
+                        <div className={styles.scopeHeader}>{t("storage.scope")}</div>
+                        <button
+                            type="button"
+                            className={`${styles.scopeItem} ${styles.scopeItemOn}`}
+                            onClick={() => setScopeOpen(false)}
+                        >
+                            <HardDrive size={14} />
+                            <span>{t("storage.personal")}</span>
+                            <Check size={14} className={styles.scopeCheck} />
+                        </button>
+                        <button type="button" className={styles.scopeItem} disabled title={t("storage.teamLocked")}>
+                            <Users size={14} />
+                            <span>{t("storage.team")}</span>
+                            <Lock size={12} className={styles.scopeLock} />
+                        </button>
+                        <div className={styles.scopeHint}>{t("storage.teamLocked")}</div>
+                    </div>
+                )}
+            </div>
             <button
                 type="button"
                 role="tab"
@@ -112,7 +174,15 @@ export function TabBar() {
 
             <span className={styles.divider} aria-hidden="true" />
 
-            {/* Live session tabs — pill, accent icon, closable */}
+            {/* Live session tabs — pill, accent icon, closable. Scrolls
+                horizontally when they overflow; wheel scrolls the strip. */}
+            <div
+                ref={scrollerRef}
+                className={styles.scroller}
+                onWheel={(e) => {
+                    if (e.deltaY !== 0) e.currentTarget.scrollLeft += e.deltaY;
+                }}
+            >
             {tabs.map((tab) => {
                 const keys = leafKeys(tab.root);
                 const focused =
@@ -130,6 +200,7 @@ export function TabBar() {
                         key={tab.id}
                         type="button"
                         role="tab"
+                        data-tabid={tab.id}
                         aria-selected={shownTabId === tab.id}
                         draggable
                         className={`${styles.sessionTab} ${shownTabId === tab.id ? styles.active : ""} ${dragging && shownTabId === tab.id ? styles.shown : ""} ${dragging && shownTabId !== tab.id ? styles.dimmed : ""} ${dragId === tab.id ? styles.dragging : ""}`}
@@ -198,6 +269,7 @@ export function TabBar() {
                     </button>
                 );
             })}
+            </div>
 
             <button
                 type="button"

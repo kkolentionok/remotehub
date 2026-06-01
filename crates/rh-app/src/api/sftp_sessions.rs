@@ -18,6 +18,7 @@ use crate::api::dto::{
     SftpTransferCancelRequest, SftpTransferKind, SftpTransferRequest,
 };
 use crate::api::dto::SftpMkdirRequest;
+use crate::api::dto::SftpChmodRequest;
 use crate::api::dto::{SessionIdRequest, SessionOpenResponse};
 use tauri::ipc::Channel;
 use crate::api::error::{ApiError, ApiResult};
@@ -35,7 +36,7 @@ pub async fn sftp_open(
         return Err(ApiError::validation("protocol", "host is not an SSH host"));
     }
     let creds = revealed_creds_for(state.inner(), &host).await?;
-    let conn = SftpConn::connect(&host.hostname, host.port, creds)
+    let conn = SftpConn::connect(&host.hostname, host.port, creds, state.known_hosts.clone())
         .await
         .map_err(|e| ApiError::Internal {
             message: e.to_string(),
@@ -223,9 +224,21 @@ async fn run_transfer(
                 .get(&req.session_id)
                 .await
                 .ok_or_else(|| ApiError::not_found("sftp session"))?;
+            // Resume from the partial local file's current size.
+            let offset = if req.resume {
+                let name = req
+                    .dst_name
+                    .clone()
+                    .unwrap_or_else(|| req.src_path.rsplit('/').next().unwrap_or(&req.src_path).to_string());
+                std::fs::metadata(std::path::Path::new(&req.dst_dir).join(name))
+                    .map(|m| m.len())
+                    .unwrap_or(0)
+            } else {
+                0
+            };
             conn.lock()
                 .await
-                .download_stream(&req.src_path, &req.dst_dir, req.dst_name.as_deref(), cancel, &mut prog)
+                .download_stream(&req.src_path, &req.dst_dir, req.dst_name.as_deref(), offset, cancel, &mut prog)
                 .await
                 .map_err(to_internal)?;
         }
@@ -235,9 +248,25 @@ async fn run_transfer(
                 .get(&req.session_id)
                 .await
                 .ok_or_else(|| ApiError::not_found("sftp session"))?;
+            // Resume from the partial remote file's current size.
+            let offset = if req.resume {
+                let name = req
+                    .dst_name
+                    .clone()
+                    .unwrap_or_else(|| {
+                        std::path::Path::new(&req.src_path)
+                            .file_name()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "file".to_string())
+                    });
+                let dest = format!("{}/{}", req.dst_dir.trim_end_matches('/'), name);
+                conn.lock().await.size(&dest).await
+            } else {
+                0
+            };
             conn.lock()
                 .await
-                .upload_stream(&req.src_path, &req.dst_dir, req.dst_name.as_deref(), cancel, &mut prog)
+                .upload_stream(&req.src_path, &req.dst_dir, req.dst_name.as_deref(), offset, cancel, &mut prog)
                 .await
                 .map_err(to_internal)?;
         }
@@ -251,23 +280,47 @@ async fn run_transfer(
                 .get(&req.session_id)
                 .await
                 .ok_or_else(|| ApiError::not_found("sftp session"))?;
-            let dst = state
-                .sftp
-                .get(to)
-                .await
-                .ok_or_else(|| ApiError::not_found("sftp session"))?;
-            let data = from.lock().await.read_file(&req.src_path).await.map_err(to_internal)?;
-            prog(0);
-            let name = req
+            let name = req.dst_name.as_deref();
+            // Resume from the partial destination file's current size.
+            let dest_name = req
                 .dst_name
-                .as_deref()
-                .unwrap_or_else(|| req.src_path.rsplit('/').next().unwrap_or(&req.src_path));
-            dst.lock()
-                .await
-                .put_in_dir(&req.dst_dir, name, &data)
-                .await
-                .map_err(to_internal)?;
-            prog(data.len() as u64);
+                .clone()
+                .unwrap_or_else(|| req.src_path.rsplit('/').next().unwrap_or(&req.src_path).to_string());
+            let dest_path = format!("{}/{}", req.dst_dir.trim_end_matches('/'), dest_name);
+            if *to == req.session_id {
+                // same host both panels — lock once, copy through one session
+                let g = from.lock().await;
+                let offset = if req.resume { g.size(&dest_path).await } else { 0 };
+                rh_ssh::sftp::copy_stream(&g, &g, &req.src_path, &req.dst_dir, name, offset, cancel, &mut prog)
+                    .await
+                    .map_err(to_internal)?;
+            } else {
+                let dst = state
+                    .sftp
+                    .get(to)
+                    .await
+                    .ok_or_else(|| ApiError::not_found("sftp session"))?;
+                let offset = if req.resume {
+                    dst.lock().await.size(&dest_path).await
+                } else {
+                    0
+                };
+                // Lock in a consistent (id-ordered) order so two opposite-direction
+                // copies between the same pair can't deadlock.
+                if req.session_id.to_string() <= to.to_string() {
+                    let gs = from.lock().await;
+                    let gd = dst.lock().await;
+                    rh_ssh::sftp::copy_stream(&gs, &gd, &req.src_path, &req.dst_dir, name, offset, cancel, &mut prog)
+                        .await
+                        .map_err(to_internal)?;
+                } else {
+                    let gd = dst.lock().await;
+                    let gs = from.lock().await;
+                    rh_ssh::sftp::copy_stream(&gs, &gd, &req.src_path, &req.dst_dir, name, offset, cancel, &mut prog)
+                        .await
+                        .map_err(to_internal)?;
+                }
+            }
         }
     }
     Ok(())
@@ -294,6 +347,24 @@ pub async fn sftp_mkdir(state: State<'_, AppState>, req: SftpMkdirRequest) -> Ap
     conn.lock()
         .await
         .mkdir(&req.parent, &req.name)
+        .await
+        .map_err(|e| ApiError::Internal {
+            message: e.to_string(),
+        })?;
+    Ok(())
+}
+
+#[tauri::command]
+#[instrument(level = "debug", skip(state))]
+pub async fn sftp_chmod(state: State<'_, AppState>, req: SftpChmodRequest) -> ApiResult<()> {
+    let conn = state
+        .sftp
+        .get(&req.session_id)
+        .await
+        .ok_or_else(|| ApiError::not_found("sftp session"))?;
+    conn.lock()
+        .await
+        .chmod(&req.path, req.mode)
         .await
         .map_err(|e| ApiError::Internal {
             message: e.to_string(),

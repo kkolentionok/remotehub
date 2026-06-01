@@ -79,6 +79,7 @@ CREATE TABLE hosts (
     default_credential_id   TEXT REFERENCES credentials(id) ON DELETE SET NULL,
     jump_host_id            TEXT,
     agent_forwarding        INTEGER NOT NULL DEFAULT 0,
+    favorite                INTEGER NOT NULL DEFAULT 0,
     last_connected_at       TEXT,
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL

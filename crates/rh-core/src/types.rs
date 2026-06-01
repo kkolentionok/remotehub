@@ -142,6 +142,10 @@ pub struct Host {
     /// requests agent forwarding and bridges the server's back-channels
     /// to the OS agent. Off by default (forwarding has security caveats).
     pub agent_forwarding: bool,
+    /// User-pinned favorite. Surfaced in the tray's Favorites submenu and
+    /// (optionally) starred in the UI. Set by the user via a star toggle.
+    /// Defaults to false.
+    pub favorite: bool,
     /// When a session to this host last reached the `Ready` state.
     /// Machine-set by the session layer (never through create/update);
     /// `None` until the first successful connect. Drives the
@@ -182,6 +186,7 @@ impl Host {
             default_credential_id: None,
             jump_host_id: None,
             agent_forwarding: false,
+            favorite: false,
             last_connected_at: None,
             created_at: now,
             updated_at: now,
