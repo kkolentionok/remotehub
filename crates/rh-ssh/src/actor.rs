@@ -399,6 +399,7 @@ async fn drive_target_connect<F>(
     rx_cmd: &mut mpsc::Receiver<SessionCommand>,
     dec_tx: &mpsc::Sender<bool>,
     rejected: &mut bool,
+    pending_size: &mut Option<(u16, u16)>,
 ) -> ConnectOutcome
 where
     F: std::future::Future<Output = Result<russh::client::Handle<ClientHandler>, SshError>>,
@@ -420,7 +421,12 @@ where
                     let _ = dec_tx.send(accept).await;
                 }
                 Some(SessionCommand::Shutdown) | None => return ConnectOutcome::Cancelled,
-                // Stray input/resize before the channel exists — ignore.
+                // The channel doesn't exist yet, so we can't apply a resize
+                // now — but remember the latest one so the PTY opens at the
+                // real size. Input before the shell is meaningless → ignore.
+                Some(SessionCommand::Resize { cols, rows }) => {
+                    *pending_size = Some((cols, rows));
+                }
                 Some(_) => {}
             },
         }
@@ -484,6 +490,14 @@ async fn connect_and_pump(
     let _bastion_keepalive: Option<russh::client::Handle<ClientHandler>>;
 
     let mut rejected = false;
+    // The UI sends the real terminal size (window_change) as soon as it has
+    // the session id — which is *during* connect/auth, before the channel
+    // exists. `drive_target_connect` captures the latest such size here so we
+    // can open the PTY at the right dimensions instead of dropping it (the
+    // frontend dedups identical sizes and won't resend, so a dropped resize
+    // would leave the PTY stuck at 80×24 → full-screen TUIs like mc render at
+    // half height).
+    let mut pending_size: Option<(u16, u16)> = None;
     let connect_result: ConnectOutcome = if let Some(jump) = params.jump {
         // ---- Bastion: connect (auto-pin its key) + auth ----------------
         let (bdec_tx, bdec_rx) = mpsc::channel::<bool>(1);
@@ -523,12 +537,12 @@ async fn connect_and_pump(
         let stream = ch.into_stream();
         _bastion_keepalive = Some(bastion);
         let fut = russh::client::connect_stream(config.clone(), stream, target_handler);
-        drive_target_connect(fut, rx_cmd, &dec_tx, &mut rejected).await
+        drive_target_connect(fut, rx_cmd, &dec_tx, &mut rejected, &mut pending_size).await
     } else {
         _bastion_keepalive = None;
         let fut =
             russh::client::connect(config.clone(), (params.hostname.as_str(), params.port), target_handler);
-        drive_target_connect(fut, rx_cmd, &dec_tx, &mut rejected).await
+        drive_target_connect(fut, rx_cmd, &dec_tx, &mut rejected, &mut pending_size).await
     };
 
     let mut handle = match connect_result {
@@ -604,12 +618,17 @@ async fn connect_and_pump(
         let _ = channel.set_env(false, k.as_str(), v.as_str()).await;
     }
 
+    // Open the PTY at the size the UI requested during connect (if any),
+    // otherwise the defaults. Post-shell resizes go through the pump's
+    // window_change as usual.
+    let (pty_cols, pty_rows) =
+        pending_size.unwrap_or((params.options.cols, params.options.rows));
     channel
         .request_pty(
             true,
             &params.options.term,
-            u32::from(params.options.cols),
-            u32::from(params.options.rows),
+            u32::from(pty_cols),
+            u32::from(pty_rows),
             0,
             0,
             &[],

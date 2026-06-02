@@ -182,6 +182,7 @@ export const messages: Partial<Record<keyof typeof enMessages, string>> = {
     "session.closed": "Сессия закрыта",
     "session.reconnect": "Переподключиться",
     "session.fullscreen": "Во весь экран (Ctrl+Alt+Enter)",
+    "session.minimize": "Свернуть",
     "session.fullscreenHint": "Ctrl+Alt+Enter или Esc — выйти из полноэкранного режима",
     "session.connectSave": "Подключиться и сохранить",
     "session.useKeyHint": "Для входа по SSH-ключу — «Изменить».",

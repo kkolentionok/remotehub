@@ -540,6 +540,16 @@ export type RdpSessionEvent =
       }
     | { kind: "resized"; width: number; height: number }
     | { kind: "pointer_position"; x: number; y: number }
+    | {
+          kind: "pointer_bitmap";
+          width: number;
+          height: number;
+          hotspot_x: number;
+          hotspot_y: number;
+          rgba_base64: string;
+      }
+    | { kind: "pointer_hidden" }
+    | { kind: "pointer_default" }
     | { kind: "cert_prompt"; fingerprint_sha256: string; subject: string }
     | { kind: "clipboard"; mime: string; data: string }
     | { kind: "error"; message: string }

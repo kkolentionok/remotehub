@@ -595,6 +595,44 @@ pub struct RdpInputRequest {
     pub event: rh_rdp::RdpInputEvent,
 }
 
+/// Local clipboard text pushed to an RDP session for paste into the remote.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RdpClipboardRequest {
+    pub session_id: rh_core::SessionId,
+    pub text: String,
+}
+
+/// Local clipboard **image** pushed to an RDP session for paste into the
+/// remote. `rgba_base64` is raw top-down RGBA (width*height*4) base64-encoded.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RdpClipboardImageRequest {
+    pub session_id: rh_core::SessionId,
+    pub width: u32,
+    pub height: u32,
+    pub rgba_base64: String,
+}
+
+/// Viewport size (device px) for a DisplayControl dynamic resize.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RdpResizeRequest {
+    pub session_id: rh_core::SessionId,
+    pub width: u16,
+    pub height: u16,
+}
+
+/// Toggle OS-level keyboard capture for an RDP session. While `on` (the
+/// session is fullscreen + focused), a low-level Windows hook routes system
+/// keys (Win, Alt+Tab, …) to this session instead of the local OS.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RdpKbdCaptureRequest {
+    pub session_id: rh_core::SessionId,
+    pub on: bool,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionResizeRequest {

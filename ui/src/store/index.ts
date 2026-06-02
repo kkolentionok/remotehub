@@ -22,6 +22,8 @@
  */
 
 import { create } from "zustand";
+import { writeText as clipboardWriteText, writeImage as clipboardWriteImage } from "@tauri-apps/plugin-clipboard-manager";
+import { Image as TauriImage } from "@tauri-apps/api/image";
 
 import {
     credentials as credentialsApi,
@@ -672,9 +674,29 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
             case "frame":
             case "frame_batch":
             case "pointer_position":
+            case "pointer_bitmap":
+            case "pointer_hidden":
+            case "pointer_default":
             case "cert_prompt":
-            case "clipboard":
                 pushRdpEvent(key, ev);
+                break;
+            case "clipboard":
+                // Remote copied — mirror it to the local OS clipboard.
+                if (ev.mime.startsWith("text/") && ev.data) {
+                    void clipboardWriteText(ev.data).catch(() => {});
+                } else if (ev.mime === "image/png" && ev.data) {
+                    void (async () => {
+                        try {
+                            const bin = atob(ev.data);
+                            const bytes = new Uint8Array(bin.length);
+                            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                            const img = await TauriImage.fromBytes(bytes);
+                            await clipboardWriteImage(img);
+                        } catch {
+                            /* clipboard image write unsupported / failed */
+                        }
+                    })();
+                }
                 break;
         }
     };
@@ -687,19 +709,22 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
     /** Create a session (state + backend connect). Returns its key. */
     const createSession = (host: HostDto): string => {
         const key = genId();
-        // Render at the monitor resolution. That way the picture is native
-        // when shown full-screen and only ever *downscaled* (sharp) when the
-        // window is smaller — never upscaled (which was the blur on maximize).
-        // The backend reports the server's actual negotiated size via the
-        // `resized` event, and the canvas sizes to that. Capped to bound encode
-        // load; live reflow on resize is a follow-up (DisplayControl).
+        // Render near the monitor resolution (downscaled to the pane), in
+        // LOGICAL pixels — multiplying by dpr quadrupled encode/transport cost
+        // on hi-DPI for no real gain over a remote link. The canvas stretches
+        // this to fill the pane (object-fit: fill), so there are no black bars;
+        // aspect is only mildly off when the window is far from the monitor's
+        // shape. Cap preserves the monitor aspect (scale-to-fit).
         const even = (n: number) => Math.max(2, Math.floor(n / 2) * 2);
-        const rdpW = host.protocol === "rdp"
-            ? Math.min(2560, even(Math.max(1280, window.screen.width)))
-            : undefined;
-        const rdpH = host.protocol === "rdp"
-            ? Math.min(1600, even(Math.max(720, window.screen.height)))
-            : undefined;
+        let rdpW: number | undefined;
+        let rdpH: number | undefined;
+        if (host.protocol === "rdp") {
+            const w = Math.max(1280, Math.round(window.screen.width));
+            const h = Math.max(720, Math.round(window.screen.height));
+            const scale = Math.min(1, 2560 / w, 1600 / h);
+            rdpW = even(Math.round(w * scale));
+            rdpH = even(Math.round(h * scale));
+        }
         const tab: SessionTab = {
             key,
             sessionId: null,

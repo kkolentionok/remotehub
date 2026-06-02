@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Maximize2, Minimize2 } from "lucide-react";
+import { Maximize2, Minimize2, Minus, X } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
+import { readText as clipboardReadText, readImage as clipboardReadImage } from "@tauri-apps/plugin-clipboard-manager";
 
 import { registerSessionViewport } from "../../store";
 import { useT } from "../../i18n";
@@ -14,10 +17,62 @@ interface Props {
     height: number;
     /** Every input event the viewport produces is handed up here. */
     onInput: (ev: RdpInputEvent) => void;
+    /** Host label shown in the connection bar (mstsc-style). */
+    hostLabel?: string;
+    /** Close/disconnect this session (the bar's × button). */
+    onClose?: () => void;
+    /** Push the local OS clipboard text up (for paste into the remote). */
+    onLocalClipboard?: (text: string) => void;
+    /** Push a local OS clipboard image up (raw RGBA base64) for remote paste. */
+    onLocalClipboardImage?: (width: number, height: number, rgbaBase64: string) => void;
+    /** Viewport size changed (device px) → request a DisplayControl resize. */
+    onResize?: (width: number, height: number) => void;
+    /** Toggle OS-level keyboard capture (true on fullscreen, false on exit). */
+    onKbdCapture?: (on: boolean) => void;
     className?: string;
 }
 
 const BTN: Record<number, RdpMouseButton> = { 0: "left", 1: "middle", 2: "right" };
+
+/** Uint8Array → base64 (chunked to avoid call-stack limits on big buffers). */
+function bytesToBase64(bytes: Uint8Array): string {
+    let bin = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+        bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    }
+    return btoa(bin);
+}
+
+/** Turn a server cursor bitmap (non-premultiplied RGBA, base64) into a CSS
+ *  `cursor` value with the correct hotspot. Returned cursors track the local
+ *  mouse natively, so the remote pointer feels instant. */
+function pointerToCss(ev: {
+    width: number;
+    height: number;
+    hotspot_x: number;
+    hotspot_y: number;
+    rgba_base64: string;
+}): string {
+    if (ev.width === 0 || ev.height === 0) return "none";
+    try {
+        const bin = atob(ev.rgba_base64);
+        const len = ev.width * ev.height * 4;
+        const bytes = new Uint8ClampedArray(len);
+        for (let i = 0; i < len && i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const off = document.createElement("canvas");
+        off.width = ev.width;
+        off.height = ev.height;
+        const octx = off.getContext("2d");
+        if (!octx) return "default";
+        octx.putImageData(new ImageData(bytes, ev.width, ev.height), 0, 0);
+        // Chromium ignores cursor images > 128px; large pointers fall back to
+        // the default arrow, which is acceptable.
+        return `url("${off.toDataURL("image/png")}") ${ev.hotspot_x} ${ev.hotspot_y}, auto`;
+    } catch {
+        return "default";
+    }
+}
 
 /**
  * RDP rendering + input surface. The store routes server `RdpSessionEvent`s
@@ -29,17 +84,23 @@ const BTN: Record<number, RdpMouseButton> = { 0: "left", 1: "middle", 2: "right"
  * and key event via `getModifierState`). Fix for the classic "stuck
  * Ctrl/Alt/Shift after Alt-Tab" RDP bug. (Input wire lands in round 2b-2.)
  */
-export function RdpViewport({ sessionKey, width, height, onInput, className }: Props) {
+export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, onClose, onLocalClipboard, onLocalClipboardImage, onResize, onKbdCapture, className }: Props) {
     const { t } = useT();
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
     const wrapRef = useRef<HTMLDivElement | null>(null);
     const [isFs, setIsFs] = useState(false);
     const [showHint, setShowHint] = useState(false);
+    // mstsc-style auto-hide: the bar shows only when the pointer is near the
+    // top edge of the viewport, and hides as soon as it leaves.
+    const [barOn, setBarOn] = useState(false);
     // Serializes region blits in arrival order. Regions decode in parallel,
     // but draw strictly in sequence so a slower-decoding region from an
     // older frame can't land on top of a newer one (the drag tearing).
     const drawSeq = useRef<Promise<void>>(Promise.resolve());
+    // Size key (`WxH`) of the last clipboard image pushed to the remote, so
+    // refocusing doesn't re-transfer the same image. Cleared when no image.
+    const lastImgKey = useRef<string>("");
 
     // Last-known physical modifier state, refreshed on any input event.
     const mods = useRef({
@@ -68,28 +129,100 @@ export function RdpViewport({ sessionKey, width, height, onInput, className }: P
         const onChange = () => {
             const on = document.fullscreenElement === wrapRef.current;
             setIsFs(on);
+            // Keyboard Lock: in fullscreen, capture system shortcuts (Alt+Tab,
+            // Win, etc.) so they reach the remote desktop instead of the local
+            // OS. Windowed mode can't — Windows grabs Alt+Tab first. Exit
+            // fullscreen with the button or Ctrl+Alt+Enter (Esc now goes to
+            // the remote).
+            const kb = (
+                navigator as unknown as {
+                    keyboard?: { lock?: (keys?: string[]) => Promise<void>; unlock?: () => void };
+                }
+            ).keyboard;
             if (on) {
+                void kb?.lock?.().catch(() => {});
                 setShowHint(true);
                 window.setTimeout(() => setShowHint(false), 2600);
+            } else {
+                kb?.unlock?.();
             }
+            // OS-level key capture: while fullscreen, a low-level Windows hook
+            // routes system keys (Win, Alt+Tab, …) to the remote instead of
+            // the local OS. On exit, release any modifiers the remote may
+            // still think are held from hook-forwarded presses.
+            onKbdCapture?.(on);
+            if (!on) onInput({ kind: "release_all_modifiers" });
         };
         document.addEventListener("fullscreenchange", onChange);
         return () => document.removeEventListener("fullscreenchange", onChange);
+    }, [onKbdCapture, onInput]);
+
+    // The OS hook relays Ctrl+Alt+Enter (pressed while captured) as a request
+    // to leave fullscreen — the local key never reaches the web view.
+    useEffect(() => {
+        const un = listen("rdp:exit-fullscreen", () => {
+            if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+        });
+        return () => {
+            void un.then((f) => f());
+        };
     }, []);
 
     const toggleFs = useCallback(() => {
         if (document.fullscreenElement) {
             void document.exitFullscreen().catch(() => {});
         } else {
-            void wrapRef.current?.requestFullscreen().catch(() => {});
+            // Windows quirk: entering fullscreen from an already-maximized
+            // window keeps the maximized client rect (= work area, screen minus
+            // taskbar), so the surface grows to the full screen but the content
+            // stays work-area-tall — leaving a black strip (taskbar height) at
+            // the bottom. Restore the window first so fullscreen starts clean.
+            void (async () => {
+                try {
+                    const win = getCurrentWindow();
+                    if (await win.isMaximized()) await win.unmaximize();
+                } catch {
+                    /* fall through to fullscreen regardless */
+                }
+                await wrapRef.current?.requestFullscreen().catch(() => {});
+            })();
         }
         // Keep input focus on the canvas after toggling.
         window.setTimeout(() => canvasRef.current?.focus(), 0);
     }, []);
 
+    const minimize = useCallback(() => {
+        void getCurrentWindow().minimize().catch(() => {});
+    }, []);
+
+    // Reveal the connection bar only when the pointer is within ~56px of the
+    // viewport's top edge; hide it everywhere else.
+    const onPointerMove = useCallback((e: React.MouseEvent) => {
+        const top = wrapRef.current?.getBoundingClientRect().top ?? 0;
+        setBarOn(e.clientY - top < 56);
+    }, []);
+
     // Draw a decoded framebuffer region. Stable identity (reads refs only)
     // so the store registration runs once per session.
     const applyEvent = useCallback((ev: RdpSessionEvent) => {
+        // Server cursor shape → CSS cursor on the canvas. Handled before the
+        // ctx guard since these don't draw to the framebuffer.
+        if (ev.kind === "pointer_bitmap") {
+            const c = canvasRef.current;
+            if (c) c.style.cursor = pointerToCss(ev);
+            return;
+        }
+        if (ev.kind === "pointer_hidden") {
+            const c = canvasRef.current;
+            if (c) c.style.cursor = "none";
+            return;
+        }
+        if (ev.kind === "pointer_default") {
+            const c = canvasRef.current;
+            if (c) c.style.cursor = "default";
+            return;
+        }
+
         const ctx = ctxRef.current;
         if (!ctx) return;
 
@@ -144,28 +277,63 @@ export function RdpViewport({ sessionKey, width, height, onInput, className }: P
     // Subscribe to server frames for this session.
     useEffect(() => registerSessionViewport(sessionKey, applyEvent), [sessionKey, applyEvent]);
 
+    // Dynamic resize (DisplayControl): when the viewport box settles at a new
+    // size, ask the server to re-render at that resolution so the desktop
+    // fills the pane instead of letterboxing.
+    //
+    // TEMPORARILY DISABLED: on RemoteFX servers the post-resize reactivation
+    // both degrades server repaint rate (IronRDP #447) and can leave an
+    // unrepainted region. The DVC/backend path stays wired and dormant; flip
+    // this on once the reactivation repaint is debugged on a live session
+    // (and/or GFX/H.264 replaces the RemoteFX codepath).
+    const ENABLE_DYNAMIC_RESIZE = false;
+    const onResizeRef = useRef(onResize);
+    onResizeRef.current = onResize;
+    useEffect(() => {
+        if (!ENABLE_DYNAMIC_RESIZE) return;
+        const el = wrapRef.current;
+        if (!el) return;
+        let timer = 0;
+        let lastSent = "";
+        const fire = () => {
+            // Logical (CSS) pixels — like mstsc.
+            const w = Math.round(el.clientWidth);
+            const h = Math.round(el.clientHeight);
+            if (w < 200 || h < 200) return;
+            const dim = `${w}x${h}`;
+            if (dim === lastSent) return;
+            lastSent = dim;
+            onResizeRef.current?.(w, h);
+        };
+        const ro = new ResizeObserver(() => {
+            clearTimeout(timer);
+            timer = window.setTimeout(fire, 250);
+        });
+        ro.observe(el);
+        return () => {
+            clearTimeout(timer);
+            ro.disconnect();
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [sessionKey]);
+
     // --- coordinate mapping: display (CSS) px → backing px ---
     const toCanvas = (clientX: number, clientY: number): { x: number; y: number } => {
         const c = canvasRef.current;
         if (!c) return { x: 0, y: 0 };
         const r = c.getBoundingClientRect();
         if (r.width <= 0 || r.height <= 0) return { x: 0, y: 0 };
-        // The canvas is displayed with `object-fit: contain`: the backing
-        // bitmap (width×height) is scaled uniformly to fit inside the element
-        // box and centered, leaving letterbox margins when aspect ratios
-        // differ. Map relative to that fitted rectangle, not the raw element
-        // box — otherwise the pointer lands offset (the bug where the cursor
-        // on the left highlighted an icon on the right).
-        const scale = Math.min(r.width / width, r.height / height);
-        const offX = (r.width - width * scale) / 2;
-        const offY = (r.height - height * scale) / 2;
+        // The canvas is displayed with `object-fit: fill`: the backing bitmap
+        // (width×height) stretches to the element box on each axis
+        // independently (no letterbox), so map with per-axis scale and no
+        // centering offset.
         const x = Math.max(
             0,
-            Math.min(width - 1, Math.round((clientX - r.left - offX) / scale)),
+            Math.min(width - 1, Math.round(((clientX - r.left) / r.width) * width)),
         );
         const y = Math.max(
             0,
-            Math.min(height - 1, Math.round((clientY - r.top - offY) / scale)),
+            Math.min(height - 1, Math.round(((clientY - r.top) / r.height) * height)),
         );
         return { x, y };
     };
@@ -244,20 +412,51 @@ export function RdpViewport({ sessionKey, width, height, onInput, className }: P
 
     const onFocus = useCallback(() => {
         onInput({ kind: "sync_modifiers", ...mods.current });
-    }, [onInput]);
+        // Make the current local clipboard available for paste into the remote
+        // (CLIPRDR client→server advertise). Prefer an image if the clipboard
+        // holds one; otherwise text. The image rgba() transfer is heavy, so we
+        // skip it when the size matches the last image we already pushed.
+        void (async () => {
+            try {
+                const img = await clipboardReadImage();
+                const size = await img.size();
+                const key = `${size.width}x${size.height}`;
+                if (key !== lastImgKey.current) {
+                    const rgba = await img.rgba();
+                    lastImgKey.current = key;
+                    onLocalClipboardImage?.(size.width, size.height, bytesToBase64(rgba));
+                }
+                return; // an image is on the clipboard — done
+            } catch {
+                lastImgKey.current = ""; // no image now; allow the next one
+            }
+            try {
+                const t = await clipboardReadText();
+                if (t) onLocalClipboard?.(t);
+            } catch {
+                /* clipboard empty / unsupported */
+            }
+        })();
+    }, [onInput, onLocalClipboard, onLocalClipboardImage]);
 
     const onBlur = useCallback(() => {
         onInput({ kind: "release_all_modifiers" });
     }, [onInput]);
 
     return (
-        <div ref={wrapRef} className={styles.wrap}>
+        <div
+            ref={wrapRef}
+            className={styles.wrap}
+            onMouseMove={onPointerMove}
+            onMouseLeave={() => setBarOn(false)}
+        >
             <canvas
                 ref={canvasRef}
                 width={width}
                 height={height}
                 tabIndex={0}
                 className={`${styles.canvas}${className ? ` ${className}` : ""}`}
+                style={isFs ? { width: "100vw", height: "100vh" } : undefined}
                 onMouseMove={onMouseMove}
                 onMouseDown={(e) => onMouseButton(e, true)}
                 onMouseUp={(e) => onMouseButton(e, false)}
@@ -268,15 +467,36 @@ export function RdpViewport({ sessionKey, width, height, onInput, className }: P
                 onFocus={onFocus}
                 onBlur={onBlur}
             />
-            <button
-                type="button"
-                className={styles.fsBtn}
-                title={t("session.fullscreen")}
-                aria-label={t("session.fullscreen")}
-                onClick={toggleFs}
-            >
-                {isFs ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
-            </button>
+            <div className={`${styles.bar}${barOn ? ` ${styles.barOn}` : ""}`} role="toolbar" aria-label={hostLabel}>
+                {hostLabel && <span className={styles.barTitle}>{hostLabel}</span>}
+                <button
+                    type="button"
+                    className={styles.barBtn}
+                    title={t("session.minimize")}
+                    aria-label={t("session.minimize")}
+                    onClick={minimize}
+                >
+                    <Minus size={15} />
+                </button>
+                <button
+                    type="button"
+                    className={styles.barBtn}
+                    title={t("session.fullscreen")}
+                    aria-label={t("session.fullscreen")}
+                    onClick={toggleFs}
+                >
+                    {isFs ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+                </button>
+                <button
+                    type="button"
+                    className={`${styles.barBtn} ${styles.barClose}`}
+                    title={t("common.close")}
+                    aria-label={t("common.close")}
+                    onClick={() => onClose?.()}
+                >
+                    <X size={15} />
+                </button>
+            </div>
             {showHint && <div className={styles.fsHint}>{t("session.fullscreenHint")}</div>}
         </div>
     );

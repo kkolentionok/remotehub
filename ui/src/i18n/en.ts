@@ -187,6 +187,7 @@ export const messages = {
     "session.closed": "Session closed",
     "session.reconnect": "Reconnect",
     "session.fullscreen": "Fullscreen (Ctrl+Alt+Enter)",
+    "session.minimize": "Minimize",
     "session.fullscreenHint": "Ctrl+Alt+Enter or Esc to exit fullscreen",
     "session.connectSave": "Connect & save",
     "session.useKeyHint": "To sign in with an SSH key, use Edit.",

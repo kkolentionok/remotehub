@@ -239,6 +239,30 @@ export const rdpSession = {
 
     sendInput: (req: RdpInputRequest): Promise<void> =>
         call("rdp_session_input", req),
+
+    /** Push the local clipboard text so it can be pasted into the remote. */
+    setClipboard: (sessionId: SessionId, text: string): Promise<void> =>
+        call("rdp_session_set_clipboard", { session_id: sessionId, text }),
+    /** Push a local OS clipboard image (raw RGBA, base64) for remote paste. */
+    setClipboardImage: (
+        sessionId: SessionId,
+        width: number,
+        height: number,
+        rgbaBase64: string,
+    ): Promise<void> =>
+        call("rdp_session_set_clipboard_image", {
+            session_id: sessionId,
+            width,
+            height,
+            rgba_base64: rgbaBase64,
+        }),
+
+    /** Request a DisplayControl dynamic resize (device px). */
+    resize: (sessionId: SessionId, width: number, height: number): Promise<void> =>
+        call("rdp_session_resize", { session_id: sessionId, width, height }),
+    /** Toggle OS-level keyboard capture (fullscreen: route system keys to remote). */
+    kbdCapture: (sessionId: SessionId, on: boolean): Promise<void> =>
+        call("rdp_session_kbd_capture", { session_id: sessionId, on }),
 };
 
 export const localSession = {

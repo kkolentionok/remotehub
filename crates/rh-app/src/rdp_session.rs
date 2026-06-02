@@ -85,4 +85,32 @@ impl RdpSessionManager {
             let _ = handle.tx_cmd.send(RdpCommand::Input(ev)).await;
         }
     }
+
+    pub async fn set_clipboard(&self, id: &SessionId, text: String) {
+        if let Some(handle) = self.inner.lock().await.get(id) {
+            let _ = handle.tx_cmd.send(RdpCommand::SetClipboard(text)).await;
+        }
+    }
+
+    pub async fn set_clipboard_image(&self, id: &SessionId, width: u32, height: u32, rgba: Vec<u8>) {
+        if let Some(handle) = self.inner.lock().await.get(id) {
+            let _ = handle
+                .tx_cmd
+                .send(RdpCommand::SetClipboardImage {
+                    width,
+                    height,
+                    rgba,
+                })
+                .await;
+        }
+    }
+
+    pub async fn resize(&self, id: &SessionId, width: u16, height: u16) {
+        if let Some(handle) = self.inner.lock().await.get(id) {
+            let _ = handle
+                .tx_cmd
+                .send(RdpCommand::Resize { width, height })
+                .await;
+        }
+    }
 }

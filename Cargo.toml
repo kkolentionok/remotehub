@@ -5,6 +5,7 @@ members = [
     "crates/rh-ssh",
     "crates/rh-rdp",
     "crates/rh-storage",
+    "crates/rh-vault",
     "crates/rh-app",
 ]
 
@@ -73,6 +74,7 @@ rh-core = { path = "crates/rh-core" }
 rh-storage = { path = "crates/rh-storage" }
 rh-ssh = { path = "crates/rh-ssh" }
 rh-rdp = { path = "crates/rh-rdp" }
+rh-vault = { path = "crates/rh-vault" }
 
 [profile.release]
 codegen-units = 1

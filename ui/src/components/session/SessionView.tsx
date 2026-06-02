@@ -360,6 +360,24 @@ export function SessionView({
                                 width={session.rdpWidth ?? 1280}
                                 height={session.rdpHeight ?? 800}
                                 onInput={handleRdpInput}
+                                hostLabel={session.title}
+                                onClose={() => void close(session.key)}
+                                onLocalClipboard={(text) => {
+                                    const sid = session.sessionId;
+                                    if (sid) void rdpSessionApi.setClipboard(sid, text);
+                                }}
+                                onLocalClipboardImage={(w, h, rgbaBase64) => {
+                                    const sid = session.sessionId;
+                                    if (sid) void rdpSessionApi.setClipboardImage(sid, w, h, rgbaBase64);
+                                }}
+                                onResize={(w, h) => {
+                                    const sid = session.sessionId;
+                                    if (sid) void rdpSessionApi.resize(sid, w, h);
+                                }}
+                                onKbdCapture={(on) => {
+                                    const sid = session.sessionId;
+                                    if (sid) void rdpSessionApi.kbdCapture(sid, on);
+                                }}
                             />
                         ) : (
                             <Terminal

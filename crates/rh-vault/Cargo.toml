@@ -1,0 +1,40 @@
+[package]
+name = "rh-vault"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Portable, E2E-encrypted vault + backend-agnostic sync model for RemoteHub"
+
+[dependencies]
+rh-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+zeroize.workspace = true
+async-trait.workspace = true
+
+# Password -> key derivation. RustCrypto Argon2id. aws-lc-rs does not expose
+# Argon2id through its public Rust API, and there is precedent for scoped
+# RustCrypto use in this workspace (rh-ssh/ppk.rs).
+argon2 = "0.5"
+
+# Symmetric authenticated encryption (AES-256-GCM), pure-Rust RustCrypto.
+# We originally specified aws-lc-rs, but its native `aws-lc-sys` C library
+# needs NASM + a C11 MSVC toolchain to *build* on Windows. It was only ever a
+# lockfile entry before this crate — russh/rustls use `ring`, so aws-lc-sys
+# never actually compiled. `aes-gcm` is pure Rust (hardware AES-NI via the
+# `aes` crate when available), well-audited, already in the dependency tree,
+# and adds no native build step.
+aes-gcm = "0.10"
+
+# OS CSPRNG for the KDF salt and the AEAD nonce.
+getrandom = "0.2"
+
+# Base64 for the portable export envelope (binary -> text) and for secret bytes
+# inside the snapshot JSON.
+base64 = "0.22"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }

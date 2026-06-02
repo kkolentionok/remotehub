@@ -15,7 +15,8 @@ use rh_rdp::{
 };
 
 use crate::api::dto::{
-    RdpInputRequest, SessionIdRequest, SessionOpenOptions, SessionOpenRequest, SessionOpenResponse,
+    RdpClipboardImageRequest, RdpClipboardRequest, RdpInputRequest, RdpKbdCaptureRequest,
+    RdpResizeRequest, SessionIdRequest, SessionOpenOptions, SessionOpenRequest, SessionOpenResponse,
 };
 use crate::api::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -132,5 +133,58 @@ pub async fn rdp_session_input(
     req: RdpInputRequest,
 ) -> ApiResult<()> {
     state.rdp_sessions.send_input(&req.session_id, req.event).await;
+    Ok(())
+}
+
+#[tauri::command]
+#[instrument(level = "debug", skip(state, req))]
+pub async fn rdp_session_set_clipboard(
+    state: State<'_, AppState>,
+    req: RdpClipboardRequest,
+) -> ApiResult<()> {
+    state
+        .rdp_sessions
+        .set_clipboard(&req.session_id, req.text)
+        .await;
+    Ok(())
+}
+
+#[tauri::command]
+#[instrument(level = "debug", skip(state, req))]
+pub async fn rdp_session_set_clipboard_image(
+    state: State<'_, AppState>,
+    req: RdpClipboardImageRequest,
+) -> ApiResult<()> {
+    use base64::Engine as _;
+    let rgba = base64::engine::general_purpose::STANDARD
+        .decode(&req.rgba_base64)
+        .map_err(|e| ApiError::Internal {
+            message: format!("clipboard image decode: {e}"),
+        })?;
+    state
+        .rdp_sessions
+        .set_clipboard_image(&req.session_id, req.width, req.height, rgba)
+        .await;
+    Ok(())
+}
+
+#[tauri::command]
+#[instrument(level = "debug", skip(state))]
+pub async fn rdp_session_resize(
+    state: State<'_, AppState>,
+    req: RdpResizeRequest,
+) -> ApiResult<()> {
+    state
+        .rdp_sessions
+        .resize(&req.session_id, req.width, req.height)
+        .await;
+    Ok(())
+}
+
+#[tauri::command]
+#[instrument(level = "debug")]
+pub async fn rdp_session_kbd_capture(req: RdpKbdCaptureRequest) -> ApiResult<()> {
+    let session = if req.on { Some(req.session_id) } else { None };
+    crate::kbd_hook::set_capture(req.on, session);
     Ok(())
 }

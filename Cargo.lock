@@ -2980,8 +2980,11 @@ version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47c225751e8fbfaaaac5572a80e25d0a0921e9cf408c55509526161b5609157c"
 dependencies = [
+ "ironrdp-cliprdr",
  "ironrdp-connector",
  "ironrdp-core",
+ "ironrdp-displaycontrol",
+ "ironrdp-dvc",
  "ironrdp-graphics",
  "ironrdp-input",
  "ironrdp-pdu",
@@ -2998,6 +3001,19 @@ dependencies = [
  "ironrdp-connector",
  "ironrdp-core",
  "ironrdp-pdu",
+ "tracing",
+]
+
+[[package]]
+name = "ironrdp-cliprdr"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c9b4286b677b65b57bb1d5c4453ef46c1cf3858f30515b2016465978b4b1e2b"
+dependencies = [
+ "bitflags 2.11.1",
+ "ironrdp-core",
+ "ironrdp-pdu",
+ "ironrdp-svc",
  "tracing",
 ]
 
@@ -5244,6 +5260,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "ulid",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5325,6 +5342,24 @@ dependencies = [
  "tokio",
  "tracing",
  "ulid",
+ "zeroize",
+]
+
+[[package]]
+name = "rh-vault"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm 0.10.3",
+ "argon2",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "getrandom 0.2.17",
+ "rh-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
  "zeroize",
 ]
 

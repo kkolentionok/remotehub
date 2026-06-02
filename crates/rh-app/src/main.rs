@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod api;
+mod kbd_hook;
 mod logging;
 mod paths;
 mod local_pty;
@@ -63,6 +64,9 @@ fn main() {
                     if let Err(e) = tray::build(&app.handle().clone()) {
                         error!(error = %e, "failed to build system tray");
                     }
+                    // Install the OS-level keyboard hook (Windows) for
+                    // fullscreen RDP key capture. No-op elsewhere.
+                    kbd_hook::init(app.handle().clone());
                 }
                 Err(e) => {
                     error!(error = %e, "FATAL: storage initialization failed; app cannot start");
@@ -116,6 +120,10 @@ fn main() {
             api::rdp_sessions::rdp_session_open,
             api::rdp_sessions::rdp_session_close,
             api::rdp_sessions::rdp_session_input,
+            api::rdp_sessions::rdp_session_set_clipboard,
+            api::rdp_sessions::rdp_session_set_clipboard_image,
+            api::rdp_sessions::rdp_session_resize,
+            api::rdp_sessions::rdp_session_kbd_capture,
             // Sessions (local shell PTY)
             api::local_sessions::local_session_open,
             api::local_sessions::local_session_close,

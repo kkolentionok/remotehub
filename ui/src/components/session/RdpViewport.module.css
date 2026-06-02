@@ -5,46 +5,94 @@
     background: #000;
 }
 
+/* In the Fullscreen API the element's `height: 100%` resolves against its
+   parent, not the screen — so entering fullscreen from an already-maximized
+   window left a strip at the bottom (parent height ≠ screen height). Pin the
+   fullscreen wrap to the viewport so the canvas (height:100%) always fills the
+   whole screen, regardless of the maximize→fullscreen order. */
+.wrap:fullscreen {
+    width: 100vw;
+    height: 100vh;
+}
+
 .canvas {
     display: block;
     width: 100%;
     height: 100%;
-    object-fit: contain;
+    object-fit: fill;
     background: #000;
     outline: none;
     cursor: default;
-    /* We render at monitor resolution and only ever downscale when windowed,
-       so smooth (auto) keeps text clean; we never upscale (no blur). */
+    /* Stretch the desktop to fill the pane (no black bars). We render at
+       monitor resolution and downscale, so quality stays sharp; aspect is
+       only mildly off when the window is far from the monitor's aspect. */
     image-rendering: auto;
 }
 
 /* Fullscreen toggle — subtle, top-right, appears on hover. */
-.fsBtn {
+/* mstsc-style connection bar: host name + minimize / fullscreen / close.
+   Auto-hides; reveals on hover so it never covers the remote during use. */
+.bar {
     position: absolute;
     top: var(--space-2);
-    right: var(--space-2);
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    height: 30px;
+    padding: 0 var(--space-1) 0 var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-elevated);
+    box-shadow: var(--shadow-pop);
+    opacity: 0;
+    transition: opacity 0.12s ease;
+    z-index: 2;
+}
+
+.bar.barOn,
+.bar:focus-within {
+    opacity: 0.92;
+}
+
+.bar:hover {
+    opacity: 1;
+}
+
+.barTitle {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--color-fg-muted);
+    margin-right: var(--space-2);
+    max-width: 340px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.barBtn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
-    border: 1px solid var(--color-border);
+    width: 26px;
+    height: 26px;
+    border: none;
     border-radius: var(--radius-sm);
-    background: var(--color-elevated);
+    background: transparent;
     color: var(--color-fg-muted);
-    opacity: 0;
-    transition: opacity 0.12s ease;
     cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
 }
 
-.wrap:hover .fsBtn,
-.fsBtn:focus-visible {
-    opacity: 0.85;
-}
-
-.fsBtn:hover {
-    opacity: 1;
+.barBtn:hover {
+    background: var(--color-subtle);
     color: var(--color-fg);
+}
+
+.barClose:hover {
+    background: var(--color-danger);
+    color: #fff;
 }
 
 /* Brief "how to exit" hint shown on entering fullscreen. */

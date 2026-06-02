@@ -17,7 +17,7 @@ bytes.workspace = true
 zeroize.workspace = true
 
 # --- IronRDP (Stage 4, round 2b) — versions confirmed by the spike ---
-ironrdp = { version = "0.14", features = ["connector", "session", "graphics", "input"] }
+ironrdp = { version = "0.14", features = ["connector", "session", "graphics", "input", "cliprdr", "dvc", "displaycontrol"] }
 ironrdp-blocking = "0.8"
 sspi = { version = "0.18", features = ["network_client"] }
 tokio-rustls = "0.26"

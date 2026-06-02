@@ -21,6 +21,16 @@ pub use actor::spawn_session;
 pub enum RdpCommand {
     Input(RdpInputEvent),
     Resize { width: u16, height: u16 },
+    /// Push the local OS clipboard text to the session, so it can be pasted
+    /// into the remote desktop (CLIPRDR client→server).
+    SetClipboard(String),
+    /// Push a local OS clipboard image (raw RGBA, top-down) to the session for
+    /// paste into the remote desktop (offered to the server as CF_DIB).
+    SetClipboardImage {
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    },
     /// User-requested graceful close.
     Shutdown,
 }
@@ -69,6 +79,17 @@ pub enum RdpInputEvent {
         /// Auto-repeat (held key). Servers generally want these too.
         #[serde(default)]
         repeat: bool,
+    },
+
+    /// A key already resolved to a PS/2 **Set 1** scancode by the OS-level
+    /// keyboard hook (Windows `WH_KEYBOARD_LL`). Used in fullscreen so system
+    /// keys (Win, Alt+Tab, …) reach the remote instead of the local OS.
+    /// Bypasses `code_to_scancode` — the hook hands us the hardware scancode
+    /// and the extended flag directly.
+    RawScancode {
+        scancode: u8,
+        extended: bool,
+        pressed: bool,
     },
 
     /// Sent when the RDP canvas gains focus: the full state of physical
@@ -209,6 +230,21 @@ pub enum RdpSessionEvent {
         x: u16,
         y: u16,
     },
+    /// Server cursor shape changed. `rgba_base64` is non-premultiplied,
+    /// top-down RGBA (width*height*4 bytes) base64-encoded; the UI turns it
+    /// into a PNG `data:` URL and sets it as the canvas CSS cursor, offset by
+    /// the hotspot — so the remote cursor follows the local mouse instantly.
+    PointerBitmap {
+        width: u16,
+        height: u16,
+        hotspot_x: u16,
+        hotspot_y: u16,
+        rgba_base64: String,
+    },
+    /// Server hid the cursor (e.g. full-screen games, text fields).
+    PointerHidden,
+    /// Server reverted to the default arrow cursor.
+    PointerDefault,
     /// Unknown/untrusted server certificate — UI prompts the user.
     CertPrompt {
         fingerprint_sha256: String,

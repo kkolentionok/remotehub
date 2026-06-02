@@ -1,9 +1,9 @@
 # RDP Pipeline — Implementation Reference (Stage 4)
 
-Status as of Stage 4.1: connect + graphics + **mouse** input working end-to-end,
-responsive and reasonably smooth. **Keyboard not yet wired** (events arrive but
-the actor drops them). This document describes how the whole RDP path works so we
-can pick it back up later.
+Status as of Stage 4.2: connect + graphics + **mouse + keyboard** input working
+end-to-end, responsive and reasonably smooth. Keyboard forwarding + the
+anti-stuck-modifier sync are wired (§7); the `Scancode` API is now proven. This
+document describes how the whole RDP path works.
 
 Engine: **IronRDP 0.14** (pure Rust). We own decode → re-encode → transport →
 input. We do *not* embed mstsc/FreeRDP — owning the input path is what makes the
@@ -166,12 +166,24 @@ time; `total_kb` = transport/sec. Also `rdp mouse button` per click.
   ~25/s on the UI and coalesced on the worker. Lesson from the spike: a pointer
   move and a click need a beat between them; in the live app real motion provides
   it.
-- **Keyboard: NOT wired.** The UI already emits `Key`, `SyncModifiers`,
-  `ReleaseAllModifiers`; the actor currently ignores them. Next slice (2b-2b):
-  map `KeyboardEvent.code` → PS/2 Set 1 scancode → `ironrdp::input::Scancode`,
-  `Operation::KeyPressed/Released`, plus the **modifier-sync** that fixes the
-  classic stuck-Ctrl-after-Alt-Tab bug (release all held modifiers on blur,
-  re-sync on focus). `Scancode` is the one unproven IronRDP API — spike it first.
+- **Keyboard: done.** The UI emits `Key { code }`, `SyncModifiers`,
+  `ReleaseAllModifiers`; the actor (`send_input`) maps the browser
+  `KeyboardEvent.code` → PS/2 **Set 1** scancode via `code_to_scancode`
+  (letters/digits/punct/function/nav/numpad/intl; extended keys carry the
+  `0xE0` flag), builds `ironrdp::input::Scancode::from_u8(extended, code)` and
+  feeds `Operation::KeyPressed/Released` to the `Database` →
+  `process_fastpath_input`. The `Database` synthesises release-before-press on
+  auto-repeat, so we forward browser repeats as-is.
+  - **Modifier-sync (the anti-stuck fix):** on focus loss the UI sends
+    `ReleaseAllModifiers` → `Database::release_all()` (blanket KeyUp of
+    everything held — cures stuck Ctrl/Alt after Alt-Tab). On focus gain it
+    sends `SyncModifiers` (OS modifier state) → we diff against the
+    `Database` (`is_key_pressed`) and emit only the deltas via `sync_mod`, so a
+    redundant press never fires a spurious repeat. We sync Ctrl/Alt/Shift/Meta;
+    **lock-LED sync** (Caps/Num/Scroll) needs a `TS_SYNC_EVENT`, not exposed by
+    ironrdp-input's fast-path `Database` — deferred (see Future work).
+  - `Scancode` (`ironrdp-input` 0.5.0) is now proven: `Scancode::from_u8(extended:
+    bool, code: u8)`, plus `From<(bool,u8)>` / `From<u16>` (0xE000 = extended).
 
 ## 8. Why IronRDP (and not mstsc/FreeRDP)
 
@@ -196,7 +208,10 @@ At 1640×988 full-window-drag, after all optimizations:
 
 ## 10. Future work / backlog
 
-- **Keyboard (2b-2b)** + modifier-sync — the next slice, unlocks real usability.
+- **Keyboard: done** (4.2). Remaining keyboard polish: **lock-LED sync**
+  (Caps/Num/Scroll) via a `TS_SYNC_EVENT` so the server's lock state matches the
+  client at focus time; and PrintScreen/Pause full sequences (currently
+  best-effort / omitted).
 - **Dynamic resize** via `ironrdp-displaycontrol` (DisplayControl DVC) — live
   reflow on window resize / fullscreen instead of fixed connect-time resolution.
   Note IronRDP issue #447: post-resize perf degradation on the RemoteFX codepath
