@@ -24,6 +24,8 @@
 import { create } from "zustand";
 import { writeText as clipboardWriteText, writeImage as clipboardWriteImage } from "@tauri-apps/plugin-clipboard-manager";
 import { Image as TauriImage } from "@tauri-apps/api/image";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { listen } from "@tauri-apps/api/event";
 
 import {
     credentials as credentialsApi,
@@ -410,6 +412,11 @@ export interface SessionTab {
     local?: boolean;
     /** True for an SFTP file-browser tab (SftpView manages its own backend). */
     sftp?: boolean;
+    /** Auth method reported by the last `auth_failed` event ("password" /
+     *  "publickey" / "agent" / "jump"). Drives the auth-vs-badpass split and
+     *  the inline re-auth default, independent of the (possibly clobbered)
+     *  message string. */
+    authMethod?: string | null;
 }
 
 /**
@@ -503,6 +510,12 @@ export function registerSessionViewport(
     };
 }
 
+/** Session ids being re-docked: suppresses the "popout window closed → end the
+ *  tab" handler for a close we triggered ourselves (re-dock, not the user). */
+const redockGuard = new Set<string>();
+/** One-time guard so the cross-window popout-closed listener is wired once. */
+let popoutListenerWired = false;
+
 function rdpCloseText(reason: { kind: string }): string {
     switch (reason.kind) {
         case "user_requested":
@@ -587,6 +600,23 @@ interface SessionsStore {
     ) => void;
     /** Pop a pane out of its split into its own new tab. */
     popOutSession: (sourceKey: string) => void;
+    /** RDP sessions currently rendered in a separate OS window (keyed by tab
+     *  key). While set, the tab shows a placeholder instead of the viewport. */
+    poppedOut: Record<string, boolean>;
+    /** Detach a live RDP session into its own OS window; the tab shows an
+     *  "opened in a separate window" placeholder. */
+    detachRdpToWindow: (key: string) => Promise<void>;
+    /** Re-dock a popped-out RDP session back into its tab (reattach the frame
+     *  stream here, then close the separate window). */
+    redockRdp: (key: string) => Promise<void>;
+    /** Pop-out-window side: bind to an already-live backend RDP session
+     *  (reattach + full repaint) and return the local tab key to render. */
+    attachExternalRdp: (p: {
+        sessionId: string;
+        title: string;
+        width: number;
+        height: number;
+    }) => string;
     /**
      * Split the tab that holds `targetKey` with its neighbour tab (the one
      * before it, or after if it is first), merging the neighbour's active
@@ -604,6 +634,9 @@ interface SessionsStore {
     reorder: (from: string, to: string) => void;
 
     sendInput: (key: string, data: Uint8Array) => void;
+    /** Per-host consecutive auth-failure count (reset on a successful Ready);
+     *  surfaced as the "attempt N" badge on the re-auth screen. */
+    authAttempts: Record<string, number>;
     resize: (key: string, cols: number, rows: number) => void;
     acceptHostKey: (key: string) => Promise<void>;
     rejectHostKey: (key: string) => Promise<void>;
@@ -623,13 +656,33 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
         switch (ev.kind) {
             case "state_changed":
                 patch(key, { state: ev.state });
+                if (ev.state === "ready") {
+                    const hostId = get().sessions.find((t) => t.key === key)?.hostId;
+                    if (hostId && get().authAttempts[hostId])
+                        set((s) => ({
+                            authAttempts: { ...s.authAttempts, [hostId]: 0 },
+                        }));
+                }
                 break;
             case "data":
                 pushOutput(key, Uint8Array.from(ev.bytes));
                 break;
-            case "auth_failed":
-                patch(key, { state: "failed", message: `Auth failed (${ev.method})` });
+            case "auth_failed": {
+                const hostId = get().sessions.find((t) => t.key === key)?.hostId;
+                patch(key, {
+                    state: "failed",
+                    message: `Auth failed (${ev.method})`,
+                    authMethod: ev.method,
+                });
+                if (hostId)
+                    set((s) => ({
+                        authAttempts: {
+                            ...s.authAttempts,
+                            [hostId]: (s.authAttempts[hostId] ?? 0) + 1,
+                        },
+                    }));
                 break;
+            }
             case "host_key_prompt":
                 patch(key, {
                     state: "host_key_pending",
@@ -643,9 +696,19 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
             case "error":
                 patch(key, { message: ev.message });
                 break;
-            case "closed":
-                patch(key, { state: "closed", message: closeReasonText(ev.reason) });
+            case "closed": {
+                // A drop while still connecting (never reached "ready") is a
+                // connection *failure* → show the compact failed card + step
+                // log, not a raw "closed" message. Keep the specific message
+                // (raw OS error) so the failure category + details work.
+                const prev = get().sessions.find((t) => t.key === key);
+                const userClosed = ev.reason.kind === "user_requested";
+                const wasConnecting = !!prev && prev.state !== "ready" && !userClosed;
+                const prevMsg = prev?.message;
+                const text = !userClosed && prevMsg ? prevMsg : closeReasonText(ev.reason);
+                patch(key, { state: wasConnecting ? "failed" : "closed", message: text });
                 break;
+            }
         }
     };
 
@@ -660,12 +723,13 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
             case "closed": {
                 // Keep the specific error (from a preceding `error` event)
                 // rather than overwriting it with the generic close text.
-                const prevMsg = get().sessions.find((t) => t.key === key)?.message;
+                const prev = get().sessions.find((t) => t.key === key);
+                const userClosed = ev.reason.kind === "user_requested";
+                const wasConnecting = !!prev && prev.state !== "ready" && !userClosed;
+                const prevMsg = prev?.message;
                 const text =
-                    ev.reason.kind === "error" && prevMsg
-                        ? prevMsg
-                        : rdpCloseText(ev.reason);
-                patch(key, { state: "closed", message: text });
+                    ev.reason.kind === "error" && prevMsg ? prevMsg : rdpCloseText(ev.reason);
+                patch(key, { state: wasConnecting ? "failed" : "closed", message: text });
                 break;
             }
             case "resized":
@@ -681,22 +745,26 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
                 pushRdpEvent(key, ev);
                 break;
             case "clipboard":
-                // Remote copied — mirror it to the local OS clipboard.
+                // Remote copied text — mirror to the local OS clipboard.
                 if (ev.mime.startsWith("text/") && ev.data) {
                     void clipboardWriteText(ev.data).catch(() => {});
-                } else if (ev.mime === "image/png" && ev.data) {
-                    void (async () => {
-                        try {
-                            const bin = atob(ev.data);
-                            const bytes = new Uint8Array(bin.length);
-                            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-                            const img = await TauriImage.fromBytes(bytes);
-                            await clipboardWriteImage(img);
-                        } catch {
-                            /* clipboard image write unsupported / failed */
-                        }
-                    })();
                 }
+                break;
+            case "clipboard_image":
+                // Remote copied an image — build it from raw RGBA and write to
+                // the OS clipboard. `Image.new` avoids needing tauri's
+                // `image-png` feature (which `Image.fromBytes` would require).
+                void (async () => {
+                    try {
+                        const bin = atob(ev.rgba_base64);
+                        const bytes = new Uint8Array(bin.length);
+                        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                        const img = await TauriImage.new(bytes, ev.width, ev.height);
+                        await clipboardWriteImage(img);
+                    } catch (e) {
+                        console.warn("rdp clipboard image write failed:", e);
+                    }
+                })();
                 break;
         }
     };
@@ -709,21 +777,25 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
     /** Create a session (state + backend connect). Returns its key. */
     const createSession = (host: HostDto): string => {
         const key = genId();
-        // Render near the monitor resolution (downscaled to the pane), in
-        // LOGICAL pixels — multiplying by dpr quadrupled encode/transport cost
-        // on hi-DPI for no real gain over a remote link. The canvas stretches
-        // this to fill the pane (object-fit: fill), so there are no black bars;
-        // aspect is only mildly off when the window is far from the monitor's
-        // shape. Cap preserves the monitor aspect (scale-to-fit).
+        // Match the *pane* aspect ratio (not the monitor's) so the remote
+        // desktop fills the viewport with `object-fit: contain` and no
+        // letterbox bars in the common windowed case. Vertical resolution is
+        // kept near the monitor's so it stays crisp; a window resize after
+        // connect just re-letterboxes cleanly (live reflow is the separate,
+        // gated DisplayControl feature). Even dims; capped to 2560×1600.
         const even = (n: number) => Math.max(2, Math.floor(n / 2) * 2);
         let rdpW: number | undefined;
         let rdpH: number | undefined;
         if (host.protocol === "rdp") {
-            const w = Math.max(1280, Math.round(window.screen.width));
-            const h = Math.max(720, Math.round(window.screen.height));
-            const scale = Math.min(1, 2560 / w, 1600 / h);
-            rdpW = even(Math.round(w * scale));
-            rdpH = even(Math.round(h * scale));
+            const TAB_BAR = 44; // approx tab strip height (logical px)
+            const availW = Math.max(640, Math.round(window.innerWidth));
+            const availH = Math.max(480, Math.round(window.innerHeight - TAB_BAR));
+            const aspect = availW / availH;
+            const h0 = Math.min(1440, Math.max(720, Math.round(window.screen.height)));
+            const w0 = Math.round(h0 * aspect);
+            const cap = Math.min(1, 2560 / w0, 1600 / h0);
+            rdpW = even(Math.round(w0 * cap));
+            rdpH = even(Math.round(h0 * cap));
         }
         const tab: SessionTab = {
             key,
@@ -842,6 +914,8 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
 
     return {
         sessions: [],
+        poppedOut: {},
+        authAttempts: {},
         tabs: [],
         activeTabId: null,
         splitTarget: null,
@@ -1038,6 +1112,102 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
                     dragTabId: null,
                 };
             }),
+
+        attachExternalRdp: ({ sessionId, title, width, height }) => {
+            const key = genId();
+            const tab: SessionTab = {
+                key,
+                sessionId,
+                hostId: "" as HostId,
+                title,
+                protocol: "rdp" as Protocol,
+                state: "ready",
+                message: null,
+                hostKey: null,
+                rdpWidth: width,
+                rdpHeight: height,
+            };
+            sessionOutput.set(key, { buffer: [], writer: null });
+            set((s) => ({ sessions: [...s.sessions, tab] }));
+            // Bind this fresh webview to the still-live backend session; the
+            // reattach forces a full repaint so the canvas paints completely.
+            void rdpSessionApi.reattach(sessionId, (ev) => handleRdpEvent(key, ev));
+            return key;
+        },
+
+        detachRdpToWindow: async (key) => {
+            const tab = get().sessions.find((t) => t.key === key);
+            if (!tab || !tab.sessionId || tab.protocol !== "rdp") return;
+            const sid = tab.sessionId;
+            // Wire the "popout window closed by the user" handler once: end the
+            // owning tab (unless the close was our own re-dock).
+            if (!popoutListenerWired) {
+                popoutListenerWired = true;
+                void listen<{ sid: string }>("rdp:popout-closed", (e) => {
+                    const closedSid = e.payload?.sid;
+                    if (!closedSid) return;
+                    if (redockGuard.has(closedSid)) {
+                        redockGuard.delete(closedSid);
+                        return; // our own re-dock close — keep the tab
+                    }
+                    const owner = get().sessions.find((t) => t.sessionId === closedSid);
+                    if (owner) void get().close(owner.key);
+                });
+            }
+            set((s) => ({ poppedOut: { ...s.poppedOut, [key]: true } }));
+            const params = new URLSearchParams({
+                sid,
+                t: tab.title,
+                w: String(tab.rdpWidth ?? 1280),
+                h: String(tab.rdpHeight ?? 800),
+            });
+            const winW = Math.min(Math.max(Math.round((tab.rdpWidth ?? 1280) / 1.5), 800), 1920);
+            const winH = Math.min(Math.max(Math.round((tab.rdpHeight ?? 800) / 1.5), 600), 1200);
+            try {
+                // eslint-disable-next-line no-new
+                new WebviewWindow(`rdp-${sid}`, {
+                    url: `index.html#popout?${params.toString()}`,
+                    title: tab.title,
+                    width: winW,
+                    height: winH,
+                    decorations: true,
+                });
+            } catch {
+                // Window creation failed — undo the placeholder so the tab keeps
+                // rendering the viewport in place.
+                set((s) => {
+                    const p = { ...s.poppedOut };
+                    delete p[key];
+                    return { poppedOut: p };
+                });
+            }
+        },
+
+        redockRdp: async (key) => {
+            const tab = get().sessions.find((t) => t.key === key);
+            if (!tab || !tab.sessionId) return;
+            const sid = tab.sessionId;
+            // Reattach the stream back to this (main) webview *first*, so closing
+            // the popout window below doesn't tear the session down.
+            redockGuard.add(sid);
+            await rdpSessionApi.reattach(sid, (ev) => handleRdpEvent(key, ev));
+            set((s) => {
+                const p = { ...s.poppedOut };
+                delete p[key];
+                return { poppedOut: p };
+            });
+            try {
+                const w = await WebviewWindow.getByLabel(`rdp-${sid}`);
+                await w?.close();
+            } catch {
+                /* window already gone */
+            } finally {
+                // Backstop: if the popout's close event never reaches the
+                // listener, don't leave a stale guard that would later swallow
+                // a genuine user close of the same session.
+                window.setTimeout(() => redockGuard.delete(sid), 1500);
+            }
+        },
 
         popOutSession: (sourceKey) =>
             set((s) => {

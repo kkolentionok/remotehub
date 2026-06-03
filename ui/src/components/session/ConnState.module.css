@@ -1,0 +1,479 @@
+/* Connection-state screen: identity card + live handshake log + diagnosis.
+ * Shared by connecting / failed / host-key states. Tokens from tokens.css. */
+
+.stage {
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    overflow: auto;
+}
+
+.card {
+    width: 100%;
+    max-width: 560px;
+}
+
+/* identity */
+.id {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+.tile {
+    width: 48px;
+    height: 48px;
+    border-radius: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    background: var(--accent-soft);
+    color: var(--color-accent);
+}
+.fail .tile {
+    background: var(--color-danger-bg);
+    color: var(--color-danger);
+}
+.warn .tile {
+    background: rgba(230, 192, 123, 0.14);
+    color: var(--color-warn);
+}
+.name {
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--text-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.addr {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--text-3);
+    margin-top: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.proto {
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-weight: 600;
+    font-family: var(--font-sans, inherit);
+}
+.protoSsh {
+    background: var(--color-ssh-bg);
+    color: var(--color-ssh);
+}
+.protoRdp {
+    background: rgba(96, 165, 250, 0.12);
+    color: var(--color-rdp);
+}
+
+/* indeterminate bar */
+.ind {
+    height: 3px;
+    border-radius: 99px;
+    background: var(--color-subtle);
+    overflow: hidden;
+    margin-top: 20px;
+    position: relative;
+}
+.ind::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    height: 100%;
+    width: 38%;
+    border-radius: 99px;
+    background: linear-gradient(90deg, transparent, var(--color-accent), transparent);
+    animation: ind 1.25s ease-in-out infinite;
+}
+@keyframes ind {
+    0% {
+        left: -40%;
+    }
+    100% {
+        left: 102%;
+    }
+}
+
+/* status headline */
+.head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 22px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-1);
+}
+.sdot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+}
+.fail .sdot {
+    background: var(--color-danger);
+    box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.14);
+}
+.warn .sdot {
+    background: var(--color-warn);
+    box-shadow: 0 0 0 4px rgba(230, 192, 123, 0.16);
+}
+
+/* handshake log */
+.hs {
+    margin-top: 18px;
+    display: flex;
+    flex-direction: column;
+}
+.hstep {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 0;
+    font-size: 13px;
+    font-family: var(--font-mono);
+    color: var(--text-3);
+}
+.hstepIc {
+    width: 18px;
+    height: 18px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.hstepT {
+    flex: 1;
+    min-width: 0;
+}
+.stepDone {
+    color: var(--text-2);
+}
+.stepDone .hstepIc {
+    color: var(--color-success);
+}
+.stepActive {
+    color: var(--text-1);
+}
+.stepActive .hstepIc {
+    color: var(--color-accent);
+}
+.stepPend {
+    color: var(--text-4);
+}
+.stepFail {
+    color: var(--text-1);
+}
+.stepFail .hstepIc {
+    color: var(--color-danger);
+}
+.spin {
+    animation: spin 0.8s linear infinite;
+    display: flex;
+}
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+.pdot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    border: 1.5px solid var(--text-4);
+}
+
+/* diagnosis banner */
+.diag {
+    margin-top: 18px;
+    display: flex;
+    gap: 13px;
+    padding: 15px 16px;
+    border-radius: 11px;
+    background: rgba(248, 113, 113, 0.07);
+    border: 1px solid rgba(248, 113, 113, 0.22);
+}
+.warn .diag {
+    background: rgba(230, 192, 123, 0.08);
+    border-color: rgba(230, 192, 123, 0.26);
+}
+.diagIc {
+    flex: 0 0 auto;
+    color: var(--color-danger);
+}
+.warn .diagIc {
+    color: var(--color-warn);
+}
+.diag p {
+    font-size: 13px;
+    color: var(--text-2);
+    margin: 0;
+    line-height: 1.55;
+    text-wrap: pretty;
+}
+.diag code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-1);
+    background: var(--color-subtle);
+    padding: 1px 5px;
+    border-radius: 4px;
+}
+
+/* fixes checklist */
+.fixes {
+    margin-top: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+}
+.fixesH {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+.fix {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-2);
+}
+.fixN {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    background: var(--color-subtle);
+    color: var(--text-3);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 1px;
+}
+.fix code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-1);
+    background: var(--color-subtle);
+    padding: 1px 5px;
+    border-radius: 4px;
+}
+
+/* technical details */
+.det {
+    margin-top: 16px;
+    border: 1px solid var(--color-border);
+    border-radius: 9px;
+    overflow: hidden;
+}
+.detH {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 11px 13px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-3);
+    transition: color 0.12s;
+}
+.detH:hover {
+    color: var(--text-2);
+}
+.chev {
+    display: flex;
+    transition: transform 0.18s;
+}
+.detOpen .chev {
+    transform: rotate(90deg);
+}
+.detSp {
+    flex: 1;
+}
+.detCp {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-4);
+    font-size: 11px;
+    padding: 3px 7px;
+    border-radius: 5px;
+}
+.detCp:hover {
+    color: var(--text-2);
+    background: var(--color-subtle);
+}
+.detB {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.25s ease;
+}
+.detOpen .detB {
+    max-height: 280px;
+}
+.detCode {
+    padding: 13px;
+    border-top: 1px solid var(--color-border);
+    background: var(--color-canvas);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.65;
+    color: var(--text-3);
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-y: auto;
+    max-height: 240px;
+}
+
+/* actions row */
+.act {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 22px;
+    flex-wrap: wrap;
+}
+.retry {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-4);
+}
+
+/* host-key (warn) screen: the failing auth step reads amber, not red. */
+.warn .stepFail .hstepIc {
+    color: var(--color-warn);
+}
+
+/* ── inline re-auth panel (auth / badpass) ── */
+.reauthCard {
+    margin-top: 16px;
+    border: 1px solid var(--color-border);
+    border-radius: 11px;
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.reauthHead {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-1);
+}
+.reauthHead svg {
+    color: var(--color-accent);
+}
+.reauthRow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.reauthLabel {
+    width: 64px;
+    flex: 0 0 auto;
+    font-size: 12px;
+    color: var(--text-3);
+}
+.seg {
+    display: flex;
+    flex: 1;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background: var(--color-canvas);
+}
+.segBtn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 12.5px;
+    color: var(--text-3);
+    transition: color 0.1s, background 0.1s;
+}
+.segBtn:hover {
+    color: var(--text-1);
+}
+.segOn {
+    background: var(--color-elevated);
+    color: var(--text-1);
+}
+.pwWrap {
+    flex: 1;
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+}
+.pwInput {
+    width: 100%;
+    height: 32px;
+    padding: 0 34px 0 10px;
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--text-1);
+    font-size: 13px;
+    font-family: var(--font-mono);
+}
+.pwInput:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+.eye {
+    position: absolute;
+    right: 8px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-4);
+    display: flex;
+}
+.eye:hover {
+    color: var(--text-2);
+}
+.keySelect {
+    flex: 1;
+    min-width: 0;
+    height: 32px;
+    padding: 0 10px;
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--text-1);
+    font-size: 13px;
+    font-family: var(--font-mono);
+    cursor: pointer;
+}
+.keySelect:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+.saveBtn {
+    width: 100%;
+    justify-content: center;
+}

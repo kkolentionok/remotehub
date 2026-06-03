@@ -126,6 +126,19 @@ pub async fn rdp_session_close(
     Ok(())
 }
 
+/// Re-home a live RDP session's frame stream to the calling webview's channel
+/// (pop-out into a separate window, or re-dock back into the tab). Returns
+/// `true` if the session was live and got reattached.
+#[tauri::command]
+#[instrument(level = "debug", skip(state, on_event))]
+pub async fn rdp_session_reattach(
+    state: State<'_, AppState>,
+    req: SessionIdRequest,
+    on_event: Channel<RdpSessionEvent>,
+) -> ApiResult<bool> {
+    Ok(state.rdp_sessions.reattach(&req.session_id, on_event).await)
+}
+
 #[tauri::command]
 #[instrument(level = "debug", skip(state, req))]
 pub async fn rdp_session_input(

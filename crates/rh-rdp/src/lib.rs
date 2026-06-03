@@ -15,6 +15,10 @@ use serde::{Deserialize, Serialize};
 use rh_core::{Host, RevealedSecret, SessionId};
 
 mod actor;
+mod clearcodec;
+mod gfx;
+mod nscodec;
+mod progressive;
 pub use actor::spawn_session;
 
 /// Commands the UI/host layer sends to a running RDP session actor.
@@ -31,6 +35,11 @@ pub enum RdpCommand {
         height: u32,
         rgba: Vec<u8>,
     },
+    /// Force a full-frame resend on the next tick. Used when the event sink is
+    /// swapped to a fresh webview (pop-out / re-dock): RDP streams deltas, so a
+    /// new canvas would otherwise stay black until each region happens to
+    /// change. Clears `last_frame` → the next diff emits the whole image.
+    Repaint,
     /// User-requested graceful close.
     Shutdown,
 }
@@ -254,6 +263,14 @@ pub enum RdpSessionEvent {
     Clipboard {
         mime: String,
         data: String,
+    },
+    /// Image clipboard from the server: raw top-down RGBA (width*height*4),
+    /// base64-encoded. The UI builds `Image.new(rgba, w, h)` and writes it to
+    /// the OS clipboard (avoids needing tauri's `image-png` feature).
+    ClipboardImage {
+        width: u32,
+        height: u32,
+        rgba_base64: String,
     },
     Error {
         message: String,

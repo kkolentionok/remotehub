@@ -19,13 +19,14 @@
     display: block;
     width: 100%;
     height: 100%;
-    object-fit: fill;
+    object-fit: contain;
     background: #000;
     outline: none;
     cursor: default;
-    /* Stretch the desktop to fill the pane (no black bars). We render at
-       monitor resolution and downscale, so quality stays sharp; aspect is
-       only mildly off when the window is far from the monitor's aspect. */
+    /* Preserve the remote desktop's aspect ratio (never distort). We request
+       a resolution matching the pane aspect at connect, so contain fills the
+       viewport with no bars in the common case; a later window resize just
+       re-letterboxes cleanly instead of stretching. Downscaled → sharp. */
     image-rendering: auto;
 }
 

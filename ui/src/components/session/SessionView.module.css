@@ -191,6 +191,7 @@
     align-items: center;
     justify-content: center;
     background: var(--color-canvas);
+    z-index: 20;
 }
 
 .card {
@@ -363,4 +364,98 @@
 .reauthKeyBtn:hover {
     border-color: var(--color-border-strong, var(--color-border));
     background: var(--color-subtle);
+}
+
+/* Failed-connection card: short headline + collapsible step log. */
+.failBox {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    width: 420px;
+    max-width: calc(100% - var(--space-8));
+}
+.failHead {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+.failDot {
+    flex-shrink: 0;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--color-danger);
+}
+.failTitle {
+    font-size: var(--text-3);
+    font-weight: 500;
+    color: var(--color-fg, #fff);
+}
+.failDetails {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+}
+.failSummary {
+    list-style: none;
+    cursor: pointer;
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-1);
+    color: var(--color-fg-faint, #888);
+    user-select: none;
+}
+.failSummary::-webkit-details-marker {
+    display: none;
+}
+.failSummary::before {
+    content: "▸";
+    display: inline-block;
+    margin-right: var(--space-2);
+    transition: transform 0.12s;
+}
+.failDetails[open] .failSummary::before {
+    transform: rotate(90deg);
+}
+.failLog {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--space-2) var(--space-3) var(--space-3);
+    border-top: 1px solid var(--color-border);
+    font-family: var(--font-mono);
+    font-size: var(--text-1);
+    line-height: 1.5;
+    color: var(--color-fg-faint, #aaa);
+}
+.failRaw {
+    padding: var(--space-3);
+    border-top: 1px solid var(--color-border);
+    font-family: var(--font-mono);
+    font-size: var(--text-1);
+    line-height: 1.45;
+    color: var(--color-fg-faint, #888);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Placeholder shown in the tab while an RDP session is detached into its
+   own OS window (pop-out). */
+.poppedOut {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    color: var(--text-3);
+    background: var(--color-canvas);
+    text-align: center;
+    padding: 24px;
+}
+
+.poppedOut p {
+    margin: 0;
+    font-size: 14px;
+    color: var(--text-2);
 }

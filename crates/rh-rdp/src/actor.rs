@@ -40,7 +40,7 @@ use ironrdp::dvc::DrdynvcClient;
 use ironrdp::connector::connection_activation::{
     ConnectionActivationSequence, ConnectionActivationState,
 };
-use ironrdp::connector::{self, ConnectionResult, Credentials, Sequence as _, State as _};
+use ironrdp::connector::{self, ConnectionResult, Credentials, Sequence as _};
 use ironrdp::core::WriteBuf;
 use ironrdp::session::fast_path::ProcessorBuilder;
 use ironrdp::input::{
@@ -105,6 +105,8 @@ async fn run(
 ) {
     let shutdown = Arc::new(AtomicBool::new(false));
     let worker_shutdown = shutdown.clone();
+    let force_repaint = Arc::new(AtomicBool::new(false));
+    let worker_repaint = force_repaint.clone();
     let worker_events = events.clone();
     // Bridge UI input to the blocking worker: a std channel the worker
     // drains between reads. (Shutdown still travels via the atomic flag.)
@@ -116,7 +118,7 @@ async fn run(
 
     let worker = match std::thread::Builder::new()
         .name("rdp-session".to_owned())
-        .spawn(move || blocking_session(params, &worker_shutdown, &worker_events, &input_rx, &clip_rx, &resize_rx))
+        .spawn(move || blocking_session(params, &worker_shutdown, &worker_repaint, &worker_events, &input_rx, &clip_rx, &resize_rx))
     {
         Ok(h) => h,
         Err(e) => {
@@ -155,6 +157,9 @@ async fn run(
             Some(RdpCommand::Resize { width, height }) => {
                 let _ = resize_tx.send((width, height));
             }
+            Some(RdpCommand::Repaint) => {
+                force_repaint.store(true, Ordering::SeqCst);
+            }
         }
     }
 
@@ -168,6 +173,7 @@ async fn run(
 fn blocking_session(
     params: RdpSpawnParams,
     shutdown: &AtomicBool,
+    force_repaint: &AtomicBool,
     events: &mpsc::UnboundedSender<RdpSessionEvent>,
     input_rx: &std::sync::mpsc::Receiver<RdpInputEvent>,
     clip_rx: &std::sync::mpsc::Receiver<LocalClipUpdate>,
@@ -210,8 +216,24 @@ fn blocking_session(
     // Authenticating) as it progresses, so the UI reflects what's actually
     // happening instead of claiming "Authenticating" before we've even
     // reached the host.
+    // Graphics pipeline (GFX) is opt-in via RDP_GFX. When set, we allocate the
+    // shared framebuffer state and hand a clone to the GFX DVC processor; the
+    // worker loop below ships its dirty rects.
+    let gfx_state = if std::env::var("RDP_GFX").is_ok() {
+        Some(Arc::new(Mutex::new(crate::gfx::GfxState::new())))
+    } else {
+        None
+    };
+
     let (connection_result, mut framed) =
-        match connect(config, params.host.hostname.clone(), params.host.port, events, backend) {
+        match connect(
+            config,
+            params.host.hostname.clone(),
+            params.host.port,
+            events,
+            backend,
+            gfx_state.clone(),
+        ) {
             Ok(v) => v,
             Err(e) => {
                 let reason = close_reason_for(&e);
@@ -505,13 +527,46 @@ fn blocking_session(
             }
         }
 
+        // A reattach (pop-out / re-dock) asked for a full frame: drop the
+        // diff baseline so the next diff (legacy `image` or GFX `fb`) emits the
+        // whole screen to the freshly-swapped sink.
+        if force_repaint.swap(false, Ordering::SeqCst) {
+            last_frame.clear();
+        }
+
         // Diff + extract changed regions (cheap), then hand the raw pixels
         // to the encoder thread. If the encoder is still busy with the
         // previous frame, skip this one (don't advance `last_frame`) so the
         // next diff picks up the accumulated changes — frames coalesce, no
         // backlog, no blocking the read/input loop on compression.
         if last_emit.elapsed() >= FRAME_INTERVAL {
-            if let Some(regions) = compute_regions(&image, &last_frame) {
+            if let Some(state) = &gfx_state {
+                // GFX pipeline active: diff the composited framebuffer against
+                // the last shipped frame (same self-correcting band diff the
+                // legacy path uses on `image`). This is robust to any gap in
+                // per-op dirty bookkeeping — a window move/appear that repaints
+                // a vacated area into `fb` is always re-synced to the canvas, so
+                // no ghosting. It also coalesces the 3 progressive passes that
+                // arrive inside one 33 ms tick into a single final-quality ship.
+                let mut st = state.lock().unwrap();
+                if st.ready() {
+                    let (w, h) = (st.w as usize, st.h as usize);
+                    match compute_regions_raw(&st.fb, w, h, &last_frame) {
+                        Some(regions) => match tx_enc.try_send(regions) {
+                            Ok(()) => {
+                                last_frame.clear();
+                                last_frame.extend_from_slice(&st.fb);
+                                st.dirty.clear();
+                            }
+                            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                                // encoder busy — leave last_frame, retry next tick
+                            }
+                            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => break,
+                        },
+                        None => st.dirty.clear(),
+                    }
+                }
+            } else if let Some(regions) = compute_regions(&image, &last_frame) {
                 match tx_enc.try_send(regions) {
                     Ok(()) => {
                         last_frame.clear();
@@ -643,6 +698,41 @@ fn compute_regions(image: &DecodedImage, last_frame: &[u8]) -> Option<Vec<Region
         by += bh;
     }
 
+    if jobs.is_empty() {
+        None
+    } else {
+        Some(jobs)
+    }
+}
+
+/// Same band-diff as [`compute_regions`] but over a raw RGBA buffer with
+/// explicit dimensions (used by the GFX path, whose framebuffer is a plain
+/// `Vec<u8>` rather than a `DecodedImage`). Self-correcting: any pixel that
+/// differs from `last_frame` is shipped, regardless of per-op dirty
+/// bookkeeping, which kills move/appear ghosting where a vacated area was
+/// repainted into `fb` but its dirty rect never reached the canvas.
+fn compute_regions_raw(
+    data: &[u8],
+    w: usize,
+    h: usize,
+    last_frame: &[u8],
+) -> Option<Vec<RegionJob>> {
+    if w == 0 || h == 0 || data.is_empty() {
+        return None;
+    }
+    // First frame / resize: whole screen in one rect.
+    if last_frame.len() != data.len() {
+        return Some(vec![make_region(data, w, 0, 0, w, h)]);
+    }
+    let mut jobs = Vec::new();
+    let mut by = 0usize;
+    while by < h {
+        let bh = BAND_H.min(h - by);
+        if let Some((rx, ry, rw, rh)) = changed_band(data, last_frame, w, by, bh) {
+            jobs.push(make_region(data, w, rx, ry, rw, rh));
+        }
+        by += bh;
+    }
     if jobs.is_empty() {
         None
     } else {
@@ -1121,6 +1211,7 @@ fn connect(
     port: u16,
     events: &mpsc::UnboundedSender<RdpSessionEvent>,
     cliprdr_backend: Box<dyn CliprdrBackend>,
+    gfx_state: Option<Arc<Mutex<crate::gfx::GfxState>>>,
 ) -> Result<(ConnectionResult, UpgradedFramed), RdpError> {
     let emit = |state: RdpState| {
         let _ = events.send(RdpSessionEvent::StateChanged { state });
@@ -1144,18 +1235,36 @@ fn connect(
     tcp_stream
         .set_read_timeout(Some(CONNECT_TIMEOUT))
         .map_err(RdpError::Network)?;
+    // Detect a dead/half-open peer. When another user takes over the session
+    // the server may stop without a clean MCS disconnect; without keepalive
+    // our reads just keep timing out and the picture freezes forever. With it,
+    // the OS probes the link and a dead connection surfaces as a read error
+    // (ConnectionReset/Aborted) → the active loop emits Closed. Best-effort.
+    {
+        use socket2::{SockRef, TcpKeepalive};
+        let ka = TcpKeepalive::new()
+            .with_time(Duration::from_secs(15))
+            .with_interval(Duration::from_secs(5));
+        let _ = SockRef::from(&tcp_stream).set_tcp_keepalive(&ka);
+    }
     let client_addr = tcp_stream.local_addr().map_err(RdpError::Network)?;
 
     let mut framed = ironrdp_blocking::Framed::new(tcp_stream);
     let mut connector = connector::ClientConnector::new(config, client_addr)
         .with_static_channel(CliprdrClient::new(cliprdr_backend))
-        // DRDYNVC hosting the Display Control DVC → dynamic resize. The
-        // callback fires when the server sends caps (channel becomes ready);
-        // we don't need to respond, so return no messages.
-        .with_static_channel(
-            DrdynvcClient::new()
-                .with_dynamic_channel(DisplayControlClient::new(|_caps| Ok(Vec::new()))),
-        );
+        // When the graphics pipeline is enabled we host the GFX DVC, which
+        // decodes the server's surface commands into the shared framebuffer
+        // (see gfx.rs). The worker loop ships that framebuffer's dirty rects
+        // through the same transport as the legacy path.
+        .with_static_channel({
+            let mut drdynvc = DrdynvcClient::new()
+                .with_dynamic_channel(DisplayControlClient::new(|_caps| Ok(Vec::new())));
+            if let Some(state) = gfx_state {
+                tracing::info!("GFX enabled — hosting graphics-pipeline DVC");
+                drdynvc = drdynvc.with_dynamic_channel(crate::gfx::GraphicsPipeline::new(state));
+            }
+            drdynvc
+        });
 
     let should_upgrade = ironrdp_blocking::connect_begin(&mut framed, &mut connector)
         .map_err(|e| RdpError::Connector(e.to_string()))?;
@@ -1452,10 +1561,12 @@ impl CliprdrBackend for ClipboardBridge {
         }
         match self.pending_format.take() {
             Some(fmt) if fmt == ClipboardFormatId::CF_DIB => {
-                if let Some(png) = dib_to_png_base64(response.data()) {
-                    let _ = self.events.send(RdpSessionEvent::Clipboard {
-                        mime: "image/png".to_owned(),
-                        data: png,
+                use base64::Engine as _;
+                if let Some((w, h, rgba)) = dib_to_rgba(response.data()) {
+                    let _ = self.events.send(RdpSessionEvent::ClipboardImage {
+                        width: w,
+                        height: h,
+                        rgba_base64: base64::engine::general_purpose::STANDARD.encode(&rgba),
                     });
                 }
             }
@@ -1486,10 +1597,11 @@ fn decode_unicode_clipboard(bytes: &[u8]) -> Option<String> {
     String::from_utf16(&units).ok()
 }
 
-/// `CF_DIB` (BITMAPINFOHEADER + pixels, **no** file header) → PNG base64.
-/// Output is opaque RGBA (DIB alpha is unreliable). Handles 24/32 bpp,
-/// BI_RGB and BI_BITFIELDS, V3/V4/V5 headers, and bottom-up/top-down rows.
-fn dib_to_png_base64(dib: &[u8]) -> Option<String> {
+/// `CF_DIB` (BITMAPINFOHEADER + pixels, **no** file header) → top-down RGBA
+/// `(width, height, rgba)`. Output is opaque (DIB alpha is unreliable).
+/// Handles 24/32 bpp, BI_RGB and BI_BITFIELDS, V3/V4/V5 headers, and
+/// bottom-up/top-down rows.
+fn dib_to_rgba(dib: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     if dib.len() < 40 {
         return None;
     }
@@ -1535,7 +1647,7 @@ fn dib_to_png_base64(dib: &[u8]) -> Option<String> {
             rgba[d + 3] = 255; // opaque
         }
     }
-    encode_rgba_png_base64(&rgba, w as u32, h as u32)
+    Some((w as u32, h as u32, rgba))
 }
 
 /// Top-down RGBA → `CF_DIB` (32-bpp BI_RGB, bottom-up BGRA). No file header.
@@ -1570,15 +1682,4 @@ fn rgba_to_dib(rgba: &[u8], width: u32, height: u32) -> Option<Vec<u8>> {
         }
     }
     Some(dib)
-}
-
-/// RGBA buffer → PNG → base64 (lossless; for clipboard images).
-fn encode_rgba_png_base64(rgba: &[u8], width: u32, height: u32) -> Option<String> {
-    use base64::Engine as _;
-    use image::ImageEncoder as _;
-    let mut png = Vec::new();
-    image::codecs::png::PngEncoder::new(&mut png)
-        .write_image(rgba, width, height, image::ExtendedColorType::Rgba8)
-        .ok()?;
-    Some(base64::engine::general_purpose::STANDARD.encode(&png))
 }

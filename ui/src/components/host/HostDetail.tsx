@@ -813,6 +813,29 @@ function HostForm(props: HostFormProps) {
 
     // ---------- Credentials -------------------------------------------
 
+    // Enforce a single key/agent slot: unlink any currently-linked ssh_key /
+    // ssh_key_agent credential (except `exceptId`) before linking a new one,
+    // so switching keys replaces rather than stacks. Edit mode only.
+    const dropLinkedKeyAuth = useCallback(
+        async (exceptId: string | null) => {
+            const ids = props.host.credential_ids ?? [];
+            const items = useCredentialsStore.getState().items;
+            for (const c of items) {
+                if (
+                    c.id !== exceptId &&
+                    ids.includes(c.id) &&
+                    (c.kind === "ssh_key" || c.kind === "ssh_key_agent")
+                ) {
+                    await credApi.unlinkHost({
+                        host_id: props.host.id,
+                        credential_id: c.id,
+                    });
+                }
+            }
+        },
+        [props],
+    );
+
     const linkCredential = useCallback(
         async (credentialId: string) => {
             // On a draft the host doesn't exist yet — remember the choice and
@@ -824,6 +847,8 @@ function HostForm(props: HostFormProps) {
             }
             setSaveStatus({ kind: "saving" });
             try {
+                // Single slot: drop any previously-linked key/agent first.
+                await dropLinkedKeyAuth(credentialId);
                 await credApi.linkHost({
                     host_id: props.host.id,
                     credential_id: credentialId,
@@ -837,7 +862,7 @@ function HostForm(props: HostFormProps) {
                 setSaveStatus({ kind: "error", message: msg });
             }
         },
-        [props, flashSaved, updateDraft],
+        [props, flashSaved, updateDraft, dropLinkedKeyAuth],
     );
 
     // Remove a single auth method from the host (✕ on a method). Drafts
@@ -947,11 +972,12 @@ function HostForm(props: HostFormProps) {
                       })
                   ).id;
             if (props.mode === "edit") {
-                const anyLinked = (props.host.credential_ids ?? []).length > 0;
+                // Single slot: drop any previously-linked key/agent first.
+                await dropLinkedKeyAuth(credId);
                 await credApi.linkHost({
                     host_id: props.host.id,
                     credential_id: credId,
-                    set_as_default: !anyLinked,
+                    set_as_default: true,
                 });
                 const fresh = await hostsApi.get(props.host.id);
                 props.onHostUpdated(fresh);
@@ -962,7 +988,7 @@ function HostForm(props: HostFormProps) {
         } catch (e: unknown) {
             setSaveStatus({ kind: "error", message: formatApiError(e) });
         }
-    }, [props, flashSaved, updateDraft]);
+    }, [props, flashSaved, updateDraft, dropLinkedKeyAuth]);
 
     // Seed the field with the revealed stored password as the edit
     // baseline. We set committed = value so no save fires on reveal; only
@@ -1132,54 +1158,34 @@ function HostForm(props: HostFormProps) {
 
 
             <div className={styles.body}>
-            <section className={styles.section}>
-                <div className={styles.fieldLabel}>{t("dialog.host.label")}</div>
-                <Input
-                    value={form.label}
-                    onChange={(e) => update("label", e.target.value)}
-                    placeholder={
-                        form.hostname.trim() !== ""
-                            ? form.hostname
-                            : t("dialog.host.labelPlaceholder")
-                    }
-                    spellCheck={false}
-                />
-            </section>
-
-            <section className={styles.section}>
-                <div className={styles.fieldLabel}>{t("dialog.host.protocol")}</div>
-                <div className={styles.segmented}>
-                    <button
-                        type="button"
-                        className={`${styles.seg} ${form.protocol === "ssh" ? styles.segOn : ""}`}
-                        onClick={() => update("protocol", "ssh")}
-                    >
-                        <Terminal size={14} /> SSH
-                    </button>
-                    <button
-                        type="button"
-                        className={`${styles.seg} ${form.protocol === "rdp" ? styles.segOn : ""}`}
-                        onClick={() => update("protocol", "rdp")}
-                    >
-                        <Monitor size={14} /> RDP
-                    </button>
+            <div className={styles.frow}>
+                <div className={styles.frow__l}>{t("dialog.host.label")}</div>
+                <div className={styles.frow__c}>
+                    <Input
+                        value={form.label}
+                        onChange={(e) => update("label", e.target.value)}
+                        placeholder={
+                            form.hostname.trim() !== ""
+                                ? form.hostname
+                                : t("dialog.host.labelPlaceholder")
+                        }
+                        spellCheck={false}
+                    />
                 </div>
-            </section>
+            </div>
 
-            <section className={styles.section}>
-                <div className={styles.addressRow}>
-                    <div className={styles.colField}>
-                        <div className={styles.fieldLabel}>{t("dialog.host.address")}</div>
-                        <Input
-                            value={form.hostname}
-                            onChange={(e) => update("hostname", e.target.value)}
-                            placeholder={t("dialog.host.addressPlaceholder")}
-                            autoFocus={props.mode === "draft"}
-                            spellCheck={false}
-                        />
-                    </div>
-                    <div className={styles.colField}>
-                        <div className={styles.fieldLabel}>{t("dialog.host.port")}</div>
+            <div className={styles.frow}>
+                <div className={styles.frow__l}>{t("dialog.host.address")}</div>
+                <div className={styles.frow__c}>
+                    <Input
+                        value={form.hostname}
+                        onChange={(e) => update("hostname", e.target.value)}
+                        placeholder={t("dialog.host.addressPlaceholder")}
+                        autoFocus={props.mode === "draft"}
+                        spellCheck={false}
+                    />
+                    <div className={styles.frow__port}>
+                        <span className={styles.frow__sep}>:</span>
                         <Input
                             type="number"
                             min={1}
@@ -1192,38 +1198,60 @@ function HostForm(props: HostFormProps) {
                         />
                     </div>
                 </div>
-            </section>
+            </div>
 
-            <section className={styles.section}>
-                <CredentialPanel
-                    protocol={form.protocol}
-                    username={form.inlineUsername}
-                    password={form.inlinePassword}
-                    onUsername={(v) => update("inlineUsername", v)}
-                    onPassword={(v) => update("inlinePassword", v)}
-                    onPasswordRevealed={onPasswordRevealed}
-                    onPickSaved={linkCredential}
-                    onAddKey={onAddKey}
-                    onUseAgent={onUseAgent}
-                    onUnlink={unlinkCredential}
-                    linkedPasswordId={linkedPwCred?.id ?? null}
-                    linkedKeyId={linkedKeyCred?.id ?? null}
-                    linkedKeyName={linkedKeyCred?.name ?? null}
-                    linkedAgentId={linkedAgentCred?.id ?? null}
-                />
-            </section>
+            <div className={styles.frow}>
+                <div className={styles.frow__l}>{t("dialog.host.protocol")}</div>
+                <div className={styles.frow__c}>
+                    <div className={styles.segmented}>
+                        <button
+                            type="button"
+                            className={`${styles.seg} ${form.protocol === "ssh" ? styles.segOn : ""}`}
+                            onClick={() => update("protocol", "ssh")}
+                        >
+                            <Terminal size={14} /> SSH
+                        </button>
+                        <button
+                            type="button"
+                            className={`${styles.seg} ${form.protocol === "rdp" ? styles.segOn : ""}`}
+                            onClick={() => update("protocol", "rdp")}
+                        >
+                            <Monitor size={14} /> RDP
+                        </button>
+                    </div>
+                </div>
+            </div>
 
-            <section className={styles.section}>
-                <div className={styles.fieldLabel}>{t("dialog.host.groupField")}</div>
-                <Combobox
-                    options={groupOptions}
-                    value={form.groupId}
-                    onChange={(v) => update("groupId", v)}
-                    onCreateNew={createGroup}
-                    placeholder={t("dialog.host.groupNone")}
-                    createLabel={t("dialog.host.createGroup")}
-                />
-            </section>
+            <CredentialPanel
+                protocol={form.protocol}
+                username={form.inlineUsername}
+                password={form.inlinePassword}
+                onUsername={(v) => update("inlineUsername", v)}
+                onPassword={(v) => update("inlinePassword", v)}
+                onPasswordRevealed={onPasswordRevealed}
+                onPickSaved={linkCredential}
+                onAddKey={onAddKey}
+                onUseAgent={onUseAgent}
+                onUnlink={unlinkCredential}
+                linkedPasswordId={linkedPwCred?.id ?? null}
+                linkedKeyId={linkedKeyCred?.id ?? null}
+                linkedKeyName={linkedKeyCred?.name ?? null}
+                linkedAgentId={linkedAgentCred?.id ?? null}
+            />
+
+            <div className={styles.frow}>
+                <div className={styles.frow__l}>{t("dialog.host.groupField")}</div>
+                <div className={styles.frow__c}>
+                    <Combobox
+                        options={groupOptions}
+                        value={form.groupId}
+                        onChange={(v) => update("groupId", v)}
+                        onCreateNew={createGroup}
+                        placeholder={t("dialog.host.groupNone")}
+                        createLabel={t("dialog.host.createGroup")}
+                    />
+                </div>
+            </div>
 
             <section className={styles.section}>
                 <button
@@ -1651,6 +1679,8 @@ function CredentialPanel(props: CredentialPanelProps) {
     const { t } = useT();
     const [pickerOpen, setPickerOpen] = useState(false);
     const [addKeyOpen, setAddKeyOpen] = useState(false);
+    const [keyFilter, setKeyFilter] = useState("");
+    const comboRef = useRef<HTMLDivElement>(null);
     const [showPassword, setShowPassword] = useState(false);
     // Saved methods are locked by default (protects against accidental
     // edits/removal). A pencil unlocks editing; only then is ✕ shown.
@@ -1665,6 +1695,19 @@ function CredentialPanel(props: CredentialPanelProps) {
     const agentLinked = props.linkedAgentId !== null;
     const methodLinked = keyLinked || agentLinked;
     const pwLocked = props.linkedPasswordId !== null && !pwEditing;
+
+    // Close the key combobox when clicking outside it (field + dropdown both
+    // live inside `comboRef`, so picking/typing doesn't self-close).
+    useEffect(() => {
+        if (!pickerOpen) return;
+        const onDoc = (e: MouseEvent) => {
+            if (comboRef.current && !comboRef.current.contains(e.target as Node)) {
+                setPickerOpen(false);
+            }
+        };
+        document.addEventListener("mousedown", onDoc);
+        return () => document.removeEventListener("mousedown", onDoc);
+    }, [pickerOpen]);
 
     // Revealed stored password (plaintext from keychain), shown briefly.
     const [revealed, setRevealed] = useState<string | null>(null);
@@ -1765,8 +1808,9 @@ function CredentialPanel(props: CredentialPanelProps) {
     const fieldValue = valueShown ? revealed! : props.password;
 
     const passwordField = (
-        <div>
-            <div className={styles.fieldLabel}>{t("dialog.host.passwordLabel")}</div>
+        <div className={styles.frow}>
+            <div className={styles.frow__l}>{t("dialog.host.passwordLabel")}</div>
+            <div className={styles.frow__c}>
             <div
                 ref={pwRowRef}
                 className={`${styles.passwordWrap} ${props.linkedPasswordId ? styles.removable : ""}`}
@@ -1830,77 +1874,136 @@ function CredentialPanel(props: CredentialPanelProps) {
                     )}
                 </div>
             </div>
+            </div>
         </div>
     );
 
     return (
         <div className={styles.credentialPanel}>
             {/* Login */}
-            <div>
-                <div className={styles.fieldLabel}>{t("dialog.host.loginLabel")}</div>
-                <div className={styles.iconField}>
-                    <User size={14} className={styles.fieldIcon} />
-                    <Input
-                        className={styles.iconInput}
-                        value={props.username}
-                        onChange={(e) => props.onUsername(e.target.value)}
-                        placeholder={t("dialog.host.credentialUsername")}
-                        autoComplete="off"
-                        spellCheck={false}
-                    />
+            <div className={styles.frow}>
+                <div className={styles.frow__l}>{t("dialog.host.loginLabel")}</div>
+                <div className={styles.frow__c}>
+                    <div className={styles.iconField}>
+                        <User size={14} className={styles.fieldIcon} />
+                        <Input
+                            className={styles.iconInput}
+                            value={props.username}
+                            onChange={(e) => props.onUsername(e.target.value)}
+                            placeholder={t("dialog.host.credentialUsername")}
+                            autoComplete="off"
+                            spellCheck={false}
+                        />
+                    </div>
                 </div>
             </div>
 
             {props.protocol === "ssh" ? (
                 <>
                     {/* Authentication method */}
-                    <div>
-                        <div className={styles.fieldLabel}>
+                    <div className={styles.frow}>
+                        <div className={styles.frow__l}>
                             {t("dialog.host.authLabel")}
                         </div>
-                        <div className={styles.segmented}>
-                            <button
-                                type="button"
-                                className={`${styles.seg} ${authMode === "key" ? styles.segOn : ""}`}
-                                onClick={() => setAuthMode("key")}
-                            >
-                                <KeyRound size={14} /> {t("dialog.host.authKind.key")}
-                            </button>
-                            <button
-                                type="button"
-                                className={`${styles.seg} ${authMode === "password" ? styles.segOn : ""}`}
-                                onClick={() => setAuthMode("password")}
-                            >
-                                <Lock size={14} /> {t("dialog.host.authKind.password")}
-                            </button>
+                        <div className={styles.frow__c}>
+                            <div className={styles.segmented}>
+                                <button
+                                    type="button"
+                                    className={`${styles.seg} ${authMode === "key" ? styles.segOn : ""}`}
+                                    onClick={() => setAuthMode("key")}
+                                >
+                                    <KeyRound size={14} /> {t("dialog.host.authKind.key")}
+                                </button>
+                                <button
+                                    type="button"
+                                    className={`${styles.seg} ${authMode === "password" ? styles.segOn : ""}`}
+                                    onClick={() => setAuthMode("password")}
+                                >
+                                    <Lock size={14} /> {t("dialog.host.authKind.password")}
+                                </button>
+                            </div>
                         </div>
                     </div>
 
                     {authMode === "key" ? (
-                        <div>
-                            <div className={styles.fieldLabel}>
+                        <div className={styles.frow}>
+                            <div className={styles.frow__l}>
                                 {t("dialog.host.keyLabel")}
                             </div>
-                            <div className={styles.authTriggerWrap}>
-                                <button
-                                    type="button"
-                                    className={styles.keySelect}
-                                    onClick={() => setPickerOpen((v) => !v)}
+                            <div className={styles.frow__c}>
+                            <div className={styles.authTriggerWrap} ref={comboRef}>
+                                <div
+                                    className={`${styles.keyCombo}${pickerOpen ? ` ${styles.keyComboOpen}` : ""}`}
                                 >
                                     <KeyRound size={14} className={styles.keySelectIcon} />
-                                    <span
-                                        className={`${styles.keySelectName} ${methodLinked ? "" : styles.keySelectEmpty}`}
-                                    >
-                                        {props.linkedKeyName ??
-                                            (agentLinked
-                                                ? t("dialog.host.authKind.agent")
-                                                : t("dialog.host.keyNone"))}
-                                    </span>
-                                    <ChevronDown size={14} className={styles.keySelectChev} />
-                                </button>
+                                    <input
+                                        type="text"
+                                        className={styles.keyComboInput}
+                                        value={
+                                            pickerOpen
+                                                ? keyFilter
+                                                : props.linkedKeyName ??
+                                                  (agentLinked
+                                                      ? t("dialog.host.authKind.agent")
+                                                      : "")
+                                        }
+                                        placeholder={t("dialog.host.keyNone")}
+                                        readOnly={!pickerOpen}
+                                        onFocus={() => {
+                                            if (!pickerOpen) {
+                                                setKeyFilter("");
+                                                setPickerOpen(true);
+                                            }
+                                        }}
+                                        onClick={() => {
+                                            if (!pickerOpen) {
+                                                setKeyFilter("");
+                                                setPickerOpen(true);
+                                            }
+                                        }}
+                                        onChange={(e) => setKeyFilter(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Escape") {
+                                                setPickerOpen(false);
+                                                e.currentTarget.blur();
+                                            }
+                                        }}
+                                    />
+                                    {methodLinked ? (
+                                        <button
+                                            type="button"
+                                            className={styles.keyComboBtn}
+                                            title={t("dialog.host.keyClear")}
+                                            aria-label={t("dialog.host.keyClear")}
+                                            onMouseDown={(e) => e.preventDefault()}
+                                            onClick={() => {
+                                                setPickerOpen(false);
+                                                if (props.linkedKeyId)
+                                                    props.onUnlink(props.linkedKeyId);
+                                                if (props.linkedAgentId)
+                                                    props.onUnlink(props.linkedAgentId);
+                                            }}
+                                        >
+                                            <X size={14} />
+                                        </button>
+                                    ) : (
+                                        <button
+                                            type="button"
+                                            className={styles.keyComboBtn}
+                                            aria-label={t("dialog.host.keyLabel")}
+                                            onMouseDown={(e) => e.preventDefault()}
+                                            onClick={() => {
+                                                setKeyFilter("");
+                                                setPickerOpen((v) => !v);
+                                            }}
+                                        >
+                                            <ChevronDown size={14} />
+                                        </button>
+                                    )}
+                                </div>
                                 {pickerOpen && (
                                     <SavedCredentialPicker
-                                        onClose={() => setPickerOpen(false)}
+                                        filter={keyFilter}
                                         onPick={async (id) => {
                                             setPickerOpen(false);
                                             await props.onPickSaved(id);
@@ -1913,19 +2016,9 @@ function CredentialPanel(props: CredentialPanelProps) {
                                             setPickerOpen(false);
                                             await props.onUseAgent();
                                         }}
-                                        onClear={
-                                            methodLinked
-                                                ? () => {
-                                                      setPickerOpen(false);
-                                                      if (props.linkedKeyId)
-                                                          props.onUnlink(props.linkedKeyId);
-                                                      if (props.linkedAgentId)
-                                                          props.onUnlink(props.linkedAgentId);
-                                                  }
-                                                : undefined
-                                        }
                                     />
                                 )}
+                            </div>
                             </div>
                         </div>
                     ) : (
@@ -1950,80 +2043,70 @@ function CredentialPanel(props: CredentialPanelProps) {
 }
 
 export function SavedCredentialPicker({
+    filter,
     onPick,
     onAddNew,
     onUseAgent,
-    onClear,
-    onClose,
 }: {
+    /** Case-insensitive substring filter over key names. */
+    filter: string;
     onPick: (credentialId: string) => Promise<void>;
     onAddNew: () => void;
-    /** Optional — when provided, shows a "Use SSH agent" footer entry. */
+    /** Optional — when provided, shows a pinned "Use SSH agent" entry. */
     onUseAgent?: () => void;
-    /** Optional — when provided, shows a "No key" entry that unlinks. */
-    onClear?: () => void;
-    onClose: () => void;
 }) {
     const { t } = useT();
     const credentials = useCredentialsStore((s) => s.items);
-    const ref = useRef<HTMLDivElement>(null);
-    const keys = credentials.filter((c) => c.kind === "ssh_key");
-
-    useEffect(() => {
-        const onDoc = (e: MouseEvent) => {
-            if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-        };
-        document.addEventListener("mousedown", onDoc);
-        return () => document.removeEventListener("mousedown", onDoc);
-    }, [onClose]);
+    const q = filter.trim().toLowerCase();
+    const keys = credentials
+        .filter((c) => c.kind === "ssh_key")
+        .filter((c) => q === "" || c.name.toLowerCase().includes(q));
 
     return (
-        <div ref={ref} className={styles.savedPicker}>
-            {keys.map((c) => (
-                <button
-                    key={c.id}
-                    type="button"
-                    className={styles.savedPickerRow}
-                    onClick={() => void onPick(c.id)}
-                >
-                    <KeyRound size={14} />
-                    <span className={styles.savedPickerName}>{c.name}</span>
-                </button>
-            ))}
-            <button
-                type="button"
-                className={`${styles.savedPickerRow} ${styles.savedPickerAdd}`}
-                onClick={onAddNew}
-            >
-                <Plus size={14} />
-                <span className={styles.savedPickerName}>
-                    {t("dialog.host.addNewKey")}
-                </span>
-            </button>
-            {onUseAgent && (
+        <div className={styles.savedPicker}>
+            <div className={styles.savedPickerScroll}>
+                {keys.length === 0 ? (
+                    <div className={styles.savedPickerEmpty}>
+                        {t("dialog.host.keyNoMatch")}
+                    </div>
+                ) : (
+                    keys.map((c) => (
+                        <button
+                            key={c.id}
+                            type="button"
+                            className={styles.savedPickerRow}
+                            onClick={() => void onPick(c.id)}
+                        >
+                            <KeyRound size={14} />
+                            <span className={styles.savedPickerName}>{c.name}</span>
+                        </button>
+                    ))
+                )}
+            </div>
+            <div className={styles.savedPickerPinned}>
                 <button
                     type="button"
                     className={`${styles.savedPickerRow} ${styles.savedPickerAdd}`}
-                    onClick={onUseAgent}
+                    onClick={onAddNew}
                 >
-                    <Server size={14} />
+                    <Plus size={14} />
                     <span className={styles.savedPickerName}>
-                        {t("dialog.host.useAgent")}
+                        {t("dialog.host.addNewKey")}
                     </span>
                 </button>
-            )}
-            {onClear && (
-                <button
-                    type="button"
-                    className={`${styles.savedPickerRow} ${styles.savedPickerAdd}`}
-                    onClick={onClear}
-                >
-                    <X size={14} />
-                    <span className={styles.savedPickerName}>
-                        {t("dialog.host.keyClear")}
-                    </span>
-                </button>
-            )}
+                {onUseAgent && (
+                    <button
+                        type="button"
+                        className={`${styles.savedPickerRow} ${styles.savedPickerAdd}`}
+                        onClick={onUseAgent}
+                    >
+                        <Server size={14} />
+                        <span className={styles.savedPickerName}>
+                            {t("dialog.host.useAgent")}
+                        </span>
+                    </button>
+                )}
+            </div>
         </div>
     );
 }

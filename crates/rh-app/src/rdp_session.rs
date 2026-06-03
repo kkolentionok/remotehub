@@ -19,6 +19,10 @@ use rh_rdp::{RdpCommand, RdpInputEvent, RdpSessionEvent};
 
 struct RdpHandle {
     tx_cmd: mpsc::Sender<RdpCommand>,
+    /// The UI event sink. Swappable so a session can be re-homed to a
+    /// different webview (pop-out into its own window, or re-dock back into
+    /// the tab) without tearing down the live RDP connection.
+    sink: Arc<Mutex<Channel<RdpSessionEvent>>>,
     /// The actor's supervising task. Kept so the handle owns it; dropping
     /// the handle drops `tx_cmd`, which closes the command channel and lets
     /// the actor wind down gracefully.
@@ -49,14 +53,19 @@ impl RdpSessionManager {
     ) {
         let inner = self.inner.clone();
         let id_for_cleanup = id.clone();
+        let sink = Arc::new(Mutex::new(on_event));
+        let task_sink = sink.clone();
         tokio::spawn(async move {
             // Forward every event in order. Frames are region-diffed (small,
             // and each updates a *different* rectangle), so they must not be
             // dropped/coalesced — losing one would leave a stale patch on
             // screen. Their small size keeps the channel from backing up.
+            // The sink is read per-event so a reattach (pop-out / re-dock)
+            // redirects the stream live.
             while let Some(ev) = rx_events.recv().await {
-                if on_event.send(ev).is_err() {
-                    break; // UI channel gone (webview reloaded / tab closed)
+                let ch = task_sink.lock().await.clone();
+                if ch.send(ev).is_err() {
+                    break; // UI channel gone (webview closed without a reattach)
                 }
             }
             // Event stream ended → the actor is done. Drop the handle.
@@ -66,7 +75,22 @@ impl RdpSessionManager {
         self.inner
             .lock()
             .await
-            .insert(id, RdpHandle { tx_cmd, _join: join });
+            .insert(id, RdpHandle { tx_cmd, sink, _join: join });
+    }
+
+    /// Re-home a live session's event stream to a different webview's channel
+    /// (pop-out into a separate window, or re-dock back into the tab). Swaps
+    /// the sink and forces a full-frame repaint so the fresh canvas paints
+    /// completely instead of waiting for deltas. Returns `false` if unknown.
+    #[instrument(level = "debug", skip(self, on_event))]
+    pub async fn reattach(&self, id: &SessionId, on_event: Channel<RdpSessionEvent>) -> bool {
+        if let Some(handle) = self.inner.lock().await.get(id) {
+            *handle.sink.lock().await = on_event;
+            let _ = handle.tx_cmd.send(RdpCommand::Repaint).await;
+            true
+        } else {
+            false
+        }
     }
 
     /// Close a session: signal the actor, then drop the handle (which also

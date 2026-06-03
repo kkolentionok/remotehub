@@ -552,6 +552,7 @@ export type RdpSessionEvent =
     | { kind: "pointer_default" }
     | { kind: "cert_prompt"; fingerprint_sha256: string; subject: string }
     | { kind: "clipboard"; mime: string; data: string }
+    | { kind: "clipboard_image"; width: number; height: number; rgba_base64: string }
     | { kind: "error"; message: string }
     | { kind: "closed"; reason: { kind: string; code?: number } };
 

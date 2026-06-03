@@ -1,6 +1,473 @@
 # RemoteHub — Project State & Handoff
 
-**Last updated:** **RDP clipboard images (CF_DIB, bidirectional)** — copy an image in the remote and paste it locally, and vice-versa (text already worked). Before it: RDP server cursor (client-rendered); fullscreen keyboard capture; maximize→fullscreen strip fix.
+**Last updated:** NSCodec decoder works — log clean, UI/colors correct, fps up to 20. One remaining GFX artifact: persistent band at the TOP of a window after maximize->restore (disocclusion; predates NSCodec) — awaiting a focused RDP_GFX_TRACE=1 capture of a single maximize->restore. Added a comprehensive docs/CHEATSHEET.md (full project briefing).
+
+## Latest — NSCodec landed clean; chasing the maximize/restore top-of-window disocclusion
+
+NSCodec decoder verified working first try: zero `subcodec skipped` / `NSCodec decode failed` / `empty full-vBar` warns, UI lines/borders/blocks render, colors correct, smooth (fps up to 20, encode ~6ms). The black blocks and UI-line artifacts are gone.
+
+Remaining single artifact: maximize a window to fullscreen then restore -> a PERSISTENT band at the top of the window. This is the long-standing disocclusion class (vacated region keeps stale content in st.fb; the server never corrects it as it believes that area already shows background). Predates NSCodec.
+
+To pinpoint without a blind fix, extended `RDP_GFX_TRACE` to also log Progressive: `TRACE Wts2 prog surf=.. tiles=.. bbox=(x,y,w,h)`. Now S2S / Cache2S / SolidFill / Wts1 (ClearCodec/Uncompressed) / Wts2 (Progressive) are all traced. Next: capture a single maximize->restore with RDP_GFX_TRACE=1 and inspect which op (if any) repaints the vacated top band; if none covers it, the divergence is upstream (our S2S/decode leaving stale that the server assumes is background). Fix follows from the capture.
+
+## Latest — NSCodec decoder (the real cause of GFX UI artifacts)
+
+User (rightly) refused to call GFX done while artifacts remain. The warn build revealed the truth: `ClearCodec: subcodec sid=1 skipped` floods the log during any UI activity. sid=1 = NSCodec (MS-RDPNSC). This Windows server uses NSCodec as its PRIMARY ClearCodec subcodec for UI (window edges, separators, buttons, gridlines — the thin strips AND the blocks). We skipped it, so those regions stayed black/stale, and the ClearCodec glyph cache (which reads back the surface) replayed the black on every HIT -> persistent black blocks + line artifacts. The `empty full-vBar` warn never fired, so the vbar cache is sound (its bg-fill change stays as a safety net).
+
+Implemented NSCodec from scratch (`crates/rh-rdp/src/nscodec.rs`, ported from FreeRDP `nsc.c`, Apache-2.0):
+- Header: PlaneByteCount[4]×u32 LE (Y/Co/Cg/A), ColorLossLevel u8 (1..=7), ChromaSubsamplingLevel u8, 2 reserved.
+- Per-plane NSC RLE (`rle_decode`): literal / run ([v][v][len:u8+2] or [v][v][0xFF][len:u32]) / last 4 bytes raw; planeByteCount==0 -> 0xFF fill; planeByteCount>=orig -> raw copy.
+- Plane sizing: tempW=round8(w), tempH=round2(h); subsampled chroma planes are (tempW/2)×(tempH/2), Y is tempW×h.
+- Decode: shift=CLL-1; co/cg = sign_extend8((c<<shift)&0xFF); R=Y+Co-Cg, G=Y+Cg, B=Y-Co-Cg, clamp; A from plane 3; chroma supersampled by (x>>1),(y>>1) at stride tempW/2. Output RGBA (our surface order).
+- Wired into `clearcodec::subcodecs` sid=1 (was a skip+warn); unknown sids still warn+skip.
+
+Risk: ported codec, user compiles. If colors look swapped/shifted, suspect the co/cg sign-extend or the BGR vs RGB order. Perf: per-rect allocations, hundreds/sec — optimize later (reusable buffers) if it adds latency.
+
+## Latest — ClearCodec black blocks: empty full-vBar -> band bg (not black)
+
+User pushed back (rightly): GFX isn't done while artifacts remain (mstsc has none). New screenshot shows BLACK rectangles at UI elements (View menu, TASKS button) plus faint right-side move-trails.
+
+Trace ruled out cache corruption — every `Cache2S center_rgb` is a plausible colour (blue/white/dark), so the `current`+`sign` fixes hold. The black is ClearCodec-specific:
+- `bands`: a full `VBAR_CACHE_HIT` referencing a slot we have empty (`count==0`) fabricated a BLACK vBar (`vec![0u8;…]`) and painted it. Cache sizes are correct (32768/16384) so the ring wraps in lockstep — an empty slot means a real desync somewhere, but fabricating black is the worst possible fallback.
+- `subcodecs`: sid=1 (NSCodec) is skipped (not decoded) -> region stays black.
+- The glyph cache reads back the decoded rect from the surface, so any black region above is cached and replayed black on every glyph HIT -> persistent black blocks at fixed UI positions.
+
+Fix this turn:
+- Empty full-vBar -> fill with the band BACKGROUND colour (cr,cg,cb) instead of black, + `warn!` (bounds-check idx<VBAR_SIZE too). Filling bg blends into surroundings and propagates cleanly through the glyph cache.
+- `warn!` on skipped NSCodec subcodec (rare; confirms if any UI traces back to it).
+
+Next: user reports whether black blocks are gone and whether `empty full-vBar` warns fire (frequent warns => a real vBar-cursor desync to chase; none => black was NSCodec). Then tackle the move-trail disocclusion strips.
+
+## Latest — RDP_GFX_TRACE geometry trace for persistent window-move strips
+
+Confirmed (user): the strips PERSIST after the drag stops, on the side the window moved AWAY from — classic disocclusion-not-repainted. fb-diff ships st.fb, so the strips ARE in st.fb and the server never corrects them => our surface diverged from the server model there.
+
+To find the exact culprit op without guessing (and without regressing the now-clean image), added `trace: bool` to GraphicsPipeline (env `RDP_GFX_TRACE=1`, off by default). When on it logs unbounded:
+- `TRACE S2S src->dst srcrect dst_pts`
+- `TRACE Cache2S slot surf center_rgb dst_pts`  (center_rgb tells if a white/window-edge tile is being stamped where wallpaper belongs)
+- `TRACE SolidFill surf rgb rects`
+- `TRACE Wts1 surf codec dst`
+Re-added `cache_center_rgb` helper for the Cache2S trace.
+
+Next: user runs with BOTH `$env:RDP_GFX=1; $env:RDP_GFX_TRACE=1`, moves a window to leave strips, sends the TRACE slice. Two outcomes: (a) a Cache2S stamps a white-center tile into the strip x -> cache-content divergence (cache captured our momentarily-wrong surface); (b) NO op covers the strip region -> earlier divergence / missing disocclusion handling. Fix follows from which.
+
+## Latest — Progressive `sign`/SRL significance from accumulated coeffs (residual edge artifacts)
+
+After the `comp.current` baseline fix the gray squares are essentially gone and the desktop is clean; only thin edge artifacts remained on dynamic (differential) content. `upgrade_block` reads `comp.sign` only for significance (>0/<0/==0) to drive SRL refinement of non-LL bands. `first_component` was capturing `sign` from the raw per-frame RLGR output (the delta) BEFORE dequant/accumulation, so on RFX_TILE_DIFFERENCE tiles the significance map reflected the delta, not the accumulated coefficients -> wrong SRL state -> thin edge errors.
+
+Fix: capture `comp.sign` from the accumulated `buf` (post-dequant, post-LL3-diff, post-add), right next to `comp.current`. Equivalent for non-diff tiles (lshift preserves sign), correct for diff tiles. LL3 band unaffected (its upgrade uses the RAW codepath and never reads `sign`).
+
+Remaining diagnostics: 1/s op counter + bounded first-40 S2Cache/Cache2S geometry logs (quiet after startup). Can strip fully when finalizing GFX.
+
+## Latest — Progressive differential baseline fix (kills white drift AND gray squares)
+
+User: "overall smooth now, but gray squares ruin it." Cache center-RGB logging showed the squares are tiles cached as exactly (128,128,128) = RemoteFX neutral (zero coefficients after level shift).
+
+Root cause (one bug explaining both the earlier white/garbage blocks and the gray squares):
+`progressive.rs::first_component` only wrote `comp.current` (the per-tile post-dequant coefficient baseline) on the **non-differential** path:
+```
+if diff { buf[i] += comp.current[i] }      // output = delta + old
+else    { comp.current = buf }             // baseline updated ONLY here  <-- bug
+```
+- Without reset: every RFX_TILE_DIFFERENCE FIRST reconstructed delta+old for display but left `comp.current` stale, so the next diff stacked on an out-of-date baseline -> cumulative drift -> white/garbage blocks ("много кривизны").
+- With the DelEncCtx `prog.reset()` band-aid (prev build): state was zeroed, so a differential FIRST did `buf = delta + 0` = just the small delta -> ~zero coefficients -> inverse DWT ~0 -> YCbCr(0,0,0) -> RGB (128,128,128) GRAY. Those gray tiles were then SurfaceToCache'd and stamped around -> gray squares.
+
+Fix:
+- `first_component`: after the optional diff add, ALWAYS `comp.current = buf` (store reconstructed coefficients pre-DWT) in both branches. Correct baseline -> diff frames track exactly -> no drift, no gray.
+- `gfx.rs`: removed `DeleteEncodingContext -> prog.reset()` (now a documented no-op); the baseline fix makes a blanket reset unnecessary, and the reset was what produced gray. `reset()` kept as `#[allow(dead_code)]` for a possible future context-aware reset.
+- Removed the flooding cache center-RGB + SolidFill diagnostic logs (the `<=40` gate never closed). Kept the 1/s op counter and the bounded (first-40) S2Cache/Cache2S geometry logs.
+
+Expectation: smooth AND clean (no white drift, no gray squares). If a few gray remain, next suspect is the `sign`/SRL baseline not accumulating across differential firsts (upgrade refinement), but current is the dominant term.
+
+## Latest — DeleteEncodingContext resets Progressive state (interactive corruption fix attempt)
+
+Decision: not abandoning GFX. Decoders are pixel-correct (static is sharp); the defect is interactive. Cache log proved geometry clean (slot 2 = (0,0) 64x64 tiled screen-wide; uniform tiles; aligned; zero misses). Every individual op re-verified correct.
+
+Strongest remaining lead: during interaction the server emits `DeleteEncodingContext` 1-10/s, which we ignored. Our `ProgressiveDecoder` keeps persistent per-tile state (`current`/`sign`/`bitpos`/`seen_first`, keyed by tile position). When the server tears down/reuses a codec context (new window, content change) and we keep stale state, the next FIRST/UPGRADE for that position decodes on top of stale bit-planes -> garbage tile -> SurfaceToCache captures it -> CacheToSurface replicates it across the screen. This matches "static clean / interactive corrupt" exactly (Progressive ops are few during interaction, but one bad tile is amplified by the cache).
+
+Changes:
+- `progressive.rs`: added `ProgressiveDecoder::reset()` (clears `tiles`).
+- `gfx.rs`: explicit `DeleteEncodingContext` arm -> `self.prog.reset()` (no longer falls through to the catch-all). Safe: an UPGRADE arriving after a reset with no state is skipped (tile keeps its current rendered value), not corrupted.
+- Diagnostics: after each `SurfaceToCache`, log the cached tile's center RGB (`cached slot=.. center_rgb=..`); log `SolidFill rgb=.. nrects=.. rects` — to confirm cached/background colours are sane (not black/white).
+
+Next: user opens/moves windows, reports if artifacts shrank, and sends the `center_rgb` + `SolidFill` lines + whether the one-shot `unhandled ServerPdu` warn still fires (now only EvictCacheEntry/CacheImportReply/MapScaled remain in the catch-all — none paint).
+
+## Latest — cache geometry logging (Cache2S_MISS=0, so pixels/coords are wrong)
+
+User log (this server): no `Cache2S_MISS` ever -> all stamped slots are present, so we are NOT missing cache content; the cached pixels or the stamp/capture geometry are wrong. Artifact (screens): a vertical strip of a foreground window not restored (background Server Manager shows through Edge) + misplaced colour blocks -> coordinate/size defect, not a decode defect.
+
+Verified: SurfaceToCache/CacheToSurface/SurfaceToSurface pixel copies correct; IronRDP field reads correct; rects via `rect_xywh` (half-open). An off-by-one on the InclusiveRectangle would only give 1px seams, not the wide strip seen — so the unknown is the actual tile sizes/coords the server sends.
+
+Added (diagnostic, bounded to first 40 via `dbg_cache`):
+- `GFX: S2Cache slot=.. key=.. src[l,t,r,b] -> xywh=(..)` — shows cached tile size + source.
+- `GFX: Cache2S slot=.. surf=.. npts=.. first_pts=[..]` — shows stamp slot + destination points.
+
+The initial connect burst (S2Cache~447, Cache2S~1975 in 1s) logs 40 samples immediately, so user only needs to connect + open a window. Correlate slot sizes (S2Cache) with stamp coords (Cache2S): if tiles are uniform 64x64 at aligned coords, geometry is right and corruption is upstream (a bad paint cached + replicated); if sizes/coords are irregular, that's the bug. Decide fix from the numbers.
+
+## Latest — desktop is cache-composited; fix CreateSurface wipe + add cache-miss counter
+
+Drag-time `GFX ops/sec` (this server): `Cache2S` 138-1973, `S2Cache` 10-447, `S2S` 0-16, `Wts1` 16-73, `Wts2(prog)` 5-18. The desktop/window content is restored and composited overwhelmingly via the **bitmap cache** (SurfaceToCache -> CacheToSurface), not by re-sending Progressive tiles. So the black rectangles = gaps/wrong pixels in our cache path, NOT a Progressive decode issue (static frames are sharp).
+
+Findings + fixes:
+- The log has a **2nd `CreateSurface id=0` (same 1828x1080)** shortly after the first. Our `create_surface` re-zeroed the surface to black each time; any region the server then expected to restore from cache but didn't re-stamp stayed black. **Fix:** `create_surface` now preserves pixels when the id already exists at the same dims (only allocates fresh on new id / new dims).
+- Added `Cache2S_MISS` to the op counter: `cache_to_surface` returning None (slot not present) is counted. If this is high during a drag, the server is stamping slots we never populated (persistent-cache assumption / key mismatch / eviction-reuse bug); if it's ~0, the slots exist but the cached *pixels* are wrong (capture/stamp bug) and we go pixel-level next.
+- `surface_to_cache`/`cache_to_surface` pixel copies and `surface_to_surface` (overlap-safe) re-verified correct; rects are half-open via `rect_xywh`.
+
+Caps: we advertise V8/8.1(AVC420)/10/10.2/10.3/10.4; server confirms V10_4 and uses Progressive+cache (AVC unused). We send no CacheImportOffer, so the server shouldn't assume a persistent disk cache — `Cache2S_MISS` will confirm.
+
+Next: user drags a window, sends `GFX ops/sec` (watch `Cache2S_MISS`) + says whether the black blocks shrank. Miss>0 -> handle persistent cache / fix slot keying. Miss~0 -> add pixel-level cache logging.
+
+## Latest — diagnostic: per-second GFX op counter (chasing the residual move-trail)
+
+fb-diff (prev turn) removed a lot of ghosting, but dragging/closing a window still leaves faint window fragments on the right of the screen. Since the emit is now a self-correcting fb diff, the duplicate must be IN `st.fb` — i.e. the vacated region is never repainted into our surface. Confirmed not a code bug in `surface_to_surface` (overlap-safe temp-buffer copy) or `propagate` (correct surface->fb rect copy). The unhandled ServerPdu variants (DeleteEncodingContext/EvictCacheEntry/CacheImportReply/MapSurfaceToScaled*) don't paint pixels.
+
+So the background-restore mechanism is one of: `CacheToSurface` (stamp cached desktop back — possible bug in `cache_to_surface`), inter-surface `SurfaceToSurface` from an offscreen surface we never populated, or `Wts2`/`Wts1` repaints we decode wrong for the vacated tiles (stale per-tile Progressive state at a position that changed content).
+
+Added (gfx.rs, diagnostic only):
+- `GraphicsPipeline.op_counts: BTreeMap<&str,u32>` + `last_op_log: Instant`; `pdu_name()` tags each ServerPdu; once/sec logs `GFX ops/sec: Wts1=.. Wts2(prog)=.. S2S=.. Cache2S=.. SolidFill=.. ...` then resets.
+- (prev) one-shot warn if any unhandled ServerPdu reaches the catch-all.
+
+Next: user drags a window for a few seconds, sends the `GFX ops/sec` lines. Decide the fix from the dominant op:
+- heavy `Cache2S` -> audit `cache_to_surface` stamping (rect/size/origin).
+- heavy `S2S` with src_id != 0 -> we're not populating/creating that offscreen surface.
+- heavy `Wts2`/`Wts1` over the vacated region but still ghosting -> stale Progressive per-tile state; reset tile state when a position gets a fresh TILE_FIRST.
+
+## Latest — GFX emit: per-op dirty list -> self-correcting fb diff (ghosting fix)
+
+User report: dynamic scenes ghost — dragging/opening a window leaves the old copy on screen (two overlapping Save-As dialogs), "artifacts everywhere", first paint slow, perceived quality poor. Static pages render sharp (verified prior turn), so the decode is fine; the defect is in how changes reach the canvas.
+
+Root cause: the GFX emit path shipped `GfxState.dirty` (per-op rects recorded by `propagate`). That list is NOT self-correcting — if any fb change's dirty rect fails to reach the canvas, the stale area persists (ghost). All handlers do call `propagate`, and the only unhandled ServerPdu variants (DeleteEncodingContext, EvictCacheEntry, CacheImportReply, MapSurfaceToScaled*) don't repaint pixels, so the gap was in the dirty-list shipping itself, not a dropped op.
+
+Fix (actor.rs):
+- New `compute_regions_raw(data,w,h,last_frame)` — the same band diff as `compute_regions` but over a raw RGBA buffer.
+- GFX emit branch now diffs `st.fb` vs `last_frame` (exactly like the proven legacy `image` path), advances `last_frame` from `st.fb` on send, clears `st.dirty`. Any fb pixel that differs from the last shipped frame is shipped regardless of dirty bookkeeping -> vacated areas re-sync -> no ghosting. Also coalesces first+upgrade+upgrade landing within one tick into one ship.
+- `force_repaint` simplified: `last_frame.clear()` alone now forces a full frame (len mismatch path), dropped the GFX-specific dirty push.
+- gfx.rs catch-all: one-shot `tracing::warn!` if any unhandled ServerPdu shows up (diagnostic only).
+
+`GfxState.dirty` is now vestigial (still written by `propagate`, no longer read) — harmless; can remove later. Frontend untouched.
+
+Next: user re-extracts + rebuilds, opens/drags a window. Expect the ghost gone. If it persists, fb itself holds the duplicate (server move-via-S2S without a vacated repaint) — would then need explicit vacated-area handling; the new warn also tells us if any unhandled op fires during the drag.
+
+## Latest — GFX Progressive verified live (full quality)
+
+4c works. Live log: `first=455` then `upgrade=455` + `upgrade=455` (the two heavy passes now decode), and the screen renders at full quality — Windows wallpaper, Edge browser + Microsoft new-tab page, desktop icons, taskbar, all sharp with correct colours, no shear, no SRL desync, no black blocks. (The "built 4b / WBT_TILE_UPGRADE unused" last round was a stale extraction — the shipped archive already had 4c.)
+
+**GFX rendering stack is now functionally complete:**
+- ClearCodec (residual / bands-vBar + caches / subcodec RLEX/RAW / glyph cache)
+- Bitmap cache (SurfaceToCache + CacheToSurface) and SurfaceToSurface copy
+- RemoteFX Progressive (reduce-extrapolate inverse DWT; TILE_FIRST RLGR1+dequant; TILE_UPGRADE SRL/RAW bit-plane refinement with persistent per-tile current+sign+bitPos)
+- Half-open RDPGFX rects; native-res surface + framebuffer transport reusing the legacy region encoder.
+
+Minor leftovers (not blocking usability):
+- A few small dark squares occasionally (likely transient mid-refinement / surface-recreate before repaint) — investigate only if they persist.
+- Diagnostic logging is bounded (first N) but could be quieted for release.
+- Surface re-create (`CreateSurface` same id/dims) currently re-allocs; could preserve pixels to avoid a flash.
+
+Remaining GFX backlog (optional): AVC420/444 → WebCodecs (only if a server negotiates H.264; this server uses Progressive), dynamic resize re-enable, non-extrapolate DWT fallback. Otherwise GFX is done — next priorities can return to product features.
+
+## Latest — RemoteFX Progressive: TILE_UPGRADE (Slice 4c)
+
+4b rendered FIRST tiles correctly (wallpaper, Edge window, text all sharp), but the server streams progressively: a coarse FIRST then 2 large UPGRADE passes (~61KB+54KB vs 78KB FIRST) that carry most of the image detail. We were dropping UPGRADE → coarse-only + black/stale blocks where later updates were upgrade-only.
+
+Implemented the upgrade path in `progressive.rs`:
+- Per-tile state extended to **sign** (= raw RLGR output captured during FIRST, before dequant) and **bitPos** (= quant+progQuant per band), kept channel-wide alongside `current`.
+- `BitReader` (MSB-first, mirrors FreeRDP wBitStream) + `SrlState` (the kp/nz/mode simplified-run-length bit-plane decoder) + RAW bit reader.
+- `upgrade_block`: for non-LL bands, per coefficient — known sign(>0/<0) reads `numBits` RAW bits; sign==0 reads SRL (and records the new sign); LL band reads RAW unconditionally. Adds `input << shift` to the stored coefficient.
+- `upgrade_component`: numBits = oldBitPos − newBitPos (per band), shift = newBitPos − 1; refines all 10 subbands, updates bitPos, then re-runs the inverse extrapolate DWT (reverse path: buffer = current → IDWT) and emits the tile.
+- Tiles seen only via UPGRADE without a prior FIRST are skipped (can't refine nothing).
+
+gfx unchanged — upgrade tiles flow through the same decode→blit→propagate path. The dead-code warning (WBT_TILE_UPGRADE) is resolved.
+
+Expect: Progressive regions now reach full quality (photos/thumbnails sharpen across the 2-3 passes), and the black/stale blocks fill in. This is the last big rendering piece — if it works, GFX is functionally complete (ClearCodec + cache + SurfaceToSurface + Progressive first/upgrade). ~865-line module, still untested DSP; watch for: SRL desync (garbage that grows over a region = bit-reader misalignment), or residual coarse areas (numBits/bitPos math).
+
+Remaining GFX backlog: AVC420/444 → WebCodecs (only if a server negotiates H.264; this one uses Progressive), dynamic resize re-enable, non-extrapolate fallback.
+
+## Latest — RemoteFX Progressive: TILE_FIRST decoder (Slice 4b)
+
+Implemented the FIRST/SIMPLE tile decode in `crates/rh-rdp/src/progressive.rs` (the parser from 4a extended to a full decoder). Pipeline per tile (extrapolate path, which is what the server uses — flags=0x01):
+1. **RLGR1** entropy decode (`ironrdp::graphics::rlgr::decode`) → 4096 i16 coeffs.
+2. **Dequant**: left-shift each subband by `shift = quant + progQuant - 1` (per band). Subband offsets/lengths for reduce-extrapolate: HL1@0(1023) LH1@1023(1023) HH1@2046(961) HL2@3007(272) LH2@3279(272) HH2@3551(256) HL3@3807(72) LH3@3879(72) HH3@3951(64) LL3@4015(81). LL3 gets a differential (prefix-sum) decode first.
+3. **Inverse reduce-extrapolate DWT**: `dwt_block` levels 3→2→1, each = idwt_x(LL+HL→L), idwt_x(LH+HH→H), idwt_y(L+H→out). Ported faithfully (lifting scheme, clamp to i16, integer /2). band counts: L=(64>>lvl)+1, H= lvl==1?31:(64+(1<<(lvl-1)))>>lvl.
+4. **YCbCr→RGB** (`ironrdp::graphics::color_conversion::ycbcr_to_rgba`, RFX transform) → 64x64 RGBA.
+5. Blit to surface at (xIdx*64, yIdx*64) (clamped at right/bottom edge tiles) + propagate.
+
+Per-tile coefficient buffers kept in a HashMap keyed by grid index (for RFX_TILE_DIFFERENCE accumulation now, and TILE_UPGRADE later).
+
+**TILE_UPGRADE is parsed but NOT applied this slice** — upgraded tiles keep their FIRST pixels. So expect: areas covered by a detailed FIRST render sharp; areas that relied on coarse-FIRST + upgrade passes look soft/blocky. That's expected; 4c (SRL upgrade + sign/current) sharpens them.
+
+This is ~620 lines of untested integer-wavelet DSP. Likely needs 1-2 fixes. Watch for: wrong colors (YCbCr scaling / R-B swap), blocky-but-placed (DWT edge bug), or per-tile garbage (subband offset/length). Log: "GFX Progressive: NB -> M tiles decoded region(...)". If a tile decode fails it's silently skipped (stays blank).
+
+Next: 4c = TILE_UPGRADE (progressive_rfx_srl_read bit-plane + upgrade_block) using the retained sign/current buffers; then dynamic-resize re-enable.
+
+## Latest — RemoteFX Progressive: bitstream parser (Slice 4a)
+
+The cache slice made the desktop render well; the leftover artifacts (blue blocks where web images/photos go, ghost-trails when dragging a window) are ALL `WireToSurface2` codec2 = `RemoteFxProgressive` (log: 78400/61190/54472… byte blocks, "NOT handled"). So Progressive is the final rendering codec.
+
+Confirmed (reading FreeRDP progressive.c) it is a large self-contained codec — NOT reusable from IronRDP's classic-RFX primitives:
+- reduce-extrapolate inverse DWT (`RFX_DWT_REDUCE_EXTRAPOLATE`), subband diffing, progressive quantization, per-component RLGR, SRL bit-plane UPGRADE passes, and persistent per-tile sign/current buffers across frames.
+IronRDP ships only the pieces (`dwt`,`rlgr`,`quantization`,`subband_reconstruction`,`color_conversion` in ironrdp-graphics 0.7) — the assembly + the progressive-specific transform must be ported.
+
+Building in slices. **Slice 4a = `crates/rh-rdp/src/progressive.rs` bitstream parser** (no DSP): walks blocks SYNC(0xCCC0)/FRAME_BEGIN/FRAME_END/CONTEXT/REGION(0xCCC4)/TILE_SIMPLE(0xCCC5)/FIRST/UPGRADE; parses the region header (tileSize/numRects/numQuant/numProgQuant/flags/numTiles/tileDataSize), skips rect+quant+progQuant tables, walks tile headers (quantIdx Y/Cb/Cr, xIdx/yIdx, flags, quality, y/cb/cr/tail lengths; upgrade = srl/raw lengths). Logs a per-frame structure summary ("region tiles[simple/first/upgrade] numQuant… extrapolate… ; tile0[…]"). Wired into the WireToSurface2 arm.
+
+Goal of 4a: verify we read Progressive correctly and learn from the live server how many tiles, simple vs first vs upgrade, numQuant/numProgQuant, and whether extrapolate is set — to ground the DSP (4b). No visible change expected this build; need the log.
+
+Next: 4b = TILE_SIMPLE/FIRST DSP (RLGR via ironrdp-graphics + ported progressive dequant + reduce-extrapolate inverse DWT + YCbCr→RGB → write 64x64 tiles), then 4c = TILE_UPGRADE (SRL) + sign/current persistence + RFX_TILE_DIFFERENCE.
+
+## Latest — GFX bitmap cache + surface-to-surface copy
+
+Diagnostic log answered it: the black background was NOT a missing codec. The server fills large/repeating areas via the **bitmap cache** — `SurfaceToCache` (copy a surface rect into a cache slot) then a flood of `CacheToSurface slot=N -> surf pts=1` (stamp the cached tile at many destination points). Scrolling uses `SurfaceToSurface` (copy a surface rect to new points) — that was the blue vertical streaks on the 2nd screenshot.
+
+Implemented in `GfxState` (no codec math — pure pixel copies):
+- `cache: HashMap<u16, CachedTile{w,h,px RGBA}>`.
+- `surface_to_cache(id, slot, rect)` — extract the rect from the surface into the slot.
+- `cache_to_surface(slot, id, dx, dy)` — stamp the cached tile onto the surface at each destination point, returns the written rect for propagation.
+- `surface_to_surface(src,dst,rect,dx,dy)` — copy via a temp buffer so overlapping same-surface scroll copies don't corrupt.
+Handlers wired in `process()`; each propagates the written rect to the framebuffer → shipped via the existing transport. All GFX rects use the half-open `rect_xywh`.
+
+State after Slice 3 + shear fix: ClearCodec renders crisp (menus, taskbar, Edge window, text all correct). With the cache ops the desktop background + repeated UI should now fill in and scrolling should stop streaking.
+
+Still unhandled: `WireToSurface2` (codec2 = RemoteFX Progressive) — not seen carrying much yet; logging left in. If large regions still go black/stale, Progressive is the next decoder. Otherwise GFX is largely functional for everyday use.
+
+## Latest — shear confirmed fixed; hunting the wallpaper carrier
+
+The half-open rect fix worked: context menus + taskbar now render crisp and square (log confirms 448x128 / 36x64). ClearCodec path is solid.
+
+Remaining: most of the screen is still black. No `skip codec` lines fire → the big/background areas are NOT WireToSurface1 (any codec1). They must arrive via the previously-silent catch-all. Added one-shot logging (first 40) for WireToSurface2 (codec2 = RemoteFX Progressive), SurfaceToSurface, SurfaceToCache, CacheToSurface — to learn what carries the desktop bulk before building the next decoder. Next slice targets whatever shows up (expected: WireToSurface2 / Progressive, or Cache tiles).
+
+## Latest — GFX shear fix: half-open RDPGFX rects
+
+Slice 3 rendered ClearCodec but everything was sheared diagonally. Added a one-shot log of the raw `destination_rectangle` (l/t/r/b) + surface/fb dims. Decisive data:
+- `l=1792 r=1828` on a 1828-wide screen → half-open width 36 fits exactly (inclusive +1 → 37 → 1829 > 1828, overflow).
+- `l=704 r=1152 t=512 b=640` → 448x128 (powers of 64), my inclusive math gave 449x129.
+
+Root cause: `RDPGFX_RECT16` is **half-open** (right/bottom = one past last pixel), but IronRDP models it as `InclusiveRectangle`, and `rect_xywh` added +1. Every GFX rect was 1px too wide & tall → the raster-order layers (residual, glyph store/blit) drifted 1px/row → diagonal shear; also 1px overflow past the surface edge.
+
+Fix: `rect_xywh` now `width = right - left`, `height = bottom - top` (no +1). Affects WireToSurface1 and SolidFill (both GFX rects). ClearCodec-internal band/vBar coordinates are unchanged (those are inclusive within the codec stream, per spec — only the GFX wrapper rect was wrong). Surface=fb=1828x1080, origin (0,0) — confirmed consistent, so this single fix should make the desktop render correctly. Diagnostic logging left in (low volume) for the next codec slices.
+
+## Latest — GFX Slice 3: ClearCodec decoder
+
+Probe (Slice 2a) showed the server's ClearCodec uses mainly the **bands/vBar** layer (big frame: bands=8480, residual=414, subcodec=0; glyphs via bands + GLYPH_INDEX caching; tiny 35B updates = subcodec RLEX). So the decoder had to cover vBar bands fully — the hardest layer. No shortcut.
+
+Implemented `crates/rh-rdp/src/clearcodec.rs` (`ClearDecoder`), ported from FreeRDP `libfreerdp/codec/clear.c` (Apache-2.0 — algorithm reimplemented in Rust, pixels handled directly as RGBA):
+- Header: glyphFlags + seqNumber; CACHE_RESET resets vBar cursors.
+- **Glyph cache** (4000 entries): GLYPH_HIT → blit cached bitmap to dst; GLYPH_INDEX (no hit) → decode then store the decoded rect into the cache.
+- Composite layers in order residual → bands → subcodec:
+  - **residual**: RLE of BGR + run (u8→u16→u32 escapes), fills the rect raster.
+  - **bands/vBar**: per band (xStart/xEnd/yStart/yEnd + bkg color), per column a vBar via SHORT_VBAR_CACHE_HIT / SHORT_VBAR_CACHE_MISS / VBAR_CACHE_HIT; two caches (ShortVBarStorage 16384, VBarStorage 32768, wrapping cursors); full vBar = bkg above + short pixels + bkg below; composed column-by-column into dst.
+  - **subcodec**: records (xStart,yStart,w,h,byteCount,id); id 0 = RAW BGR24, id 2 = RLEX (palette + run/suite encoding), id 1 = NSCodec (skipped).
+- Single decoder per GFX session (caches + seq are channel-wide, persist across ResetGraphics).
+
+`gfx.rs`: `GraphicsPipeline` gained a `ClearDecoder`; the ClearCodec arm decodes into the target surface then `propagate`s the rect to the framebuffer → shipped via the existing region transport. Borrow-safe (self.clear vs self.state are disjoint fields; surface dims read into locals before the &mut decode).
+
+Expect on test (`RDP_GFX=1`): **the desktop should actually render now** (ClearCodec is most of the picture). Watch for decode warnings ("GFX: ClearCodec decode failed: ...") and any visual artifacts (wrong colors = BGR/RGB swap somewhere; garbage columns = vBar bug). Next: Planar + RemoteFX-Progressive (Slice 4), then AVC→WebCodecs (Slice 5). Compile risk: ~545 lines of untested decoder — iterate on report.
+
+## Latest — GFX Slice 2a: surface model, framebuffer, transport feed
+
+Connector patch (1b) worked: server confirms GFX (V10_4) and streams — but the default codec is **ClearCodec** (not AVC; AVC needs a per-server GPO). User chose the **full GFX** path (universal, no per-server config; H.264 deferred as a later bonus layer). Finding: IronRDP provides ZGFX + GFX PDU parsing + a Planar decoder, but **no ClearCodec and no assembled RemoteFX-Progressive decoder** — those we write.
+
+Architecture: GFX codecs decode into an RGBA framebuffer (`GfxState`, shared `Arc<Mutex>`), and the worker loop ships that framebuffer's dirty rects through the **existing** region-encode/`FrameBatch` transport — so the frontend is unchanged for all non-AVC codecs. (AVC→WebCodecs will be the only frontend change, last.)
+
+Slice 2a (this turn, Rust-only):
+- `gfx.rs`: `GfxState { w,h, fb: RGBA, dirty, surfaces, origin }` + `GraphicsPipeline` (DvcProcessor). Handles ResetGraphics (alloc fb), CreateSurface/DeleteSurface, MapSurfaceToOutput (blit surface→fb), SolidFill, WireToSurface1 **Uncompressed** (BGRA→RGBA into surface→fb); ClearCodec/Planar/RemoteFx/Avc* counted + skipped with periodic log; StartFrame/EndFrame → FrameAck. `propagate()` mirrors surface rects to the composited fb + records screen-space dirty rects.
+- `actor.rs`: `connect()` gains `gfx_state: Option<Arc<Mutex<GfxState>>>`; `blocking_session` builds it from `RDP_GFX` and passes a clone. Emit tick: when GFX active, ship `GfxState.dirty` rects (extracted from `fb` via existing `make_region`) through `tx_enc` instead of `compute_regions(&image)`. force_repaint marks whole screen dirty for GFX. Without `RDP_GFX` → None → legacy path byte-identical.
+
+Expected on test (`RDP_GFX=1`): logs "advertising caps" → "CONFIRMED V10_4" → CreateSurface → "skip codec ClearCodec ... (not yet implemented)" + frame acks. **Screen mostly BLACK** (ClearCodec skipped) — possibly some SolidFill/Uncompressed regions paint. This proves surfaces+framebuffer+transport end-to-end. Real picture arrives with ClearCodec = Slice 3.
+
+Compile risk (user compiles): borrow-checker edge cases in `propagate`/`process` (disjoint field borrows), IronRDP field-name assumptions (verified against pdu 0.7 source). Next: ClearCodec decoder.
+
+## Latest — GFX Slice 1b: patch connector to actually request GFX
+
+Live test of Slice 1 (`RDP_GFX=1`): connection succeeded, server advertised `DYNVC_GFX_PROTOCOL_SUPPORTED`, but the **GFX DVC never opened** — the picture rendered fine via the legacy fast-path (visible `rdp frame stats fps=4..` from our encoder) and **none** of the GFX diag logs appeared (no "advertising capability sets"). Root cause found in IronRDP sources: the connector (`ironrdp-connector/src/connection.rs`) hardcodes `ClientEarlyCapabilityFlags` to VALID_CONNECTION_TYPE|SUPPORT_ERR_INFO_PDU|STRONG_ASYMMETRIC_KEYS|SUPPORT_SKIP_CHANNELJOIN[|WANT_32_BPP] and never sets `SUPPORT_DYN_VC_GFX_PROTOCOL` (0x0100). No `Config` option exposes it; `ClientConnector` only has `new`+`with_static_channel`; connector 0.9 is the same (and would force a pdu0.8/core0.2 stack bump). So upstream IronRDP simply never requests the graphics pipeline → the server doesn't open the channel.
+
+Fix: **vendored `ironrdp-connector` 0.8.0** into `vendor/ironrdp-connector/` (exact published source, removed nested Cargo.lock/.orig), added the one flag `| ClientEarlyCapabilityFlags::SUPPORT_DYN_VC_GFX_PROTOCOL` to the early-cap construction, and added to the workspace `Cargo.toml`:
+```
+[patch.crates-io]
+ironrdp-connector = { path = "vendor/ironrdp-connector" }
+```
+Vendored Cargo.toml is self-contained (concrete `[lints]`, registry deps pin core0.1/pdu0.7/svc0.6 = our stack → versions unify, no duplicates). The patch replaces the connector everywhere in the graph, including the `ironrdp` meta crate's transitive use.
+
+Re-test (still `RDP_GFX=1`): now expect "advertising 6 capability sets" → "server CONFIRMED caps {...}" → growing AVC wire-pdu counts. Screen still blank (Slice 1 only logs). If AVC flows, Slice 2 (extract H.264 → WebCodecs draw).
+
+Maintenance note: re-apply the connector patch on any IronRDP version bump.
+Compile/resolve risk (user compiles): the `[patch]` + vendored path must resolve cleanly (version unification, picky `=7.0.0-rc.20` pin). If cargo complains, report.
+
+## Latest — GFX/H.264 Slice 1: negotiation diagnostic
+
+Direction decided: GFX picture decoded in the **WebView via WebCodecs** (GPU H.264), not openh264 in Rust — best quality/smoothness + no C-dependency. Frontend spike (shipped `webcodecs_h264_spike.html`) came back fully green on the user's machine: hardware H.264 decode for all profiles, ~825 fps round-trip. Decode risk retired.
+
+Backend findings (from IronRDP 0.14 / pdu 0.7 / graphics 0.7 sources): no `ironrdp-egfx` crate, but the building blocks exist — `ironrdp::pdu::rdp::vc::dvc::gfx` has the full GFX message set incl. `Avc420BitmapStream`/`Avc444BitmapStream`, client `CapabilitiesAdvertisePdu`/`FrameAcknowledgePdu`, server `ServerPdu` enum; `ironrdp::graphics::zgfx::Decompressor` does RDP8 bulk decompress. `ironrdp-session` 0.8 does NOT route GFX (only fast-path bitmap/RemoteFX) — so surface model + AVC forwarding are ours to write.
+
+**Slice 1 shipped (Rust, env-gated):** `rh-rdp/src/gfx.rs` — `GraphicsPipelineDiag` implements `DvcProcessor`+`DvcClientProcessor` for `Microsoft::Windows::RDS::Graphics`. `start()` advertises caps (V8, V8.1 AVC420_ENABLED, V10/V10.2/V10.3/V10.4 with AVC_DISABLED clear) so the server switches to the pipeline. `process()` ZGFX-decompresses, loops `ServerPdu::decode`, logs CapabilitiesConfirm (chosen version) + WireToSurface1 (codec/bytes, counts AVC) + counts other PDUs, and acks every EndFrame so the server keeps streaming. `GfxClientMsg` newtype wraps the foreign `ClientPdu` to satisfy `DvcEncode` (orphan rule). Wired into `actor::connect` behind `std::env::var("RDP_GFX")` — when set, also hosts the GFX DVC; **screen blank by design** (we only listen+log, no drawing yet). Unset → legacy path untouched.
+
+Test: run with `RDP_GFX=1` set, connect RDP. Expect: console logs "advertising N capability sets" → "server CONFIRMED caps version=..." → periodic "N frames | M wire-pdus (K AVC)". Screen blank is expected. If AVC count climbs, GFX+H.264 is confirmed live → Slice 2 (extract H.264 → WebCodecs draw).
+
+Compile risk (user compiles): IronRDP meta-crate import paths (`ironrdp::core::impl_as_any`, `ironrdp::graphics::zgfx`, `ironrdp::pdu::rdp::vc::dvc::gfx::*`, `ironrdp::dvc::DvcEncode`), the `impl_as_any!` macro through the renamed `core` module, and the caps flag variant names — flagged; quick fixes if any differ.
+
+## Latest — RDP: keepalive so a dropped session doesn't just freeze
+
+Reported: connecting to the same host via mstsc kicked the RemoteHub RDP session, but RemoteHub showed no disconnect — the picture just froze (mstsc shows the standard "another user connected" 0x3/0x5 error). A clean MCS Disconnect Ultimatum is handled (`ActiveStageOutput::Terminate` → `Closed`), so the freeze means none arrived — the server stopped/half-closed silently and our 16 ms-poll reads just kept returning `TimedOut` (→ continue) forever.
+
+Fix (`rh-rdp/actor.rs`, `connect()`): enable **TCP keepalive** on the socket right after connect (`socket2::TcpKeepalive`, time 15 s / interval 5 s; new direct dep `socket2 = "0.6"`, already in the tree). The OS now probes the link; a dead/half-open connection surfaces as a read error (`ConnectionReset`/`ConnectionAborted`, **not** `TimedOut`) within ~1 min, which hits the existing `Err(_)` arm → `Closed { ServerDisconnected }` → the disconnect screen. No false positives: a live-but-idle desktop stays up because keepalive probes succeed. Detection isn't instant (~40-65 s) but beats an indefinite freeze.
+
+Rust-only; user compiles. (The "mstsc feels smoother" observation is the known server-repaint-rate ceiling → GFX/H.264 backlog item, not addressed here.)
+
+## Latest — connecting overlay cancel + failed-state redesign
+
+- **Cancel button:** the connecting overlay’s button is renamed Close → **Cancel** (`common.cancel`) and `.connecting` got `z-index: 20` so it sits above the terminal layer (the likely reason clicks weren’t registering). Calls `close(session.key)` — removes the tab immediately, tears the actor down in the background.
+- **Failed state:** replaced the long raw OS error with a short **headline** + red dot. Category from **locale-independent** markers (Winsock 10060/10061/11001/10051 + English io::ErrorKind phrases — never the localized OS prose): timeout→“Host not responding”, refused, dns→“Host not found”, network, generic. Collapsible **Details** (`<details>`) shows a synthesized **step log** (👤 start → ⚙️ resolve → ⚙️ connect → 😨 failure, i18n with host/port) + the raw OS error in mono. Log built on the frontend from the category (shows *where* it failed) — no backend trace events. Auth failures keep the re-auth UI; graceful “closed” keeps the plain EmptyState.
+- **i18n:** added `common.details`, `session.fail.*`, `session.log.*` to en + ru.
+
+All frontend; no Rust change. Cancel-during-connect still lets the backend handshake run its ~20s timeout (UI tab is gone); a real cancellation token is a later nicety.
+
+## Latest — host inspector fills full height
+
+The right-pane inspector sat at content height, leaving dead space below the «Удалить» footer (user report). Root cause: `.dockInner` used `max-height: 100%` (shrink-to-content) instead of `height: 100%`. The height chain is already definite (`.home flex-col` → `.listrow flex:1` → `.dock align-self:stretch`) and the form is already a flex column (`header`/`connectRow` = `flex:0 0 auto`, `body` = `flex:1; min-height:0; overflow-y:auto`, `footer` = `flex:0 0 auto`). Switching `.dockInner` to `height:100%` lets the body expand+scroll and pins the footer to the bottom — no magic `calc(100vh - offset)` needed since the parents already provide the height. CSS-only; `tsc`/`vite build` green.
+
+## Latest — Key selector → filtering combobox (✕ in-field)
+
+Per request, reworked the host "Key" field:
+- It's now a real combobox: clicking the field opens the dropdown and turns it into a text input that **filters the saved keys by name** (case-insensitive substring).
+- **"Add new key" and "Use SSH agent" are pinned** at the bottom of the dropdown (own section, top border, never filtered), above a scrollable key list (`savedPickerScroll` max-height 200px). Empty filter result shows "No matching keys".
+- Trailing in-field icon: **✕ (clear)** when a key/agent is linked — replaces the chevron the user disliked — clearing unlinks it; **chevron** when nothing is linked (opens the list). The separate outside ✕ button is gone.
+- Outside-click close now lives on the wrapper (`comboRef` covers field + dropdown), so typing/clicking inside doesn't self-close; Esc also closes.
+
+Implementation: `CredentialPanel` key row rebuilt (`keyCombo`/`keyComboInput`/`keyComboBtn` + `keyFilter` state + outside-click effect); `SavedCredentialPicker` now takes a `filter` prop and renders `savedPickerScroll` + pinned `savedPickerPinned`. i18n: `keyClear` repurposed as the clear tooltip ("Очистить ключ"), new `keyNoMatch`. Frontend-only; `tsc`+`vite build` green.
+
+## Latest — Fix + UX: single-slot SSH key selector
+
+Reported: changing the host's key from `ed-2.ppk` to `ED.ppk` did nothing; then "No key" removed one and left the other — i.e. multiple key creds were stacking on the host.
+
+Cause: `linkCredential` / `onUseAgent` called `linkHost` without unlinking the previously-linked key. The host ended up with several `ssh_key`/`ssh_key_agent` links; `linkedKeyCred = linkedCreds.find(kind==="ssh_key")` returned the *first*, so the UI never reflected the new pick.
+
+Fixes (frontend only, `ui/src/components/host/HostDetail.tsx` + `.module.css`):
+- New `dropLinkedKeyAuth(exceptId)` helper unlinks every currently-linked `ssh_key`/`ssh_key_agent` (except the one being set). Called before linking in both `linkCredential` and `onUseAgent`; both now `set_as_default: true`. → exactly one key/agent linked at a time; switching replaces.
+- UX: removed the "No key" row from `SavedCredentialPicker`; added a small ✕ `keyClearBtn` to the right of the key field (`authTriggerWrap` is now a flex row, `keySelect` flexes, ✕ hovers to danger). Clears the linked key/agent.
+
+No Rust change — `tsc`+`vite build` green.
+
+## Latest — Fix: spurious "host not found" when deleting a host
+
+Symptom: delete a host → long spinner → red "host not found" inside the confirm dialog (though the host *was* deleted). Three causes, three fixes:
+
+1. **`ConfirmDialog` re-entrancy** (`ui/src/components/dialog/ConfirmDialog.tsx`). `disabled={submitting}` only takes effect after a re-render, so a fast double-click fired `onConfirm` (→ `host_delete`) twice. Added a synchronous `useRef(false)` guard checked at the top of `run()`. The 2nd call was racing the 1st on the SQLite write lock — that wait was the "long spin"; the 2nd then found 0 rows.
+2. **`host_delete` masked the real error** (`rh-app/api/hosts.rs`). `.map_err(|_| ApiError::not_found("host"))` relabelled *any* failure as "host not found". Now propagates the real `StorageError` via `?` (there's a `From<StorageError> for ApiError`).
+3. **Non-idempotent store delete** (`rh-storage/host_store.rs`). `delete` returned `Backend("host … not found")` when `rows_affected == 0`. Now idempotent: a host already gone satisfies the goal → `Ok(())` (mirrors the keychain delete philosophy). Linked rows clear via FK cascade.
+
+Net: a double-fire can't happen; if it somehow does, the second call is a no-op success; and any *genuine* delete failure now shows its real cause instead of a misleading "not found". (Rust compiles on the user's machine; frontend `tsc`+`vite build` green.)
+
+## Latest — SSH: jump-connect timeout + agent-forwarding serving side
+
+Two SSH gaps closed (Rust; compiles on the user's machine — verified the russh 0.45 API against the downloaded crate source, not built here).
+
+**(A) Bastion/jump connect timeout.** `drive_target_connect`'s `CONNECT_TIMEOUT` (20 s) only bounded the *target* connect; the bastion `russh::client::connect(jump…)` itself was unbounded → a dead jump host hung on the OS TCP timeout (minutes on Windows). Now wrapped in `tokio::time::timeout(CONNECT_TIMEOUT, …)` → clean `SshError::Network(TimedOut, "jump host connection timed out")`, same as the direct path.
+
+**(B) Agent-forwarding serving side** (`rh-ssh/actor.rs`). Previously we only *advertised* acceptance (`channel.agent_forward(false)`); the back-channels were ignored. Now bridged end-to-end:
+- `ClientHandler` gained `agent_forward: bool` (true only for the target when `params.agent_forwarding`; false for the bastion) + `agent_bridges: HashMap<ChannelId, AgentBridge>`.
+- New Handler callbacks (russh auto-`confirm()`s the channel before calling): `server_channel_open_agent_forward` opens the local OS agent and registers a bridge; `data` feeds server bytes into the bridge and writes framed agent replies back via `session.data`; `channel_eof`/`channel_close` drop the bridge. The PTY channel is untouched (its data is consumed via its own `Channel<Msg>`; the map-membership check ignores it even though russh fans data out to both).
+- `AgentBridge` is a transparent length-prefixed byte relay (no agent-protocol parsing): each complete framed request → written verbatim to the agent → its framed reply → back on the channel. `AGENT_MSG_CAP` 256 KiB sanity bound. Transport: unix `$SSH_AUTH_SOCK` `UnixStream`; Windows `\.\pipe\openssh-ssh-agent` named pipe (same pipe the client-auth path uses).
+
+**Verified from russh 0.45 source:** `server_channel_open_agent_forward(&mut self, ChannelId, &mut Session)`, `data(&mut self, ChannelId, &[u8], &mut Session)`, `Session::data/close`, `russh::CryptoVec::from_slice`, `russh::ChannelId`, `#[async_trait]`, and that `confirm()` runs before the callback. Compile risk is low; the one live-unproven bit is the OS-agent transport behaviour.
+
+**Test (SSH server `89.23.99.57` is separate from the down RDP host):** enable agent forwarding on the host, ensure the local agent holds a key (`ssh-add -l` locally), connect, then on the remote run `ssh-add -l` — it should list the *local* key. Also confirm a dead/wrong jump host now fails at ~20 s with a timeout screen, not a multi-minute hang.
+
+## Latest — RDP "open in a separate window" (pop-out)
+
+Detach a live RDP session into its own OS window; the tab shows a placeholder. Single-sink handoff model: the backend forwards frames to exactly one webview, swapped on demand, with a forced full repaint so the fresh canvas paints completely (RDP streams deltas).
+
+**Backend (compiles on the user's machine — not built here):**
+- `rh-rdp/lib.rs`: new `RdpCommand::Repaint`.
+- `rh-rdp/actor.rs`: `run()` owns `force_repaint: Arc<AtomicBool>` (cloned to the worker); `Repaint` sets it; the worker, before the diff tick, does `if force_repaint.swap(false) { last_frame.clear(); }` → `compute_regions` sees a length mismatch → emits the **full** image. `blocking_session` signature gained `force_repaint: &AtomicBool`.
+- `rh-app/rdp_session.rs`: `RdpHandle.sink: Arc<Mutex<Channel<RdpSessionEvent>>>` (swappable); the forwarding task reads the sink per-event; new `reattach(id, on_event)` swaps the sink + sends `Repaint`. Break-on-send-error still ends the session when a webview dies *without* a reattach (so closing the popout window ends the session).
+- `rh-app/api/rdp_sessions.rs`: `#[tauri::command] rdp_session_reattach(state, req: SessionIdRequest, on_event: Channel) -> ApiResult<bool>`; registered in `main.rs`.
+- `capabilities/default.json`: `windows: ["main","rdp-*"]` + `core:webview:allow-create-webview-window`, `core:window:allow-set-title`.
+
+**Frontend (tsc + vite green):**
+- `ipc.ts`: `rdpSession.reattach(sessionId, onEvent)`.
+- `store`: `poppedOut: Record<key,bool>`; `detachRdpToWindow(key)` (marks placeholder + `new WebviewWindow('rdp-<sid>', { url:'index.html#popout?…', decorations:true })`); `redockRdp(key)` (reattach to main **first**, clear placeholder, then close the popout window); `attachExternalRdp({sessionId,title,w,h})` (popout side: create a local tab + reattach + repaint). Module-level `redockGuard` + a one-time `rdp:popout-closed` listener: a user-closed popout ends the owning tab; a re-dock close is suppressed (guard, with a 1.5s backstop).
+- `App.tsx`: `#popout` hash → renders `RdpPopoutApp` (new) instead of `AppShell`. `RdpPopoutApp` parses `sid/t/w/h`, attaches, renders a full-window `RdpViewport` (native window controls kept; our bar = title + fullscreen), and emits `rdp:popout-closed` on `onCloseRequested`.
+- `RdpViewport`: new `onPopOut?` → pop-out button in the bar (PictureInPicture2), shown only when provided (so the popout window has none).
+- `SessionView`: when `poppedOut[key]` → placeholder ("Сессия RDP открыта в отдельном окне" + "Вернуть во вкладку" → `redockRdp`) instead of the viewport; otherwise passes `onPopOut`.
+- i18n: `session.popOut` / `session.poppedOutTitle` / `session.redock` (ru+en).
+
+**Lifetime:** pop-out → tab placeholder + window owns the stream. Window X = session ends + tab closes. "Вернуть во вкладку" = reattach to tab, session continues, window closes.
+
+**⚠️ Unproven / likely tweaks:** Rust not compiled here; multi-window untestable in sandbox. Watch (1) the `WebviewWindow` `url` format across dev/prod, (2) whether Tauri wants an extra window-create permission, (3) the full-frame repaint on reattach (same DVC/RemoteFX caveat noted for fullscreen resize, though a full frame is the normal first-frame path).
+
+## Latest — RDP: fullscreen fill, auto-show bar, trimmed controls
+
+Follow-ups to the pane-aspect change (which fixed windowed but left side bars in fullscreen, since the monitor is wider than the pane):
+
+- **Fullscreen fills (no bars).** On the `fullscreenchange` transition we now fire a one-shot DisplayControl resize (`onResizeRef`): monitor size (`window.screen.*`) entering, the pane size (`wrap.clientW/H`) leaving, deferred a frame so the box has settled. The server re-negotiates → `Resized` → canvas backing matches the surface aspect → `object-fit: contain` fills edge-to-edge. ⚠️ **Unproven / caveat:** this is the same DVC path that's gated for continuous resize (`ENABLE_DYNAMIC_RESIZE=false`) due to a RemoteFX post-resize repaint issue; a one-shot toggle should be fine (interaction repaints), but needs a live test. Fallback if it misbehaves: connect at monitor aspect instead (fullscreen native, windowed letterboxed).
+- **Auto-show bar.** New `connected` prop (`session.state === "ready"`); when it flips true the connection bar reveals for ~3.2s then auto-hides, so the fullscreen control is discoverable right after connect.
+- **Trimmed bar.** Removed the minimize and close buttons (and the `onClose` prop / `Minus`,`X` imports / `minimize` cb); the bar is now **title + fullscreen** only. Close is via the session tab; in fullscreen exit first (Esc / Ctrl+Alt+Enter).
+
+**Not done — "open in separate window" (pop-out):** assessed as a real slice, deferred. Needs (1) backend `rdp_session_reattach` — swap the frame sink to a new Channel **and force a full-frame repaint** (RDP has no ring/reattach today, unlike SSH/local), (2) a Tauri `WebviewWindow` (+ window-create capability), (3) a frontend popout route rendering just that session + the main tab showing a "session opened in another window" placeholder + cross-window open/close coordination (single-sink handoff main↔popout). Not sandbox-verifiable (multi-window). Proposed as the next focused slice.
+
+## Latest — RDP proportions fix (pane-aspect resolution + contain)
+
+The RDP desktop was rendered at the **monitor** resolution (usually 16:9) and shown with `object-fit: fill`; in a non-16:9 session pane that meant either stretch distortion or a desktop sitting in the corner with black margins (user report). Fixes (frontend-only — backend already honours the requested width/height):
+
+- `store/index.ts createSession`: request a resolution matching the **pane aspect** (`window.innerWidth × (innerHeight − ~44px tab strip)`) at near-monitor vertical resolution, capped 2560×1600, even dims. So the server desktop comes back at the viewport's shape and fills it.
+- `RdpViewport.module.css`: `object-fit: fill → contain` — never distort; if the live pane aspect drifts from the connect-time request (e.g. a window resize), it letterboxes cleanly instead of stretching.
+- `RdpViewport.tsx toCanvas`: map client→backing through the contain transform (uniform `scale` + centering `offX/offY`), so clicks stay aligned; points in the bars clamp to the nearest edge.
+
+Trade-off (unchanged limitation): resolution is still fixed at connect — resizing the window afterwards re-letterboxes rather than reflowing; true live reflow is the gated DisplayControl feature. Fullscreen of a pane-aspect desktop letterboxes within the monitor (correct, sharp). `tsc`/`vite build` green.
+
+## Latest — conn-states: timeout, reliable auth taxonomy, inline re-auth restored
+
+Three fixes from the user's report + designer mockups:
+
+1. **SSH connect hangs forever → fixed (BACKEND, recompile).** `crates/rh-ssh/src/actor.rs`: added `CONNECT_TIMEOUT = 20s` and a deadline arm in `drive_target_connect` (the `tokio::select!`). A dead host (no SYN-ACK) previously hung on the OS TCP timeout (minutes); now it fails at 20s with `io::ErrorKind::TimedOut → SshError::Network("connection timed out")` → `CloseReason::NetworkError` → the `timeout` screen. (Bastion/jump connect not wrapped — direct path only; note for later.)
+
+2. **Wrong password/key showed the generic screen → fixed (FRONTEND).** Root cause: the nice `auth_failed` message (`Auth failed (password)`) was getting clobbered by a later `error`/`closed` event whose text (`authentication failed …` / `Authentication failed`) my `connCategory` didn't match. Fix: the store now **captures the method** from `auth_failed` into `SessionTab.authMethod`; `connCategory(state, message, hostKeyPending, authMethod?)` prefers it (`password → badpass`, else `auth`) and only falls back to (broadened) message markers (`auth failed` / `authentication failed` / `permission denied`). So badpass/auth are now reliable regardless of message order.
+
+3. **Inline re-auth restored** per the mockups. New `ReauthPanel.tsx` (rendered via ConnState's new `reauthSlot`, between diagnosis and technical details, on `auth`/`badpass` only): lock-icon header "Ввести данные заново", **Доступ** segment (SSH-ключ / Пароль), password field with eye toggle **or** a key `<select>` (saved ssh_key creds), full-width primary **"Сохранить и подключиться"** (saves creds to the host — rotate/create password or link+default the chosen key, `link_host` upserts — then close+reopen → reconnect). Default method = the failed one (auth → key, badpass → password) with **autofocus** on that field. For auth/badpass the bottom row drops the duplicate Reconnect (the Save button covers it), keeping only **Изменить хост** (ghost) + an **attempt counter** (`authAttempts: Record<hostId, number>` in the store, bumped on `auth_failed`, reset on `ready`). The "Что проверить" checklist no longer shows on auth/badpass (replaced by the panel); timeout/refused/dns/network keep it. `badpass`/`auth` raw details render structured `AuthError { method, user, message }`.
+
+i18n: added `conn.reauth.*` (ru+en). Key `<select>` is a styled native element (could become a Combobox later). Frontend `tsc --noEmit` + `vite build` green.
+
+## Latest — conn-states: actions aligned to spec, inline re-auth removed
+
+Per the prototype spec, `auth` (key rejected) and `badpass` (wrong password) now show the **same actions as other errors** — Reconnect (primary) + Edit host (ghost) — instead of the inline password/key re-auth that the previous pass had preserved. Consequences:
+
+- Removed from `SessionView`: the inline re-auth UI and its handlers (`connectWithPassword`, `linkAndReconnect`, `addKeyAndReconnect`), the `pw`/`reauthBusy`/`keyPickerOpen`/`addKeyOpen` state, the `isAuthScreen` flag, and the now-unused imports (`useState`, `KeyRound`, `useCredentialsStore`, `credApi`/`hostsApi`/`encodeSecret` from ipc, `Input`, `SavedCredentialPicker`, `AddKeyModal`). To change credentials after an auth failure the user goes through **Edit host**.
+- `badpass`/`auth` "Технические детали" now render a structured `AuthError { method: password|publickey, user: <real>, message: "<real session.message>" }` (real values, no faked codes). hostkey keeps `HostKeyError { algo, fingerprint, changed }`.
+- The auth step label/diagnosis/fixes for `badpass` already matched the spec (step "Аутентификация · пароль — неверный пароль", headline "Неверный пароль", checklist раскладка/Caps Lock · верный логин · SSH-ключ); unchanged.
+- Dead CSS left behind in `SessionView.module.css` (`.reauth*`, `.failBox*`, `.card*`, `.dead*`, `.hostKey*`) — harmless, can be swept later.
+
+## Latest — connection-states screen (handshake log + taxonomy)
+
+Replaced the raw error dump / `ConnectingOverlay` / host-key banner in `SessionView` with one presentational component, `ConnState` (`ConnState.tsx` + `.module.css`, adapted from the user prototype to tokens/CSS-modules/i18n).
+
+- **Live handshake log**, 4 steps (Разрешение адреса → TCP-соединение → Аутентификация → Открытие сессии), driven by the **real** `session.state` (resolving/connecting/authenticating) — no fake timers. Step states: done (green check) / active (spinner) / pend (gray dot) / fail (red ✕ + reason). The failing step is derived from the category, so you see *where* it broke.
+- **Error taxonomy** via `connCategory(state, message, hostKeyPending)`: `timeout` / `refused` / `dns` / `network` / `auth` (key rejected) / `badpass` (password rejected — distinct copy/fixes) / `hostkey` (amber warning) / `generic`. `auth` vs `badpass` split on the SSH `auth_failed (method)` message (`password` → badpass, else auth). hostkey = `session.hostKey` present.
+- Each error shows: colored headline + status dot, plain-language **diagnosis** banner (interpolated `{addr}/{port}/{user}`), **"Что проверить"** checklist with real commands (`nc -vz {addr} {port}`, `systemctl status sshd`) for timeout/refused/dns/network/auth/badpass, and a collapsible **"Технические детали"** with the raw message + copy button.
+- **Actions** composed by `SessionView` via `children`: connecting → Cancel; timeout/refused/dns/network/generic → Reconnect + Edit host; auth/badpass → inline re-auth (password + key picker + connect) + Edit host (re-auth handlers preserved); hostkey → Accept (amber) / Reject (reuses `acceptHostKey`/`rejectHostKey`). Connecting card overlays the mounted Terminal/RdpViewport (`.connecting` absolute) so the terminal stays mounted for reattach.
+- ms timings omitted (no real per-phase backend source — honest over decorative).
+- Removed the old `failCategory`/`failHeadlineKey`/`buildConnectLog` helpers and `ConnectingOverlay`; added ~50 `conn.*` i18n keys (ru+en).
+
+## Latest — host inspector densification (inline labels)
+
+Right-pane host editor was too tall vertically (label-above-control per field) → didn't fit without scrolling. Switched to **inline labels**: each field is now a `.frow` row `[label 92px][control flex]`, min-height 34px.
+
+- **CSS (`HostDetail.module.css`):** new `.frow/.frow__l/.frow__c/.frow__port/.frow__sep`. Compacted metrics: `.body input` 32→34, body gap 11→9 + padding →13/14, header →11/14, title 13.5→14, connectRow →10/14, footer →8/14, credentialPanel gap →9.
+- **JSX (`HostDetail.tsx`):** 7 rows reordered to Name / Address:Port / Protocol / Login / Access / Key|Password / Group. Address+Port merged into one row (`[Address ___] : [port 56px]`). Each field (main body + `CredentialPanel` login/auth/key + `passwordField`) wrapped in `.frow` + `.frow__c`; dropped the `<section>` wrapper around `CredentialPanel`. Advanced section keeps the stacked layout.
+- **i18n:** `dialog.host.authLabel` "Аутентификация"→"Доступ" (EN "Authentication"→"Access") so it fits the 92px label column.
+
+Live-save / draft→real focus continuity untouched (mechanism lives in `HostForm`/`promotedId`, not the field wrappers); the Address `<Input>` keeps its identity + `autoFocus` in draft mode. Body ~553px → ~318px.
+
+## Latest — connection-failure UX (failed card triggers on connecting-drop)
+
+The compact failure card + step log + `common.cancel`/immediate-close already existed, but a **connect timeout** (and other connecting-time drops) landed in state `closed` → the raw OS error showed in the plain `EmptyState`, never the nice `failBox`. Fix in `store/index.ts` `handleEvent`/`handleRdpEvent` `closed`: if the session never reached `ready` and it wasn't a `user_requested` close, set state **`failed`** (keeping the raw message so `failCategory` matches the OS error code, e.g. 10060 → "Хост не отвечает", and `failRaw` shows the full text under "Подробнее"). Normal mid-session drops (was `ready`) still show `closed`.
+
+Connect-overlay button relabeled to a dedicated key **`session.cancelConnect`** (RU "Отменить" / EN "Cancel") instead of `common.cancel` ("Отмена"). `close()` already removes the tab immediately and tears the actor down in the background, so cancel is responsive even during a blocking handshake.
+
+## Latest — RDP clipboard images: permission + RGBA fix
+
+Two bugs kept clipboard **images** from working (text was fine):
+1. **Permissions:** `crates/rh-app/capabilities/default.json` granted only `clipboard-manager:allow-{read,write}-text`. Added `allow-write-image` + `allow-read-image` — without them `readImage`/`writeImage` were silently denied (this blocked **both** directions; local→remote started working once added).
+2. **Remote→local format:** we were emitting PNG and writing it via `Image.fromBytes`, which only decodes when tauri is built with the `image-png` feature (it isn't) → silent failure. Switched to **raw RGBA**: new `RdpSessionEvent::ClipboardImage { width, height, rgba_base64 }` (replaces the image-over-`Clipboard{mime}` path); `dib_to_rgba` replaces `dib_to_png_base64` (dropped the PNG encoder); the frontend builds `Image.new(rgba, w, h)` and writes it — no `image-png` feature needed. Added a `console.warn` on write failure for future diagnosis.
+
+Both directions now confirmed: local→remote ✅ (user-verified); remote→local pending re-verify after this fix.
 
 ## Latest — RDP clipboard images (CF_DIB, both directions)
 

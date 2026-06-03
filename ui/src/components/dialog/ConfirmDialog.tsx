@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { useT } from "../../i18n";
 import { formatApiError } from "../../lib/types";
@@ -30,8 +30,14 @@ export function ConfirmDialog({
     const { t } = useT();
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // Synchronous guard: `disabled` only takes effect after a re-render, so a
+    // fast double-click could fire `onConfirm` twice (e.g. delete → the second
+    // call races the first).
+    const busy = useRef(false);
 
     async function run() {
+        if (busy.current) return;
+        busy.current = true;
         setSubmitting(true);
         setError(null);
         try {
@@ -41,6 +47,7 @@ export function ConfirmDialog({
             setError(formatApiError(e));
         } finally {
             setSubmitting(false);
+            busy.current = false;
         }
     }
 

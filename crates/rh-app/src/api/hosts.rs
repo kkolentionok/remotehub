@@ -309,11 +309,7 @@ pub async fn host_delete(
     app: AppHandle,
     req: HostIdRequest,
 ) -> ApiResult<()> {
-    state
-        .hosts
-        .delete(&req.id)
-        .await
-        .map_err(|_| ApiError::not_found("host"))?;
+    state.hosts.delete(&req.id).await?;
     events::emit_hosts_changed(&app, events::Change::Deleted, &req.id);
     Ok(())
 }

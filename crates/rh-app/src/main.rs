@@ -119,6 +119,7 @@ fn main() {
             api::sessions::session_reattach,
             api::rdp_sessions::rdp_session_open,
             api::rdp_sessions::rdp_session_close,
+            api::rdp_sessions::rdp_session_reattach,
             api::rdp_sessions::rdp_session_input,
             api::rdp_sessions::rdp_session_set_clipboard,
             api::rdp_sessions::rdp_session_set_clipboard_image,

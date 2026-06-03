@@ -1,23 +1,24 @@
-import { useCallback, useState } from "react";
-import { Columns2, KeyRound, Loader2, Pencil, RefreshCw, Rows2, Server, X } from "lucide-react";
+import { useCallback } from "react";
+import { Columns2, Pencil, PictureInPicture2, RefreshCw, Rows2, X } from "lucide-react";
 
 import { useT } from "../../i18n";
 import type { SessionTab } from "../../store";
 import {
-    useCredentialsStore,
     useHostsStore,
     useSessionsStore,
     useUiStore,
 } from "../../store";
-import { credentials as credApi, hosts as hostsApi, rdpSession as rdpSessionApi, encodeSecret } from "../../lib/ipc";
+import { rdpSession as rdpSessionApi } from "../../lib/ipc";
 import { Button } from "../ui/Button";
-import { AddKeyModal, SavedCredentialPicker } from "../host/HostDetail";
-import { EmptyState } from "../ui/EmptyState";
-import { Input } from "../ui/TextField";
+import { ConnState, connCategory } from "./ConnState";
+import { ReauthPanel } from "./ReauthPanel";
 import { Terminal } from "./Terminal";
 import { RdpViewport } from "./RdpViewport";
 import type { RdpInputEvent } from "../../lib/types";
 import styles from "./SessionView.module.css";
+
+
+
 
 export function SessionView({
     session,
@@ -37,6 +38,9 @@ export function SessionView({
     const setDraggingSession = useSessionsStore((s) => s.setDraggingSession);
     const acceptHostKey = useSessionsStore((s) => s.acceptHostKey);
     const rejectHostKey = useSessionsStore((s) => s.rejectHostKey);
+    const detachRdpToWindow = useSessionsStore((s) => s.detachRdpToWindow);
+    const redockRdp = useSessionsStore((s) => s.redockRdp);
+    const isPoppedOut = useSessionsStore((s) => !!s.poppedOut[session.key]);
     const hosts = useHostsStore((s) => s.items);
 
     const isDead = session.state === "closed" || session.state === "failed";
@@ -44,6 +48,20 @@ export function SessionView({
         session.state === "resolving" ||
         session.state === "connecting" ||
         session.state === "authenticating";
+
+    // Connection presentation: category + identity for the handshake screen.
+    const hostSummary = hosts.find((h) => h.id === session.hostId);
+    const connAddr = hostSummary?.hostname ?? "";
+    const connPort = hostSummary?.port ?? (session.protocol === "rdp" ? 3389 : 22);
+    const connUser = hostSummary?.username ?? "";
+    const category = connCategory(
+        session.state,
+        session.message,
+        !!session.hostKey,
+        session.authMethod,
+    );
+    const isAuthScreen = category === "auth" || category === "badpass";
+    const attempts = useSessionsStore((s) => s.authAttempts[session.hostId] ?? 0);
 
     const reconnect = useCallback(() => {
         const host = hosts.find((h) => h.id === session.hostId);
@@ -73,114 +91,6 @@ export function SessionView({
         },
         [session.sessionId],
     );
-
-    // Inline re-auth on auth failure: type a password (or pick/add an SSH
-    // key) and reconnect without leaving the session tab.
-    const [pw, setPw] = useState("");
-    const [reauthBusy, setReauthBusy] = useState(false);
-    const [keyPickerOpen, setKeyPickerOpen] = useState(false);
-    const [addKeyOpen, setAddKeyOpen] = useState(false);
-    const authFailed =
-        isDead && (session.message ?? "").toLowerCase().includes("auth");
-
-    // Link a credential to the host (if not already) and reconnect.
-    const linkAndReconnect = useCallback(
-        async (credentialId: string) => {
-            if (reauthBusy) return;
-            setReauthBusy(true);
-            try {
-                const host = await hostsApi.get(session.hostId);
-                const ids = host.credential_ids ?? [];
-                if (!ids.includes(credentialId)) {
-                    await credApi.linkHost({
-                        host_id: host.id,
-                        credential_id: credentialId,
-                        set_as_default: ids.length === 0,
-                    });
-                }
-                const fresh = await hostsApi.get(host.id);
-                await close(session.key);
-                void open(fresh);
-            } catch {
-                setReauthBusy(false);
-            }
-        },
-        [session.hostId, session.key, reauthBusy, close, open],
-    );
-
-    // Create a new SSH key (paste/import), link it, and reconnect.
-    const addKeyAndReconnect = useCallback(
-        async ({
-            key,
-            passphrase,
-            name,
-        }: {
-            key: string;
-            passphrase: string;
-            name: string;
-        }) => {
-            const creds = useCredentialsStore.getState().items;
-            const taken = new Set(creds.map((c) => c.name));
-            let n = name.trim() || "key";
-            let i = 2;
-            while (taken.has(n)) n = `${name.trim() || "key"} ${i++}`;
-            const created = await credApi.create({
-                name: n,
-                kind: "ssh_key",
-                username: "",
-                secret: encodeSecret(key.trim()),
-                passphrase: passphrase !== "" ? encodeSecret(passphrase) : undefined,
-            });
-            await linkAndReconnect(created.id);
-        },
-        [linkAndReconnect],
-    );
-
-    const connectWithPassword = useCallback(async () => {
-        const summary = hosts.find((h) => h.id === session.hostId);
-        if (!summary || pw === "" || reauthBusy) return;
-        setReauthBusy(true);
-        try {
-            // The hosts store holds summaries; fetch the full host for its
-            // linked credential ids.
-            const host = await hostsApi.get(session.hostId);
-            const creds = useCredentialsStore.getState().items;
-            const ids = host.credential_ids ?? [];
-            const pwCred = creds.find(
-                (c) => ids.includes(c.id) && c.kind === "password",
-            );
-            if (pwCred) {
-                await credApi.rotateSecret({
-                    id: pwCred.id,
-                    secret: encodeSecret(pw),
-                });
-            } else {
-                const base =
-                    host.display_name || host.name || host.hostname || "password";
-                const taken = new Set(creds.map((c) => c.name));
-                let name = base;
-                let i = 2;
-                while (taken.has(name)) name = `${base} ${i++}`;
-                const created = await credApi.create({
-                    name,
-                    kind: "password",
-                    username: "",
-                    secret: encodeSecret(pw),
-                });
-                await credApi.linkHost({
-                    host_id: host.id,
-                    credential_id: created.id,
-                    set_as_default: ids.length === 0,
-                });
-            }
-            const fresh = await hostsApi.get(host.id);
-            setPw("");
-            await close(session.key);
-            void open(fresh);
-        } catch {
-            setReauthBusy(false);
-        }
-    }, [hosts, session.hostId, session.key, pw, reauthBusy, close, open]);
 
     return (
         <main className={styles.view}>
@@ -225,160 +135,107 @@ export function SessionView({
                     </button>
                 </div>
             )}
-            {session.hostKey && (
-                <div
-                    className={`${styles.hostKeyPrompt} ${
-                        session.hostKey.changed ? styles.hostKeyChanged : ""
-                    }`}
-                >
-                    <div className={styles.hostKeyText}>
-                        {session.hostKey.changed
-                            ? t("session.hostKey.changedPrompt")
-                            : t("session.hostKey.prompt")}
-                        <code className={styles.fingerprint}>
-                            {session.hostKey.keyType} · SHA256:{session.hostKey.fingerprint}
-                        </code>
-                    </div>
-                    <div className={styles.hostKeyActions}>
+            <div className={styles.body}>
+                {session.hostKey ? (
+                    <ConnState
+                        category="hostkey"
+                        state={session.state}
+                        protocol={session.protocol as "ssh" | "rdp"}
+                        hostName={session.title}
+                        user={connUser}
+                        addr={connAddr}
+                        port={connPort}
+                        changed={session.hostKey.changed}
+                        fingerprint={session.hostKey.fingerprint}
+                        keyType={session.hostKey.keyType}
+                    >
                         <Button
                             variant="primary"
+                            style={{ background: "var(--color-warn)", color: "#14110a" }}
                             onClick={() => void acceptHostKey(session.key)}
                         >
                             {t("session.hostKey.accept")}
                         </Button>
-                        <Button onClick={() => void rejectHostKey(session.key)}>
+                        <Button
+                            variant="ghost"
+                            onClick={() => void rejectHostKey(session.key)}
+                        >
                             {t("session.hostKey.reject")}
                         </Button>
-                    </div>
-                </div>
-            )}
-
-            <div className={styles.body}>
-                {isDead ? (
-                    <div className={styles.dead}>
-                        {authFailed ? (
-                            <div className={styles.reauth}>
-                                <div className={styles.reauthTitle}>
-                                    {t("session.failed")}
-                                </div>
-                                <div className={styles.reauthMsg}>
-                                    {session.message ?? undefined}
-                                </div>
-                                <div className={styles.reauthPwRow}>
-                                    <Input
-                                        className={styles.reauthPwInput}
-                                        type="password"
-                                        value={pw}
-                                        onChange={(e) => setPw(e.target.value)}
-                                        placeholder={t(
-                                            "dialog.host.credentialPasswordPlaceholder",
-                                        )}
-                                        autoComplete="off"
-                                        autoFocus
-                                        onKeyDown={(e) => {
-                                            if (e.key === "Enter")
-                                                void connectWithPassword();
-                                        }}
-                                    />
-                                    <button
-                                        type="button"
-                                        className={styles.reauthKeyBtn}
-                                        onClick={() => setKeyPickerOpen((v) => !v)}
-                                        title={t("dialog.host.authKind.key")}
-                                        aria-label={t("dialog.host.authKind.key")}
-                                    >
-                                        <KeyRound size={16} />
-                                    </button>
-                                    {keyPickerOpen && (
-                                        <SavedCredentialPicker
-                                            onClose={() => setKeyPickerOpen(false)}
-                                            onPick={async (id) => {
-                                                setKeyPickerOpen(false);
-                                                await linkAndReconnect(id);
-                                            }}
-                                            onAddNew={() => {
-                                                setKeyPickerOpen(false);
-                                                setAddKeyOpen(true);
-                                            }}
-                                        />
-                                    )}
-                                </div>
-                                <div className={styles.reauthButtons}>
-                                    <Button
-                                        variant="primary"
-                                        className={styles.reauthConnectBtn}
-                                        disabled={pw === "" || reauthBusy}
-                                        onClick={() => void connectWithPassword()}
-                                    >
-                                        <RefreshCw size={14} />{" "}
-                                        {t("session.connectSave")}
-                                    </Button>
-                                </div>
-                                {addKeyOpen && (
-                                    <AddKeyModal
-                                        onClose={() => setAddKeyOpen(false)}
-                                        onAdd={async (args) => {
-                                            setAddKeyOpen(false);
-                                            await addKeyAndReconnect(args);
-                                        }}
-                                    />
-                                )}
-                            </div>
-                        ) : (
-                            <EmptyState
-                                title={
-                                    session.state === "failed"
-                                        ? t("session.failed")
-                                        : t("session.closed")
-                                }
-                                description={session.message ?? undefined}
-                                action={
-                                    <div className={styles.deadActions}>
-                                        <Button
-                                            variant="primary"
-                                            onClick={reconnect}
-                                        >
-                                            <RefreshCw size={14} />{" "}
-                                            {t("session.reconnect")}
-                                        </Button>
-                                        <Button
-                                            variant="secondary"
-                                            onClick={editHost}
-                                        >
-                                            <Pencil size={14} /> {t("common.edit")}
-                                        </Button>
-                                    </div>
-                                }
-                            />
+                    </ConnState>
+                ) : isDead ? (
+                    <ConnState
+                        category={category}
+                        state={session.state}
+                        protocol={session.protocol as "ssh" | "rdp"}
+                        hostName={session.title}
+                        user={connUser}
+                        addr={connAddr}
+                        port={connPort}
+                        rawMessage={session.message}
+                        attempt={isAuthScreen ? attempts : undefined}
+                        reauthSlot={
+                            isAuthScreen ? (
+                                <ReauthPanel
+                                    hostId={session.hostId}
+                                    sessionKey={session.key}
+                                    defaultMethod={
+                                        category === "badpass" ? "password" : "key"
+                                    }
+                                />
+                            ) : undefined
+                        }
+                    >
+                        {!isAuthScreen && (
+                            <Button variant="primary" onClick={reconnect}>
+                                <RefreshCw size={14} /> {t("session.reconnect")}
+                            </Button>
                         )}
-                    </div>
+                        <Button variant="ghost" onClick={editHost}>
+                            <Pencil size={14} /> {t("conn.editHost")}
+                        </Button>
+                    </ConnState>
                 ) : (
                     <>
                         {session.protocol === "rdp" ? (
-                            <RdpViewport
-                                sessionKey={session.key}
-                                width={session.rdpWidth ?? 1280}
-                                height={session.rdpHeight ?? 800}
-                                onInput={handleRdpInput}
-                                hostLabel={session.title}
-                                onClose={() => void close(session.key)}
-                                onLocalClipboard={(text) => {
-                                    const sid = session.sessionId;
-                                    if (sid) void rdpSessionApi.setClipboard(sid, text);
-                                }}
-                                onLocalClipboardImage={(w, h, rgbaBase64) => {
-                                    const sid = session.sessionId;
-                                    if (sid) void rdpSessionApi.setClipboardImage(sid, w, h, rgbaBase64);
-                                }}
-                                onResize={(w, h) => {
-                                    const sid = session.sessionId;
-                                    if (sid) void rdpSessionApi.resize(sid, w, h);
-                                }}
-                                onKbdCapture={(on) => {
-                                    const sid = session.sessionId;
-                                    if (sid) void rdpSessionApi.kbdCapture(sid, on);
-                                }}
-                            />
+                            isPoppedOut ? (
+                                <div className={styles.poppedOut}>
+                                    <PictureInPicture2 size={30} strokeWidth={1.5} />
+                                    <p>{t("session.poppedOutTitle")}</p>
+                                    <Button
+                                        variant="secondary"
+                                        onClick={() => void redockRdp(session.key)}
+                                    >
+                                        {t("session.redock")}
+                                    </Button>
+                                </div>
+                            ) : (
+                                <RdpViewport
+                                    sessionKey={session.key}
+                                    width={session.rdpWidth ?? 1280}
+                                    height={session.rdpHeight ?? 800}
+                                    onInput={handleRdpInput}
+                                    hostLabel={session.title}
+                                    connected={session.state === "ready"}
+                                    onPopOut={() => void detachRdpToWindow(session.key)}
+                                    onLocalClipboard={(text) => {
+                                        const sid = session.sessionId;
+                                        if (sid) void rdpSessionApi.setClipboard(sid, text);
+                                    }}
+                                    onLocalClipboardImage={(w, h, rgbaBase64) => {
+                                        const sid = session.sessionId;
+                                        if (sid) void rdpSessionApi.setClipboardImage(sid, w, h, rgbaBase64);
+                                    }}
+                                    onResize={(w, h) => {
+                                        const sid = session.sessionId;
+                                        if (sid) void rdpSessionApi.resize(sid, w, h);
+                                    }}
+                                    onKbdCapture={(on) => {
+                                        const sid = session.sessionId;
+                                        if (sid) void rdpSessionApi.kbdCapture(sid, on);
+                                    }}
+                                />
+                            )
                         ) : (
                             <Terminal
                                 sessionKey={session.key}
@@ -386,7 +243,23 @@ export function SessionView({
                                 focused={focused}
                             />
                         )}
-                        {isConnecting && <ConnectingOverlay session={session} />}
+                        {isConnecting && (
+                            <div className={styles.connecting}>
+                                <ConnState
+                                    category="connecting"
+                                    state={session.state}
+                                    protocol={session.protocol as "ssh" | "rdp"}
+                                    hostName={session.title}
+                                    user={connUser}
+                                    addr={connAddr}
+                                    port={connPort}
+                                >
+                                    <Button onClick={() => void close(session.key)}>
+                                        <X size={14} /> {t("session.cancelConnect")}
+                                    </Button>
+                                </ConnState>
+                            </div>
+                        )}
                     </>
                 )}
             </div>
@@ -394,46 +267,3 @@ export function SessionView({
     );
 }
 
-/** Termius-style connection card shown over the terminal until ready. */
-function ConnectingOverlay({ session }: { session: SessionTab }) {
-    const { t } = useT();
-    const close = useSessionsStore((s) => s.close);
-    const host = useHostsStore((s) =>
-        s.items.find((h) => h.id === session.hostId),
-    );
-    const target = host ? `${host.hostname}:${host.port}` : "";
-
-    return (
-        <div className={styles.connecting}>
-            <div className={styles.card}>
-                <div className={styles.cardHead}>
-                    <div className={styles.cardIcon}>
-                        <Server size={20} />
-                    </div>
-                    <div className={styles.cardHeadText}>
-                        <div className={styles.cardTitle}>{session.title}</div>
-                        <div className={styles.cardSub}>
-                            {session.protocol.toUpperCase()}
-                            {target ? ` · ${target}` : ""}
-                        </div>
-                    </div>
-                </div>
-
-                <div className={styles.progress}>
-                    <div className={styles.progressBar} />
-                </div>
-
-                <div className={styles.statusRow}>
-                    <Loader2 size={15} className={styles.spin} />
-                    <span>{t(`session.state.${session.state}`)}…</span>
-                </div>
-
-                <div className={styles.cardActions}>
-                    <Button onClick={() => void close(session.key)}>
-                        {t("common.close")}
-                    </Button>
-                </div>
-            </div>
-        </div>
-    );
-}

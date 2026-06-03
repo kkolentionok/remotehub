@@ -100,3 +100,11 @@ opt-level = 3
 # responsive. Other workspace crates stay unoptimized for fast iteration.
 [profile.dev.package.rh-rdp]
 opt-level = 3
+
+# RemoteHub vendors ironrdp-connector to advertise the Graphics Pipeline
+# (MS-RDPEGFX) early-capability flag, which upstream IronRDP never sets and
+# exposes no option for. Without it the server won't open the GFX DVC, so it
+# falls back to legacy bitmap/RemoteFX. Same 0.8.0 source + one flag; re-apply
+# on any IronRDP bump. See vendor/ironrdp-connector/src/connection.rs.
+[patch.crates-io]
+ironrdp-connector = { path = "vendor/ironrdp-connector" }

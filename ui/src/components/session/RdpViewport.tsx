@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Maximize2, Minimize2, Minus, X } from "lucide-react";
+import { Maximize2, Minimize2, PictureInPicture2 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { readText as clipboardReadText, readImage as clipboardReadImage } from "@tauri-apps/plugin-clipboard-manager";
@@ -19,8 +19,9 @@ interface Props {
     onInput: (ev: RdpInputEvent) => void;
     /** Host label shown in the connection bar (mstsc-style). */
     hostLabel?: string;
-    /** Close/disconnect this session (the bar's × button). */
-    onClose?: () => void;
+    /** True once the session is connected (state "ready") — briefly auto-shows
+     *  the connection bar so the fullscreen affordance is discoverable. */
+    connected?: boolean;
     /** Push the local OS clipboard text up (for paste into the remote). */
     onLocalClipboard?: (text: string) => void;
     /** Push a local OS clipboard image up (raw RGBA base64) for remote paste. */
@@ -29,6 +30,9 @@ interface Props {
     onResize?: (width: number, height: number) => void;
     /** Toggle OS-level keyboard capture (true on fullscreen, false on exit). */
     onKbdCapture?: (on: boolean) => void;
+    /** Detach this session into its own OS window (shown as a bar button).
+     *  Omitted inside the pop-out window itself. */
+    onPopOut?: () => void;
     className?: string;
 }
 
@@ -84,7 +88,7 @@ function pointerToCss(ev: {
  * and key event via `getModifierState`). Fix for the classic "stuck
  * Ctrl/Alt/Shift after Alt-Tab" RDP bug. (Input wire lands in round 2b-2.)
  */
-export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, onClose, onLocalClipboard, onLocalClipboardImage, onResize, onKbdCapture, className }: Props) {
+export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, connected, onLocalClipboard, onLocalClipboardImage, onResize, onKbdCapture, onPopOut, className }: Props) {
     const { t } = useT();
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
@@ -112,6 +116,19 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, onC
         num_lock: false,
         scroll_lock: false,
     });
+
+    // Latest onResize, read from event handlers without re-subscribing.
+    const onResizeRef = useRef(onResize);
+    onResizeRef.current = onResize;
+
+    // Briefly reveal the connection bar for a few seconds once connected, so
+    // the fullscreen / controls are discoverable, then auto-hide.
+    useEffect(() => {
+        if (!connected) return;
+        setBarOn(true);
+        const tmr = window.setTimeout(() => setBarOn(false), 3200);
+        return () => window.clearTimeout(tmr);
+    }, [connected]);
 
     useEffect(() => {
         const c = canvasRef.current;
@@ -152,6 +169,20 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, onC
             // still think are held from hook-forwarded presses.
             onKbdCapture?.(on);
             if (!on) onInput({ kind: "release_all_modifiers" });
+            // Fill the new surface without letterbox bars: the windowed pane
+            // aspect ≠ the monitor's, so on the fullscreen transition we ask
+            // the server (one-shot DisplayControl resize) to match — monitor
+            // size entering, the pane size leaving. Deferred a frame so the
+            // element box has settled to its new size.
+            requestAnimationFrame(() => {
+                const w = on
+                    ? Math.round(window.screen.width)
+                    : Math.round(wrapRef.current?.clientWidth ?? 0);
+                const h = on
+                    ? Math.round(window.screen.height)
+                    : Math.round(wrapRef.current?.clientHeight ?? 0);
+                if (w >= 200 && h >= 200) onResizeRef.current?.(w, h);
+            });
         };
         document.addEventListener("fullscreenchange", onChange);
         return () => document.removeEventListener("fullscreenchange", onChange);
@@ -189,10 +220,6 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, onC
         }
         // Keep input focus on the canvas after toggling.
         window.setTimeout(() => canvasRef.current?.focus(), 0);
-    }, []);
-
-    const minimize = useCallback(() => {
-        void getCurrentWindow().minimize().catch(() => {});
     }, []);
 
     // Reveal the connection bar only when the pointer is within ~56px of the
@@ -287,8 +314,6 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, onC
     // this on once the reactivation repaint is debugged on a live session
     // (and/or GFX/H.264 replaces the RemoteFX codepath).
     const ENABLE_DYNAMIC_RESIZE = false;
-    const onResizeRef = useRef(onResize);
-    onResizeRef.current = onResize;
     useEffect(() => {
         if (!ENABLE_DYNAMIC_RESIZE) return;
         const el = wrapRef.current;
@@ -323,17 +348,23 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, onC
         if (!c) return { x: 0, y: 0 };
         const r = c.getBoundingClientRect();
         if (r.width <= 0 || r.height <= 0) return { x: 0, y: 0 };
-        // The canvas is displayed with `object-fit: fill`: the backing bitmap
-        // (width×height) stretches to the element box on each axis
-        // independently (no letterbox), so map with per-axis scale and no
-        // centering offset.
+        // The canvas is displayed with `object-fit: contain`: the backing
+        // bitmap (width×height) is scaled uniformly to fit the element box and
+        // centered, leaving letterbox bars on the axis with extra space. Undo
+        // that transform (scale + centering offset) so clicks land on the
+        // right pixel; points in the bars clamp to the nearest edge.
+        const scale = Math.min(r.width / width, r.height / height);
+        const dispW = width * scale;
+        const dispH = height * scale;
+        const offX = (r.width - dispW) / 2;
+        const offY = (r.height - dispH) / 2;
         const x = Math.max(
             0,
-            Math.min(width - 1, Math.round(((clientX - r.left) / r.width) * width)),
+            Math.min(width - 1, Math.round((clientX - r.left - offX) / scale)),
         );
         const y = Math.max(
             0,
-            Math.min(height - 1, Math.round(((clientY - r.top) / r.height) * height)),
+            Math.min(height - 1, Math.round((clientY - r.top - offY) / scale)),
         );
         return { x, y };
     };
@@ -472,30 +503,23 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, onC
                 <button
                     type="button"
                     className={styles.barBtn}
-                    title={t("session.minimize")}
-                    aria-label={t("session.minimize")}
-                    onClick={minimize}
-                >
-                    <Minus size={15} />
-                </button>
-                <button
-                    type="button"
-                    className={styles.barBtn}
                     title={t("session.fullscreen")}
                     aria-label={t("session.fullscreen")}
                     onClick={toggleFs}
                 >
                     {isFs ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
                 </button>
-                <button
-                    type="button"
-                    className={`${styles.barBtn} ${styles.barClose}`}
-                    title={t("common.close")}
-                    aria-label={t("common.close")}
-                    onClick={() => onClose?.()}
-                >
-                    <X size={15} />
-                </button>
+                {onPopOut && (
+                    <button
+                        type="button"
+                        className={styles.barBtn}
+                        title={t("session.popOut")}
+                        aria-label={t("session.popOut")}
+                        onClick={onPopOut}
+                    >
+                        <PictureInPicture2 size={15} />
+                    </button>
+                )}
             </div>
             {showHint && <div className={styles.fsHint}>{t("session.fullscreenHint")}</div>}
         </div>

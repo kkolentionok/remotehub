@@ -237,6 +237,20 @@ export const rdpSession = {
     close: (sessionId: SessionId): Promise<void> =>
         call("rdp_session_close", { session_id: sessionId }),
 
+    /** Re-home a live session's frame stream to this webview (pop-out / re-dock).
+     *  Resolves false if the session isn't live. */
+    reattach: (
+        sessionId: SessionId,
+        onEvent: (e: RdpSessionEvent) => void,
+    ): Promise<boolean> => {
+        const channel = new Channel<RdpSessionEvent>();
+        channel.onmessage = onEvent;
+        return invoke<boolean>("rdp_session_reattach", {
+            req: { session_id: sessionId },
+            onEvent: channel,
+        });
+    },
+
     sendInput: (req: RdpInputRequest): Promise<void> =>
         call("rdp_session_input", req),
 

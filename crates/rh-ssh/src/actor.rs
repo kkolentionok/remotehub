@@ -50,6 +50,12 @@ struct ClientHandler {
     /// User trust decisions, forwarded from the command channel while the
     /// connect future is in flight (see `connect_and_pump`).
     decisions: mpsc::Receiver<bool>,
+    /// `true` for the target session when the host enables agent forwarding:
+    /// server-opened `auth-agent@openssh.com` channels are bridged to the
+    /// local OS agent. Always `false` for the bastion handler.
+    agent_forward: bool,
+    /// Live agent-forward relays, keyed by the server-opened channel id.
+    agent_bridges: std::collections::HashMap<russh::ChannelId, AgentBridge>,
 }
 
 impl ClientHandler {
@@ -137,6 +143,198 @@ impl russh::client::Handler for ClientHandler {
             // (it set the `rejected` flag when forwarding the decision).
             HostKeyOutcome::Reject => Ok(false),
         }
+    }
+
+    // ---- Agent forwarding (serving side) -----------------------------
+    // The server opens `auth-agent@openssh.com` channels (russh auto-confirms
+    // before calling us); their byte stream is the raw SSH-agent protocol.
+    // We bridge each to the local OS agent. See `AgentBridge` below.
+
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        channel: russh::ChannelId,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        if !self.agent_forward {
+            return Ok(()); // not enabled for this host — leave the channel idle
+        }
+        #[cfg(any(unix, windows))]
+        match open_os_agent().await {
+            Ok(io) => {
+                self.agent_bridges.insert(
+                    channel,
+                    AgentBridge {
+                        io: tokio::sync::Mutex::new(io),
+                        inbuf: Vec::new(),
+                    },
+                );
+                debug!("agent-forward: bridged a server channel to the local agent");
+            }
+            Err(e) => {
+                warn!(error = %e, "agent-forward: local agent unavailable; not bridging");
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = channel;
+        }
+        Ok(())
+    }
+
+    async fn data(
+        &mut self,
+        channel: russh::ChannelId,
+        data: &[u8],
+        session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        // Only agent-forward channels are handled here; the PTY channel's
+        // data is consumed via its own `Channel<Msg>` stream (russh delivers
+        // to both, so the map membership check keeps us out of its way).
+        #[cfg(any(unix, windows))]
+        if let Some(bridge) = self.agent_bridges.get_mut(&channel) {
+            match bridge.pump(data).await {
+                Ok(replies) => {
+                    for r in replies {
+                        session.data(channel, russh::CryptoVec::from_slice(&r));
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "agent-forward relay error; closing channel");
+                    self.agent_bridges.remove(&channel);
+                    session.close(channel);
+                }
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (channel, data, session);
+        }
+        Ok(())
+    }
+
+    async fn channel_eof(
+        &mut self,
+        channel: russh::ChannelId,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        self.agent_bridges.remove(&channel);
+        Ok(())
+    }
+
+    async fn channel_close(
+        &mut self,
+        channel: russh::ChannelId,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        self.agent_bridges.remove(&channel);
+        Ok(())
+    }
+}
+
+// =====================================================================
+// SSH agent forwarding — serving side (bridge to the local OS agent)
+// =====================================================================
+//
+// With agent forwarding on, we advertise acceptance on the session channel
+// (`channel.agent_forward(false)`); the server then opens
+// `auth-agent@openssh.com` channels carrying the raw, length-prefixed
+// SSH-agent protocol. Each complete framed request from the server is
+// written verbatim to the local agent and the agent's framed reply is sent
+// back on the channel — a transparent byte relay (we never parse the
+// protocol).
+//
+// ⚠️ Unproven until tested live: relies on russh 0.45's
+// `server_channel_open_agent_forward` + `data` callbacks and the OS agent
+// transport (Windows named pipe / unix `$SSH_AUTH_SOCK`). Test: connect
+// with agent forwarding enabled, then run `ssh-add -l` on the remote — it
+// should list the *local* agent's keys.
+
+/// Largest single agent message we'll relay (sanity bound; real ones are tiny).
+const AGENT_MSG_CAP: usize = 256 * 1024;
+
+#[cfg(any(unix, windows))]
+trait AgentIo: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
+#[cfg(any(unix, windows))]
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> AgentIo for T {}
+
+/// One live agent-forward relay: the OS-agent connection plus an inbound
+/// accumulator for reassembling length-prefixed agent requests.
+struct AgentBridge {
+    #[cfg(any(unix, windows))]
+    io: tokio::sync::Mutex<Box<dyn AgentIo>>,
+    inbuf: Vec<u8>,
+}
+
+#[cfg(any(unix, windows))]
+async fn open_os_agent() -> std::io::Result<Box<dyn AgentIo>> {
+    #[cfg(unix)]
+    {
+        let sock = std::env::var("SSH_AUTH_SOCK").map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "SSH_AUTH_SOCK not set")
+        })?;
+        let s = tokio::net::UnixStream::connect(sock).await?;
+        Ok(Box::new(s))
+    }
+    #[cfg(windows)]
+    {
+        use tokio::net::windows::named_pipe::ClientOptions;
+        let pipe = ClientOptions::new().open(r"\\.\pipe\openssh-ssh-agent")?;
+        Ok(Box::new(pipe))
+    }
+}
+
+impl AgentBridge {
+    /// Feed bytes received from the server: forward every complete framed
+    /// request to the agent and collect the framed replies to send back.
+    #[cfg(any(unix, windows))]
+    async fn pump(&mut self, incoming: &[u8]) -> std::io::Result<Vec<Vec<u8>>> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        self.inbuf.extend_from_slice(incoming);
+        let mut replies = Vec::new();
+        loop {
+            if self.inbuf.len() < 4 {
+                break;
+            }
+            let len = u32::from_be_bytes([
+                self.inbuf[0],
+                self.inbuf[1],
+                self.inbuf[2],
+                self.inbuf[3],
+            ]) as usize;
+            if len > AGENT_MSG_CAP {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "agent request too large",
+                ));
+            }
+            if self.inbuf.len() < 4 + len {
+                break; // wait for the rest of this message
+            }
+            let req: Vec<u8> = self.inbuf.drain(0..4 + len).collect();
+            // `&mut self`, so `get_mut` gives direct access without an async
+            // lock (the Mutex exists only to keep the handler `Sync`). Taken
+            // after the drain so it doesn't overlap the `self.inbuf` borrow.
+            let io = self.io.get_mut();
+            io.write_all(&req).await?;
+            io.flush().await?;
+            // Read the framed reply (4-byte length + payload).
+            let mut lenbuf = [0u8; 4];
+            io.read_exact(&mut lenbuf).await?;
+            let rlen = u32::from_be_bytes(lenbuf) as usize;
+            if rlen > AGENT_MSG_CAP {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "agent reply too large",
+                ));
+            }
+            let mut payload = vec![0u8; rlen];
+            io.read_exact(&mut payload).await?;
+            let mut reply = Vec::with_capacity(4 + rlen);
+            reply.extend_from_slice(&lenbuf);
+            reply.extend_from_slice(&payload);
+            replies.push(reply);
+        }
+        Ok(replies)
     }
 }
 
@@ -390,6 +588,11 @@ enum ConnectOutcome {
     Err(SshError),
 }
 
+/// Hard ceiling on the connect+handshake phase. A dead host (no SYN-ACK)
+/// would otherwise hang on the OS-level TCP timeout (minutes on Windows);
+/// this surfaces a clean timeout error to the UI instead.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Drive a connect future to completion while forwarding the user's
 /// host-key trust decisions into the handler's channel. Used for the
 /// target (direct or over a bastion stream); the bastion auto-accepts and
@@ -405,6 +608,8 @@ where
     F: std::future::Future<Output = Result<russh::client::Handle<ClientHandler>, SshError>>,
 {
     tokio::pin!(fut);
+    let deadline = tokio::time::sleep(CONNECT_TIMEOUT);
+    tokio::pin!(deadline);
     loop {
         tokio::select! {
             res = &mut fut => {
@@ -429,6 +634,12 @@ where
                 }
                 Some(_) => {}
             },
+            _ = &mut deadline => {
+                return ConnectOutcome::Err(SshError::Network(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "connection timed out",
+                )));
+            }
         }
     }
 }
@@ -483,6 +694,8 @@ async fn connect_and_pump(
         known: params.known_hosts.clone(),
         events: events.clone(),
         decisions: dec_rx,
+        agent_forward: params.agent_forwarding,
+        agent_bridges: std::collections::HashMap::new(),
     };
 
     // Keep the bastion handle alive for the whole session (its channel
@@ -509,14 +722,31 @@ async fn connect_and_pump(
             known: params.known_hosts.clone(),
             events: events.clone(),
             decisions: bdec_rx,
+            agent_forward: false,
+            agent_bridges: std::collections::HashMap::new(),
         };
         drop(bdec_tx); // auto_accept never awaits a decision
-        let mut bastion = russh::client::connect(
-            config.clone(),
-            (jump.hostname.as_str(), jump.port),
-            bastion_handler,
+        // A dead/unreachable bastion would otherwise hang on the OS-level TCP
+        // timeout (minutes on Windows). Bound it like the direct path so the
+        // UI gets a clean timeout instead.
+        let mut bastion = match tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            russh::client::connect(
+                config.clone(),
+                (jump.hostname.as_str(), jump.port),
+                bastion_handler,
+            ),
         )
-        .await?;
+        .await
+        {
+            Ok(r) => r?,
+            Err(_) => {
+                return Err(SshError::Network(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "jump host connection timed out",
+                )))
+            }
+        };
         if !try_all_auth(&mut bastion, jump.credentials).await? {
             return Err(SshError::AuthFailed {
                 method: "jump".into(),
@@ -594,12 +824,9 @@ async fn connect_and_pump(
 
     // Agent forwarding (`ssh -A`): tell the server we'll accept
     // `auth-agent@openssh.com` back-channels. want_reply=false so a server
-    // that disallows it can't fail the channel.
-    //
-    // NOTE: the serving side (bridging the server's back-channels to the
-    // local agent) is a follow-up — russh delivers those channels via the
-    // `data()` callback keyed by `ChannelId`, which needs stateful relay
-    // wiring. For now we only advertise acceptance.
+    // that disallows it can't fail the channel. The serving side (bridging
+    // those channels to the local OS agent) is implemented in the handler's
+    // `server_channel_open_agent_forward` / `data` callbacks.
     // NOTE (russh version-sensitive): `Channel::agent_forward(want_reply)`.
     if params.agent_forwarding {
         if let Err(e) = channel.agent_forward(false).await {

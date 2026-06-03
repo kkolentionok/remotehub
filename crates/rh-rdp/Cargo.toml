@@ -28,6 +28,9 @@ image = "0.25"
 base64 = "0.22"
 # Parallel tile encoding (one frame's regions compressed across all cores).
 rayon = "1"
+# TCP keepalive so a silently-dropped session (e.g. another user took over)
+# surfaces as a read error instead of a frozen picture.
+socket2 = "0.6"
 
 # --- Connectivity spike (round 2a) — example-only deps ------------------
 [dev-dependencies]

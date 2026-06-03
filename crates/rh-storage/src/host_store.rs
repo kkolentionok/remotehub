@@ -217,19 +217,15 @@ impl HostStore for SqliteHostStore {
 
     #[instrument(level = "debug", skip(self), fields(host_id = %id))]
     async fn delete(&self, id: &HostId) -> Result<(), StorageError> {
-        let result = sqlx::query("DELETE FROM hosts WHERE id = ?")
+        // Idempotent: a host that's already gone still satisfies the desired
+        // postcondition. This also avoids a misleading error if a delete
+        // double-fires — the first wins, the second would otherwise see 0
+        // rows. Linked host_credentials rows are cleared by FK cascade.
+        sqlx::query("DELETE FROM hosts WHERE id = ?")
             .bind(id.as_str())
             .execute(self.db.pool())
             .await
             .map_err(map_err)?;
-
-        if result.rows_affected() == 0 {
-            return Err(StorageError::Backend(format!(
-                "host {} not found for delete",
-                id.as_str()
-            )));
-        }
-
         Ok(())
     }
 
