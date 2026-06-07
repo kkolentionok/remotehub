@@ -275,3 +275,25 @@
     font-weight: 600;
     color: var(--text-1);
 }
+
+/* full-width secondary action (Yandex) + "or" divider */
+.btnWide {
+    width: 100%;
+}
+.orRow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 14px 0;
+    color: var(--text-4);
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.orRow::before,
+.orRow::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--color-border);
+}

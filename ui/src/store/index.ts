@@ -50,6 +50,7 @@ import type {
     SessionState,
     Settings,
     SshSessionEvent,
+    SyncStatus,
 } from "../lib/types";
 import { formatApiError } from "../lib/types";
 import {
@@ -157,6 +158,13 @@ export type DialogKind =
     | { kind: "credential-delete-confirm"; credentialId: string }
     | { kind: "settings"; section?: string }
     /**
+     * Vault (master) password prompt for automatic sync. Shown after
+     * sign-in (and on every startup while signed in) until the user sets
+     * it. `mode` tweaks the copy: "set" first time, "fix" after a wrong
+     * password or a sync error.
+     */
+    | { kind: "sync-master"; mode?: "set" | "fix" }
+    /**
      * Discard-changes prompt shown when the user tries to navigate away
      * from a draft host that has at least one filled field but cannot
      * be auto-saved (typically because the required address is empty).
@@ -220,6 +228,9 @@ interface UiStore {
     launcherOpen: boolean;
     /** Active app section shown when no session tab is active. */
     section: "vault" | "tools";
+    /** Latest background-sync status (from the `sync:status` event), or null
+     *  before the first report. Surfaced quietly in the Vault scope dropdown. */
+    syncStatus: SyncStatus | null;
 
     selectHost: (id: HostId | null) => void;
     startDraft: (defaultGroupId?: GroupId | null) => void;
@@ -231,6 +242,7 @@ interface UiStore {
     toggleGroupCollapsed: (id: GroupId) => void;
     setLauncherOpen: (open: boolean) => void;
     setSection: (section: "vault" | "tools") => void;
+    setSyncStatus: (status: SyncStatus) => void;
 }
 
 function emptyDraft(defaultGroupId: GroupId | null = null): HostDraft {
@@ -262,6 +274,7 @@ export const useUiStore = create<UiStore>((set) => ({
     collapsedGroupIds: new Set(),
     launcherOpen: false,
     section: "vault",
+    syncStatus: null,
 
     selectHost: (id) => set({ selectedHostId: id, draft: null }),
     startDraft: (defaultGroupId = null) =>
@@ -274,6 +287,7 @@ export const useUiStore = create<UiStore>((set) => ({
     setSearchQuery: (searchQuery) => set({ searchQuery }),
     setLauncherOpen: (launcherOpen) => set({ launcherOpen }),
     setSection: (section) => set({ section }),
+    setSyncStatus: (syncStatus) => set({ syncStatus }),
     toggleGroupCollapsed: (id) =>
         set((s) => {
             const next = new Set(s.collapsedGroupIds);

@@ -11,6 +11,7 @@ mod session;
 mod sftp_session;
 mod state;
 mod sync_clock;
+mod sync_engine;
 mod sync_remote;
 mod tray;
 
@@ -63,7 +64,13 @@ fn main() {
 
             match state {
                 Ok(s) => {
+                    // Hand the background auto-sync actor its own clone (cheap —
+                    // all-Arc) + the app handle for status events, then manage
+                    // the original. The actor idles until sync is configured.
+                    let sync_state = s.clone();
+                    let sync_app = app.handle().clone();
                     app.manage(s);
+                    tauri::async_runtime::spawn(crate::sync_engine::run_loop(sync_app, sync_state));
                     info!("storage initialized; app ready");
                     if let Err(e) = tray::build(&app.handle().clone()) {
                         error!(error = %e, "failed to build system tray");
@@ -121,7 +128,9 @@ fn main() {
             api::sync::sync_register,
             api::sync::sync_login,
             api::sync::sync_logout,
-            api::sync::sync_now,
+            api::sync::sync_oauth_yandex,
+            api::sync::sync_set_master,
+            api::sync::sync_status,
             api::settings::settings_update,
             // Sessions (Stage 2: SSH)
             api::sessions::session_open,

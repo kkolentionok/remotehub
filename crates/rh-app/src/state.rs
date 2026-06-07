@@ -13,11 +13,14 @@ use rh_core::{
     StorageError, SyncMetaStore,
 };
 
+use tokio::sync::{Mutex, Notify};
+
 use crate::local_pty::LocalPtyManager;
 use crate::rdp_session::RdpSessionManager;
 use crate::sftp_session::SftpManager;
 use crate::session::SessionManager;
 use crate::sync_clock::SyncClock;
+use crate::sync_engine::SyncStatusSnapshot;
 
 /// Bundle of every async store the command layer needs.
 ///
@@ -47,6 +50,17 @@ pub struct AppState {
     /// can see). Read by the tray Quit handler to decide whether to ask for
     /// confirmation, and mirrored into the tray tooltip.
     pub session_count: Arc<AtomicUsize>,
+    /// Background auto-sync coordination (slice 3d).
+    ///
+    /// `sync_wake` is pulsed by every local mutation (via `stamp_live` /
+    /// `stamp_deleted`) so the background sync actor can push promptly,
+    /// debounced. `sync_inflight` is a try-locked guard so periodic and
+    /// change-driven passes never overlap. `sync_status` holds the latest
+    /// status snapshot the UI can read on first paint (live updates arrive
+    /// via the `sync:status` event).
+    pub sync_wake: Arc<Notify>,
+    pub sync_inflight: Arc<Mutex<()>>,
+    pub sync_status: Arc<Mutex<SyncStatusSnapshot>>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -97,6 +111,9 @@ impl AppState {
             local_sessions: LocalPtyManager::new(),
             sftp: SftpManager::new(),
             session_count: Arc::new(AtomicUsize::new(0)),
+            sync_wake: Arc::new(Notify::new()),
+            sync_inflight: Arc::new(Mutex::new(())),
+            sync_status: Arc::new(Mutex::new(SyncStatusSnapshot::default())),
         }
     }
 
@@ -105,13 +122,19 @@ impl AppState {
     /// create/update mutation. `kind` is one of the `sync_clock::KIND_*`.
     pub async fn stamp_live(&self, kind: &str, id: &str) -> Result<(), StorageError> {
         let stamp = self.sync.next_stamp().await;
-        self.sync_meta.bump(kind, id, &stamp).await
+        self.sync_meta.bump(kind, id, &stamp).await?;
+        // A local edit happened — nudge the background sync actor (coalesced,
+        // debounced on its side). No-op if sync isn't configured yet.
+        self.sync_wake.notify_one();
+        Ok(())
     }
 
     /// Record a tombstone for a deleted record (so the deletion replicates).
     /// Call after a successful delete.
     pub async fn stamp_deleted(&self, kind: &str, id: &str) -> Result<(), StorageError> {
         let stamp = self.sync.next_stamp().await;
-        self.sync_meta.tombstone(kind, id, &stamp).await
+        self.sync_meta.tombstone(kind, id, &stamp).await?;
+        self.sync_wake.notify_one();
+        Ok(())
     }
 }

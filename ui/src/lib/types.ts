@@ -259,12 +259,28 @@ export interface SyncConfigResponse {
     endpoint: string;
     email: string | null;
     logged_in: boolean;
+    /** Whether the vault (master) password is cached for automatic sync. */
+    has_master: boolean;
 }
 
-/** Result of one sync pass (sync_now). */
+/** Result of one sync pass (run_sync_core). */
 export interface SyncNowResponse {
     had_remote: boolean;
     pushed_version: string;
+    hosts: number;
+    groups: number;
+    credentials: number;
+    deleted: number;
+}
+
+/** Live background-sync status (sync_status command + `sync:status` event). */
+export interface SyncStatus {
+    /** "idle" | "syncing" | "ok" | "error" */
+    state: string;
+    message: string | null;
+    /** Epoch ms of the last completed pass. */
+    at_ms: number | null;
+    had_remote: boolean;
     hosts: number;
     groups: number;
     credentials: number;

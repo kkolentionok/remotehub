@@ -8,6 +8,7 @@ import { ConfirmDialog } from "../dialog/ConfirmDialog";
 import { CredentialFormDialog } from "../dialog/CredentialFormDialog";
 import { CredentialsListDialog } from "../dialog/CredentialsListDialog";
 import { GroupFormDialog } from "../dialog/GroupFormDialog";
+import { SyncMasterDialog } from "../dialog/SyncMasterDialog";
 import { SettingsDialog } from "../settings/SettingsDialog";
 
 /**
@@ -140,6 +141,9 @@ export function DialogHost() {
 
         case "settings":
             return <SettingsDialog onClose={closeDialog} initialSection={dialog.section} />;
+
+        case "sync-master":
+            return <SyncMasterDialog open onClose={closeDialog} mode={dialog.mode} />;
 
         case "quit-confirm":
             return (

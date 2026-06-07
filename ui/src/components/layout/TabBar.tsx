@@ -39,6 +39,7 @@ export function TabBar() {
     const dragTabId = useSessionsStore((s) => s.dragTabId);
     const openLauncher = useUiStore((s) => s.setLauncherOpen);
     const setDialog = useUiStore((s) => s.setDialog);
+    const syncStatus = useUiStore((s) => s.syncStatus);
     const section = useUiStore((s) => s.section);
     const setSection = useUiStore((s) => s.setSection);
 
@@ -175,6 +176,22 @@ export function TabBar() {
                                 ? t("storage.syncedAs", { email: syncCfg.email ?? "" })
                                 : t("storage.notSignedIn")}
                         </div>
+                        {syncCfg?.logged_in && syncStatus && (
+                            <div className={styles.scopeHint}>
+                                {syncStatus.state === "syncing"
+                                    ? t("settings.sync.statusSyncing")
+                                    : syncStatus.state === "error"
+                                      ? t("settings.sync.statusError")
+                                      : syncStatus.state === "ok"
+                                        ? `${t("settings.sync.statusSynced")}${
+                                              syncStatus.at_ms
+                                                  ? " · " +
+                                                    new Date(syncStatus.at_ms).toLocaleTimeString()
+                                                  : ""
+                                          }`
+                                        : t("settings.sync.statusOn")}
+                            </div>
+                        )}
                         <button type="button" className={styles.scopeItem} disabled title={t("storage.teamLocked")}>
                             <Users size={14} />
                             <span>{t("storage.team")}</span>

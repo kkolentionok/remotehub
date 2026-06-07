@@ -1,0 +1,174 @@
+//! Background automatic sync (slice 3d).
+//!
+//! A single actor task, spawned once at startup, keeps the local vault in sync
+//! with the server with **no user interaction** beyond entering the vault
+//! (master) password once — which is then cached in the OS keychain
+//! (`sync_remote::vault_key_*`). The actor:
+//!
+//!   * runs one pass immediately on startup,
+//!   * runs a pass every [`PERIODIC_SECS`] (to pull in changes from other
+//!     devices), and
+//!   * runs a pass shortly after any local edit — woken via
+//!     [`AppState::sync_wake`], debounced by [`DEBOUNCE_MS`] so a burst of
+//!     edits collapses into a single push.
+//!
+//! A pass is a no-op (cheap, silent) until sync is fully configured: endpoint
+//! set + bearer token in the keychain + vault password cached. Overlapping
+//! passes are prevented by the `sync_inflight` try-lock. Each attempted pass
+//! updates `AppState::sync_status` and emits a `sync:status` event so the UI
+//! can surface a quiet status indicator.
+
+use std::time::Duration;
+
+use serde::Serialize;
+use tauri::{AppHandle, Emitter};
+use tracing::{debug, warn};
+
+use crate::state::AppState;
+use crate::sync_remote::{self, SyncConfig};
+
+/// Periodic pull cadence — catches edits made on other devices.
+const PERIODIC_SECS: u64 = 30;
+/// After a local edit wakes us, wait this long (collapsing further edits)
+/// before pushing, so rapid successive saves become one sync.
+const DEBOUNCE_MS: u64 = 1_500;
+
+/// Name of the Tauri event carrying [`SyncStatusSnapshot`] to the frontend.
+pub const STATUS_EVENT: &str = "sync:status";
+
+/// The latest sync status, mirrored into `AppState::sync_status` and emitted on
+/// every attempted pass. `state` is one of `idle` | `syncing` | `ok` | `error`.
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncStatusSnapshot {
+    pub state: String,
+    /// Human-readable error (only when `state == "error"`).
+    pub message: Option<String>,
+    /// Epoch ms of the last completed pass (`ok` or `error`).
+    pub at_ms: Option<i64>,
+    pub had_remote: bool,
+    pub hosts: u32,
+    pub groups: u32,
+    pub credentials: u32,
+    pub deleted: u32,
+}
+
+impl Default for SyncStatusSnapshot {
+    fn default() -> Self {
+        Self {
+            state: "idle".to_string(),
+            message: None,
+            at_ms: None,
+            had_remote: false,
+            hosts: 0,
+            groups: 0,
+            credentials: 0,
+            deleted: 0,
+        }
+    }
+}
+
+/// Store `snap` in `AppState::sync_status` and emit it to the UI.
+async fn publish(app: &AppHandle, state: &AppState, snap: SyncStatusSnapshot) {
+    {
+        let mut guard = state.sync_status.lock().await;
+        *guard = snap.clone();
+    }
+    if let Err(e) = app.emit(STATUS_EVENT, &snap) {
+        debug!(error = %e, "failed to emit sync:status");
+    }
+}
+
+/// True when sync is fully configured (endpoint + token + cached vault key).
+/// Returned tuple is `(endpoint, token, master)` ready to drive a pass.
+fn ready() -> Option<(String, String, String)> {
+    let cfg = SyncConfig::load();
+    if cfg.endpoint.is_empty() {
+        return None;
+    }
+    let token = sync_remote::token_get()?;
+    let master = sync_remote::vault_key_get()?;
+    Some((cfg.endpoint, token, master))
+}
+
+/// Run one sync pass if configured and not already running. Silent + cheap when
+/// not configured (no event, status untouched).
+async fn run_pass(app: &AppHandle, state: &AppState) {
+    let Some((endpoint, token, master)) = ready() else {
+        return; // not signed in / no master yet — stay quiet
+    };
+
+    // Never overlap a periodic pass with a change-driven one.
+    let _guard = match state.sync_inflight.try_lock() {
+        Ok(g) => g,
+        Err(_) => {
+            debug!("sync pass skipped: another pass in flight");
+            return;
+        }
+    };
+
+    publish(
+        app,
+        state,
+        SyncStatusSnapshot {
+            state: "syncing".to_string(),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    match crate::api::sync::run_sync_core(state, &endpoint, &token, &master).await {
+        Ok(resp) => {
+            debug!(version = %resp.pushed_version, "auto-sync ok");
+            publish(
+                app,
+                state,
+                SyncStatusSnapshot {
+                    state: "ok".to_string(),
+                    message: None,
+                    at_ms: Some(now_ms),
+                    had_remote: resp.had_remote,
+                    hosts: resp.hosts,
+                    groups: resp.groups,
+                    credentials: resp.credentials,
+                    deleted: resp.deleted,
+                },
+            )
+            .await;
+        }
+        Err(e) => {
+            let message = e.to_string();
+            warn!(error = %message, "auto-sync failed");
+            publish(
+                app,
+                state,
+                SyncStatusSnapshot {
+                    state: "error".to_string(),
+                    message: Some(message),
+                    at_ms: Some(now_ms),
+                    ..Default::default()
+                },
+            )
+            .await;
+        }
+    }
+}
+
+/// The actor loop. Spawned once from `main.rs` setup with a clone of the
+/// managed [`AppState`] and the app handle. Never returns.
+pub async fn run_loop(app: AppHandle, state: AppState) {
+    let mut ticker = tokio::time::interval(Duration::from_secs(PERIODIC_SECS));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    loop {
+        tokio::select! {
+            // First tick fires immediately → startup sync. Then every cadence.
+            _ = ticker.tick() => {}
+            // A local edit happened. Debounce so a burst collapses into one pass.
+            _ = state.sync_wake.notified() => {
+                tokio::time::sleep(Duration::from_millis(DEBOUNCE_MS)).await;
+            }
+        }
+        run_pass(&app, &state).await;
+    }
+}

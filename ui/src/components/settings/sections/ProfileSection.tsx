@@ -1,14 +1,13 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import {
     AlertCircle,
     Check,
     Eye,
     EyeOff,
-    Folder,
     KeyRound,
     Loader2,
+    LogIn,
     LogOut,
-    RefreshCw,
     Server,
     ShieldCheck,
     UserCircle2,
@@ -16,33 +15,27 @@ import {
 
 import { useT } from "../../../i18n";
 import { sync } from "../../../lib/ipc";
-import {
-    formatApiError,
-    type SyncConfigResponse,
-    type SyncNowResponse,
-} from "../../../lib/types";
-import {
-    useCredentialsStore,
-    useGroupsStore,
-    useHostsStore,
-} from "../../../store";
+import { formatApiError, type SyncConfigResponse } from "../../../lib/types";
+import { useUiStore } from "../../../store";
 import dlg from "../SettingsDialog.module.css";
 import s from "./ProfileSection.module.css";
 
 /**
- * Account & Sync (the former "Profile" placeholder). Two states:
- *   - signed out → set the server endpoint + email/password, log in or create
- *     an account (the bearer token is stored in the OS keychain by the backend).
- *   - signed in → enter the *vault* password (the E2E key, same one used for
- *     encrypted export — never sent to the server) and "Sync now". Status shows
- *     idle / syncing / merged-or-first-push with per-type counts.
+ * Account & Sync. Two states:
+ *   - signed out → set the server endpoint + email/password, log in / create an
+ *     account, or sign in with Yandex (the bearer token is stored in the OS
+ *     keychain by the backend).
+ *   - signed in → sync is fully automatic. We only show the live status; the
+ *     vault (master) password is entered once via a modal (prompted on sign-in
+ *     and each launch until set) and cached in the keychain. No "Sync now".
  *
- * Endpoint/email/account-password and the vault password are deliberately
- * separate: the account password authenticates to the server; the vault
- * password seals the data the server can never read.
+ * The account password authenticates to the server; the vault password seals
+ * the data the server can never read — they are deliberately separate.
  */
 export function ProfileSection() {
     const { t } = useT();
+    const setDialog = useUiStore((st) => st.setDialog);
+    const syncStatus = useUiStore((st) => st.syncStatus);
 
     const [cfg, setCfg] = useState<SyncConfigResponse | null>(null);
     const [loading, setLoading] = useState(true);
@@ -51,14 +44,8 @@ export function ProfileSection() {
     const [endpoint, setEndpoint] = useState("");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
-    const [authBusy, setAuthBusy] = useState<"login" | "register" | null>(null);
+    const [authBusy, setAuthBusy] = useState<"login" | "register" | "yandex" | null>(null);
     const [authError, setAuthError] = useState<string | null>(null);
-
-    // sync
-    const [master, setMaster] = useState("");
-    const [phase, setPhase] = useState<"idle" | "working" | "done" | "error">("idle");
-    const [result, setResult] = useState<SyncNowResponse | null>(null);
-    const [syncError, setSyncError] = useState<string | null>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -82,6 +69,7 @@ export function ProfileSection() {
 
     const trimmedEndpoint = endpoint.trim();
     const canAuth = !!trimmedEndpoint && !!email.trim() && !!password && !authBusy;
+    const canYandex = !!trimmedEndpoint && !authBusy;
 
     async function refresh() {
         const c = await sync.getConfig();
@@ -99,6 +87,27 @@ export function ProfileSection() {
             await sync.login(email.trim(), password);
             setPassword("");
             await refresh();
+            // Prompt for the vault password immediately after sign-in.
+            const c = await sync.getConfig();
+            if (c.logged_in && !c.has_master) setDialog({ kind: "sync-master", mode: "set" });
+        } catch (e: unknown) {
+            setAuthError(formatApiError(e));
+        } finally {
+            setAuthBusy(null);
+        }
+    }
+
+    async function doYandex() {
+        if (!canYandex) return;
+        setAuthBusy("yandex");
+        setAuthError(null);
+        try {
+            await sync.setEndpoint(trimmedEndpoint);
+            const c = await sync.oauthYandex();
+            setCfg(c);
+            setEmail(c.email ?? "");
+            setPassword("");
+            if (c.logged_in && !c.has_master) setDialog({ kind: "sync-master", mode: "set" });
         } catch (e: unknown) {
             setAuthError(formatApiError(e));
         } finally {
@@ -108,31 +117,7 @@ export function ProfileSection() {
 
     async function doLogout() {
         await sync.logout();
-        setMaster("");
-        setPhase("idle");
-        setResult(null);
-        setSyncError(null);
         await refresh();
-    }
-
-    async function doSync() {
-        if (!master || phase === "working") return;
-        setPhase("working");
-        setSyncError(null);
-        try {
-            const r = await sync.now(master);
-            setResult(r);
-            setPhase("done");
-            // apply_snapshot may have changed local data — refetch collections.
-            await Promise.all([
-                useHostsStore.getState().load(),
-                useGroupsStore.getState().load(),
-                useCredentialsStore.getState().load(),
-            ]);
-        } catch (e: unknown) {
-            setSyncError(formatApiError(e));
-            setPhase("error");
-        }
     }
 
     if (loading) {
@@ -152,7 +137,9 @@ export function ProfileSection() {
                             <UserCircle2 size={22} />
                         </span>
                         <div className={s.idMeta}>
-                            <div className={s.idName}>{cfg.email ?? t("settings.sync.signedIn")}</div>
+                            <div className={s.idName}>
+                                {cfg.email ?? t("settings.sync.signedIn")}
+                            </div>
                             <div className={s.idSub}>
                                 <Server size={11} /> {cfg.endpoint}
                             </div>
@@ -162,74 +149,30 @@ export function ProfileSection() {
                         </button>
                     </div>
 
-                    {/* sync now */}
-                    <div className={s.field}>
-                        <div className={s.fieldL}>
-                            <KeyRound size={12} /> {t("settings.sync.vaultPassword")}
+                    {/* auto-sync status (or a prompt to set the vault password) */}
+                    {!cfg.has_master ? (
+                        <div className={s.idCard}>
+                            <span className={s.idIc}>
+                                <KeyRound size={20} />
+                            </span>
+                            <div className={s.idMeta}>
+                                <div className={s.idName}>{t("settings.sync.setMaster")}</div>
+                                <div className={s.idSub}>{t("settings.sync.masterNeeded")}</div>
+                            </div>
+                            <button
+                                className={`${s.btn} ${s.btnPrimary}`}
+                                onClick={() => setDialog({ kind: "sync-master", mode: "set" })}
+                            >
+                                {t("settings.sync.setMaster")}
+                            </button>
                         </div>
-                        <Pw
-                            value={master}
-                            onChange={(v) => {
-                                setMaster(v);
-                                if (phase === "error") setPhase("idle");
-                            }}
-                            placeholder={t("settings.sync.vaultPasswordPlaceholder")}
-                            onEnter={() => void doSync()}
-                            err={phase === "error"}
+                    ) : (
+                        <SyncStatusCard
+                            state={syncStatus?.state ?? "idle"}
+                            atMs={syncStatus?.at_ms ?? null}
+                            message={syncStatus?.message ?? null}
+                            onFix={() => setDialog({ kind: "sync-master", mode: "fix" })}
                         />
-                        <div className={s.hint}>{t("settings.sync.vaultPasswordHint")}</div>
-                    </div>
-
-                    <div className={s.actions}>
-                        <button
-                            className={`${s.btn} ${s.btnPrimary}`}
-                            disabled={!master || phase === "working"}
-                            onClick={() => void doSync()}
-                        >
-                            {phase === "working" ? (
-                                <>
-                                    <Loader2 size={16} className={s.spin} /> {t("settings.sync.syncing")}
-                                </>
-                            ) : (
-                                <>
-                                    <RefreshCw size={15} /> {t("settings.sync.syncNow")}
-                                </>
-                            )}
-                        </button>
-                    </div>
-
-                    {phase === "error" && syncError && (
-                        <div className={s.errLine}>
-                            <AlertCircle size={14} /> {syncError}
-                        </div>
-                    )}
-
-                    {phase === "done" && result && (
-                        <div className={s.result}>
-                            <div className={s.resultHead}>
-                                <span className={s.resultBadge}>
-                                    <Check size={16} />
-                                </span>
-                                <div>
-                                    <div className={s.resultT}>{t("settings.sync.syncedTitle")}</div>
-                                    <div className={s.resultS}>
-                                        {result.had_remote
-                                            ? t("settings.sync.syncedMerged")
-                                            : t("settings.sync.syncedFirst")}
-                                    </div>
-                                </div>
-                                <span className={s.ver}>v{result.pushed_version}</span>
-                            </div>
-                            <div className={s.prev}>
-                                <Row icon={<Server size={15} />} label={t("settings.sync.rowHosts")} n={result.hosts} />
-                                <Row icon={<Folder size={15} />} label={t("settings.sync.rowGroups")} n={result.groups} />
-                                <Row
-                                    icon={<KeyRound size={15} />}
-                                    label={t("settings.sync.rowCreds")}
-                                    n={result.credentials}
-                                />
-                            </div>
-                        </div>
                     )}
                 </div>
             ) : (
@@ -300,7 +243,8 @@ export function ProfileSection() {
                         >
                             {authBusy === "login" ? (
                                 <>
-                                    <Loader2 size={16} className={s.spin} /> {t("settings.sync.loggingIn")}
+                                    <Loader2 size={16} className={s.spin} />{" "}
+                                    {t("settings.sync.loggingIn")}
                                 </>
                             ) : (
                                 <>
@@ -315,25 +259,83 @@ export function ProfileSection() {
                         >
                             {authBusy === "register" ? (
                                 <>
-                                    <Loader2 size={16} className={s.spin} /> {t("settings.sync.registering")}
+                                    <Loader2 size={16} className={s.spin} />{" "}
+                                    {t("settings.sync.registering")}
                                 </>
                             ) : (
                                 t("settings.sync.register")
                             )}
                         </button>
                     </div>
+
+                    <div className={s.orRow}>
+                        <span>{t("settings.sync.or")}</span>
+                    </div>
+                    <button
+                        className={`${s.btn} ${s.btnGhost} ${s.btnWide}`}
+                        disabled={!canYandex}
+                        onClick={() => void doYandex()}
+                    >
+                        {authBusy === "yandex" ? (
+                            <>
+                                <Loader2 size={16} className={s.spin} />{" "}
+                                {t("settings.sync.yandexBusy")}
+                            </>
+                        ) : (
+                            <>
+                                <LogIn size={15} /> {t("settings.sync.yandex")}
+                            </>
+                        )}
+                    </button>
                 </div>
             )}
         </div>
     );
 }
 
-function Row({ icon, label, n }: { icon: ReactNode; label: string; n: number }) {
+function SyncStatusCard({
+    state,
+    atMs,
+    message,
+    onFix,
+}: {
+    state: string;
+    atMs: number | null;
+    message: string | null;
+    onFix: () => void;
+}) {
+    const { t } = useT();
+    const time = atMs ? new Date(atMs).toLocaleTimeString() : null;
+
+    let icon = <ShieldCheck size={20} />;
+    let title = t("settings.sync.statusOn");
+    let sub: string | null = null;
+
+    if (state === "syncing") {
+        icon = <Loader2 size={20} className={s.spin} />;
+        title = t("settings.sync.statusSyncing");
+    } else if (state === "ok") {
+        icon = <Check size={20} />;
+        title = t("settings.sync.statusSynced");
+        sub = time;
+    } else if (state === "error") {
+        icon = <AlertCircle size={20} />;
+        title = t("settings.sync.statusError");
+        sub = message;
+    }
+
     return (
-        <div className={s.prevRow}>
-            <span className={s.prevIc}>{icon}</span>
-            <span className={s.prevNm}>{label}</span>
-            <span className={s.prevN}>{n}</span>
+        <div className={s.idCard}>
+            <span className={s.idIc}>{icon}</span>
+            <div className={s.idMeta}>
+                <div className={s.idName}>{title}</div>
+                {sub && <div className={s.idSub}>{sub}</div>}
+            </div>
+            {state === "error" && (
+                <button className={`${s.btn} ${s.btnGhost}`} onClick={onFix}>
+                    {t("settings.sync.fix")}
+                </button>
+            )}
         </div>
     );
 }

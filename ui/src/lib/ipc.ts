@@ -60,7 +60,7 @@ import type {
     VaultImportResponse,
     VaultFileResponse,
     SyncConfigResponse,
-    SyncNowResponse,
+    SyncStatus,
 } from "./types";
 import {
     EVENT_CREDENTIALS_CHANGED,
@@ -500,10 +500,16 @@ export const sync = {
         call("sync_login", { email, password }),
     /** Forget the stored token. */
     logout: (): Promise<void> => call("sync_logout"),
-    /** Run one sync: build → merge with server → apply. `master_password`
-     *  seals/opens the E2E envelope and never leaves the device. */
-    now: (master_password: string): Promise<SyncNowResponse> =>
-        call("sync_now", { master_password }),
+    /** Desktop Yandex sign-in (opens the browser; resolves once the loopback
+     *  catches the token). May take a while — the user completes consent. */
+    oauthYandex: (): Promise<SyncConfigResponse> => call("sync_oauth_yandex"),
+    /** Cache the vault (master) password so automatic sync runs unattended.
+     *  Validated by a real pass — rejects on a wrong password. */
+    setMaster: (master_password: string): Promise<SyncConfigResponse> =>
+        call("sync_set_master", { master_password }),
+    /** Current background-sync status (for first paint; live updates arrive
+     *  via the `sync:status` event). */
+    status: (): Promise<SyncStatus> => call("sync_status"),
 };
 
 // =====================================================================

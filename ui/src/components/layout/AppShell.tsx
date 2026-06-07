@@ -12,7 +12,8 @@ import {
     useUiStore,
 } from "../../store";
 import { leafKeys } from "../../lib/paneTree";
-import { app as appApi } from "../../lib/ipc";
+import { app as appApi, sync as syncApi } from "../../lib/ipc";
+import type { SyncStatus } from "../../lib/types";
 import { DialogHost } from "./DialogHost";
 import { FocusRail } from "../session/FocusRail";
 import { HomeView } from "./HomeView";
@@ -138,6 +139,43 @@ export function AppShell() {
     useEffect(() => {
         void appApi.reportSessions(sessionCount);
     }, [sessionCount]);
+
+    // Background auto-sync: mirror live status into the store, seed it with the
+    // current snapshot, and — if signed in but the vault password isn't set yet
+    // — prompt for it. The prompt reappears each launch until they set it.
+    useEffect(() => {
+        let unlisten: (() => void) | undefined;
+        void (async () => {
+            try {
+                const status = await syncApi.status();
+                useUiStore.getState().setSyncStatus(status);
+            } catch {
+                /* status is best-effort */
+            }
+            try {
+                const cfg = await syncApi.getConfig();
+                if (cfg.logged_in && !cfg.has_master) {
+                    useUiStore.getState().setDialog({ kind: "sync-master", mode: "set" });
+                }
+            } catch {
+                /* not configured yet */
+            }
+            const { listen } = await import("@tauri-apps/api/event");
+            unlisten = await listen<SyncStatus>("sync:status", (e) => {
+                const st = e.payload;
+                useUiStore.getState().setSyncStatus(st);
+                // A completed pass may have applied remote changes to local
+                // storage (apply_snapshot writes directly, without CRUD
+                // events) — refresh the collections so the UI reflects them.
+                if (st.state === "ok" && st.had_remote) {
+                    void useHostsStore.getState().load();
+                    void useGroupsStore.getState().load();
+                    void useCredentialsStore.getState().load();
+                }
+            });
+        })();
+        return () => unlisten?.();
+    }, []);
 
     useEffect(() => {
         if (!settingsLanguage) return;

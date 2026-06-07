@@ -18,6 +18,11 @@ use crate::paths;
 
 const KEYCHAIN_SERVICE: &str = "RemoteHub";
 const KEYCHAIN_TOKEN_KEY: &str = "sync-token";
+/// The user's vault (master) password, cached for automatic sync (slice 3d).
+/// Stored in the OS keychain alongside the bearer token and all other secrets,
+/// so the background actor can seal/open the E2E envelope without prompting.
+/// Cleared on logout.
+const KEYCHAIN_VAULT_KEY: &str = "sync-vault-key";
 const CONFIG_FILE: &str = "sync-config.json";
 
 /// The managed sync service, used by default on a fresh install. Self-hosters
@@ -91,6 +96,26 @@ pub fn token_clear() {
     }
 }
 
+/// Read the cached vault (master) password used for automatic sync.
+pub fn vault_key_get() -> Option<String> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_VAULT_KEY)
+        .ok()?
+        .get_password()
+        .ok()
+}
+
+/// Cache the vault (master) password in the OS keychain (overwrites).
+pub fn vault_key_set(password: &str) -> Result<(), keyring::Error> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_VAULT_KEY)?.set_password(password)
+}
+
+/// Forget the cached vault password. Idempotent. Called on logout.
+pub fn vault_key_clear() {
+    if let Ok(entry) = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_VAULT_KEY) {
+        let _ = entry.delete_credential();
+    }
+}
+
 /// `POST /v1/register`. Returns a human-readable error string on failure.
 pub async fn server_register(endpoint: &str, email: &str, password: &str) -> Result<(), String> {
     let resp = reqwest::Client::new()
@@ -127,6 +152,108 @@ pub async fn server_login(endpoint: &str, email: &str, password: &str) -> Result
         .and_then(|t| t.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| "login response had no token".to_string())
+}
+
+/// `GET /v1/me` → the account's email (for "signed in as …" after OAuth).
+pub async fn server_me(endpoint: &str, token: &str) -> Result<String, String> {
+    let resp = reqwest::Client::new()
+        .get(format!("{endpoint}/v1/me"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("me failed: HTTP {}", resp.status().as_u16()));
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("bad me response: {e}"))?;
+    body.get("email")
+        .and_then(|e| e.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "me response had no email".to_string())
+}
+
+/// Run the desktop Yandex sign-in: bind a one-shot loopback listener, open the
+/// system browser at the server's `/v1/oauth/yandex/start?cb=…`, and wait for
+/// the server to redirect the bearer token back to our loopback. Returns the
+/// token. The OAuth client secret never touches this process — the server
+/// holds it and only hands us our own token.
+pub async fn run_yandex_login(endpoint: &str) -> Result<String, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| format!("could not open loopback listener: {e}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| e.to_string())?
+        .port();
+    let cb = format!("http://127.0.0.1:{port}/cb");
+
+    let start_url = format!(
+        "{endpoint}/v1/oauth/yandex/start?cb={}",
+        urlencoding::encode(&cb)
+    );
+    open::that(&start_url).map_err(|e| format!("could not open browser: {e}"))?;
+
+    // Wait for exactly one callback hit (the user completing consent), bounded.
+    let (mut sock, _peer) =
+        tokio::time::timeout(std::time::Duration::from_secs(180), listener.accept())
+            .await
+            .map_err(|_| "sign-in timed out".to_string())?
+            .map_err(|e| format!("accept failed: {e}"))?;
+
+    // The request line — `GET /cb?token=…&… HTTP/1.1` — sits at the very start,
+    // so a single read is enough for a bare GET on loopback.
+    let mut buf = [0u8; 8192];
+    let n = sock
+        .read(&mut buf)
+        .await
+        .map_err(|e| format!("read failed: {e}"))?;
+    let req = String::from_utf8_lossy(&buf[..n]);
+    let line = req.lines().next().unwrap_or("");
+    let query = line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|path| path.split('?').nth(1))
+        .unwrap_or("");
+
+    let mut token: Option<String> = None;
+    let mut err: Option<String> = None;
+    for pair in query.split('&') {
+        let mut it = pair.splitn(2, '=');
+        match (it.next(), it.next()) {
+            (Some("token"), Some(v)) => token = Some(urldecode(v)),
+            (Some("error"), Some(v)) => err = Some(urldecode(v)),
+            _ => {}
+        }
+    }
+
+    let body = "<!doctype html><meta charset=utf-8><body style=\"font-family:system-ui;\
+        background:#0a0a0d;color:#e6e6e6;display:flex;align-items:center;justify-content:center;\
+        height:100vh;margin:0\"><div style=\"text-align:center\"><h2>RemoteHub</h2>\
+        <p>You can close this window and return to the app.</p></div>";
+    let resp = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let _ = sock.write_all(resp.as_bytes()).await;
+    let _ = sock.flush().await;
+
+    if let Some(e) = err {
+        return Err(e);
+    }
+    token.ok_or_else(|| "no token in the OAuth callback".to_string())
+}
+
+fn urldecode(s: &str) -> String {
+    urlencoding::decode(s)
+        .map(|c| c.into_owned())
+        .unwrap_or_else(|_| s.to_string())
 }
 
 /// The `SyncRemote` backed by `rh-sync-server` over HTTP.

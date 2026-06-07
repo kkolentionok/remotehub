@@ -23,6 +23,10 @@ portable-pty = "0.8"
 # the OS keychain. rustls so no native TLS toolchain is needed on Windows.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 keyring.workspace = true
+# Yandex OAuth desktop flow (3b-oauth): open the system browser + a one-shot
+# loopback listener catches the redirected bearer token.
+open = "5"
+urlencoding = "2"
 
 tauri = { workspace = true, features = ["devtools", "tray-icon"] }
 
