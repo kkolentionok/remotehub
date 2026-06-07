@@ -66,6 +66,7 @@ async fn main() {
         .route("/v1/register", post(routes::register))
         .route("/v1/login", post(routes::login))
         .route("/v1/vault", get(routes::get_vault).put(routes::put_vault))
+        .route("/v1/me", get(routes::me))
         .route("/v1/oauth/yandex/start", get(routes::oauth_yandex_start))
         .route("/v1/oauth/yandex/callback", get(routes::oauth_yandex_callback))
         .route("/v1/verify", get(routes::verify))

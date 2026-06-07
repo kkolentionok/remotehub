@@ -382,3 +382,29 @@ fn append_param(url: &str, key: &str, value: &str) -> String {
     let sep = if url.contains('?') { '&' } else { '?' };
     format!("{url}{sep}{key}={}", urlencoding::encode(value))
 }
+
+#[derive(Serialize)]
+pub struct MeResp {
+    pub email: String,
+    pub email_verified: bool,
+}
+
+/// The authenticated account's email + verification flag. Used by the desktop
+/// app to display "signed in as …" after an OAuth login (where it never typed
+/// an email).
+pub async fn me(
+    State(st): State<AppState>,
+    AuthAccount(account): AuthAccount,
+) -> Result<Json<MeResp>, AppError> {
+    let row = sqlx::query_as::<_, (String, i64)>(
+        "SELECT email, email_verified FROM accounts WHERE id = ?",
+    )
+    .bind(&account)
+    .fetch_optional(&st.pool)
+    .await?;
+    let (email, verified) = row.ok_or(AppError::Unauthorized)?;
+    Ok(Json(MeResp {
+        email,
+        email_verified: verified != 0,
+    }))
+}
