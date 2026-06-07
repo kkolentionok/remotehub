@@ -142,7 +142,8 @@ docs/specs/{system-overview,data-model,tauri-api,session-protocol,ssh-session,rd
 
 - **Stages 1.x** ✅ — SQLite + keychain + IPC + dense UI: host/group/credential CRUD, live-save, draft mode, i18n, settings dialog + language toggle.
 - **SSH (Stage 2) + hardening** ✅ — session actors (russh), PTY + scrollback, restore-on-reload, TOFU/known_hosts + management UI, SSH-agent auth, env passthrough, keepalive, OS auto-detect, last-connected, **ProxyJump**, agent-forwarding **request-only** (serving side = backlog/spike).
-- **RDP (Stage 4)** ✅ up to **mouse** — IronRDP 3-thread actor, region-diff, PNG/JPEG hybrid, native-res + fullscreen, RDP cert TOFU. **Keyboard NOT wired** (the headline "dessert"; spike `Scancode` + modifier-sync). Doc: `docs/specs/rdp-pipeline.md`.
+- **RDP (Stage 4)** ✅ — IronRDP 3-thread actor, region-diff, PNG/JPEG hybrid, native-res + fullscreen, RDP cert TOFU, **keyboard + modifier-sync done**, clipboard, server cursor, pop-out, inline re-auth. Opt-in **GFX** (H.264/RemoteFX) pipeline behind `RDP_GFX=1`. Doc: `docs/specs/rdp-pipeline.md`.
+  - **Connect gotcha:** we negotiate **Enhanced security** only (`enable_credssp: true` + own TLS, `actor.rs build_config`). `negotiation failure: server only supports Standard RDP Security` ⇒ the target offers only legacy RC4 RDP Security (IronRDP won't do it). Fix the **target**: enable NLA + TLS (`SecurityLayer=2`, `UserAuthentication=1` under `…\WinStations\RDP-Tcp`, restart TermService; or System Properties → Remote → "only NLA"). Windows **Home** has no RDP host (RDP Wrapper → often Standard-only). Username format is irrelevant — it fails before auth.
 - **Local terminal** ✅ — real PTY (portable-pty), shell-choice setting, **restore-on-reload** (ring + reattach).
 - **Tools credential manager** ✅ — reveal-on-click + copy; only linked creds.
 - **SFTP explorer** ✅ — two-pane commander: endpoint switcher (local / hosts / "This PC" drives), breadcrumbs (**editable path field**), sort, multi-select, hidden toggle, RU sizes/dates, perms. Transfers via rail/double-click/DnD/context-menu; **streaming queue** (progress/speed/ETA/cancel, max 2 parallel, **retry + byte-offset resume**), name-conflict dialog (Replace/Keep both/Skip), search-filter, rename, delete, new folder, **chmod** (rwx dialog). TOFU key pinning (silent), agent auth, streaming host↔host copy. Doc: `docs/specs/sftp.md`.
@@ -152,6 +153,7 @@ docs/specs/{system-overview,data-model,tauri-api,session-protocol,ssh-session,rd
 - **Favorites** ✅ — `favorite` flag (migration v9), star toggle in HostDetail header, tray Favorites submenu.
 - **Tab bar** ✅ — horizontal scroll on overflow (wheel + auto-scroll-to-active).
 - **Storage scope switcher** ✅ (UI seam) — Vault chevron → Personal (active) / Team (locked, "needs sync"). Groundwork for sync.
+- **Account & Sync** ✅ — E2E sync via server **pingie.ru** (`server/` crate `rh-sync-server`, Docker on a Timeweb VPS). Email/password + **Yandex OAuth** (no Google). Vault sealed with a master password (entered once; keychain or session-mem). **Automatic** sync only (`sync_engine` actor — 30s interval + wake-on-edit; no manual button). **Logout purges the local vault** (data + keychain secrets + `sync_meta` tombstones) → accounts are isolated and re-login restores from the server. Sync/auth errors localized (`ui/src/lib/syncErrors.ts`). Server already mints an email-verification token on register but only *logs* the link — actual email send + password reset is the next slice.
 
 ---
 

@@ -64,7 +64,7 @@ pub async fn rdp_session_open(
         .find(|c| matches!(c.kind, CredentialKind::Password))
         .ok_or_else(|| ApiError::validation("credential", "host has no password credential"))?;
 
-    let username = if host.username.is_empty() {
+    let raw_user = if host.username.is_empty() {
         cred.username.clone()
     } else {
         host.username.clone()
@@ -76,11 +76,15 @@ pub async fn rdp_session_open(
         Err(RevealError::Secret(SecretError::NotFound)) => RevealedSecret::new(Vec::new()),
         Err(e) => return Err(e.into()),
     };
-    // Domain: MVP keeps it None and passes the username verbatim (works for
-    // local accounts like "Administrator"; "DOMAIN\\user" still negotiates).
+    // Split a down-level `DOMAIN\user` (incl. the synthetic `MicrosoftAccount`
+    // domain Microsoft-account logins use) into separate username + domain —
+    // CredSSP/sspi authenticates more reliably with them apart than with the
+    // whole string crammed into the username. UPNs (`user@domain`) pass through
+    // untouched. See `split_user_domain`.
+    let (username, domain) = split_user_domain(&raw_user);
     let credential = RevealedRdpCredential::Password {
         username,
-        domain: None,
+        domain,
         password,
     };
 
@@ -201,4 +205,70 @@ pub async fn rdp_session_kbd_capture(req: RdpKbdCaptureRequest) -> ApiResult<()>
     let session = if req.on { Some(req.session_id) } else { None };
     crate::kbd_hook::set_capture(req.on, session);
     Ok(())
+}
+
+/// Split an RDP username into `(username, domain)`.
+///
+/// Windows accepts the down-level `DOMAIN\user` form (everything before the
+/// first backslash is the domain). CredSSP/sspi authenticates more reliably
+/// with the two passed separately than with the whole string as the username
+/// and no domain. Crucially this also fixes **Microsoft-account** logins, which
+/// use the synthetic domain `MicrosoftAccount`, e.g.
+/// `MicrosoftAccount\you@outlook.com`.
+///
+/// The UPN form (`user@domain`) is left intact as the username with no domain —
+/// sspi resolves UPNs itself, and splitting on `@` would break local accounts
+/// whose name legitimately contains `@`.
+fn split_user_domain(raw: &str) -> (String, Option<String>) {
+    let raw = raw.trim();
+    if let Some((domain, user)) = raw.split_once('\\') {
+        let user = user.trim();
+        let domain = domain.trim();
+        if !user.is_empty() && !domain.is_empty() {
+            return (user.to_string(), Some(domain.to_string()));
+        }
+    }
+    (raw.to_string(), None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_user_domain;
+
+    #[test]
+    fn plain_username_has_no_domain() {
+        assert_eq!(
+            split_user_domain("Administrator"),
+            ("Administrator".to_string(), None)
+        );
+    }
+
+    #[test]
+    fn downlevel_domain_is_split() {
+        assert_eq!(
+            split_user_domain("CORP\\alice"),
+            ("alice".to_string(), Some("CORP".to_string()))
+        );
+    }
+
+    #[test]
+    fn microsoft_account_is_split() {
+        assert_eq!(
+            split_user_domain("MicrosoftAccount\\you@outlook.com"),
+            ("you@outlook.com".to_string(), Some("MicrosoftAccount".to_string()))
+        );
+    }
+
+    #[test]
+    fn upn_stays_as_username() {
+        assert_eq!(
+            split_user_domain("you@corp.local"),
+            ("you@corp.local".to_string(), None)
+        );
+    }
+
+    #[test]
+    fn malformed_leading_backslash_falls_back() {
+        assert_eq!(split_user_domain("\\user"), ("\\user".to_string(), None));
+    }
 }
