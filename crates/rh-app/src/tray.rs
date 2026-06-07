@@ -93,12 +93,23 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
 
 /// Rebuild and swap in a fresh menu (best-effort; logs nothing on failure to
 /// avoid noise if the tray was removed).
+///
+/// **Must run on the main (UI) thread.** The `hosts:changed`/`groups:changed`
+/// listeners fire on the Tokio worker that emitted the event; building/setting
+/// the native menu off the UI thread corrupts thread-affine Win32 menu state
+/// and hard-crashes the process (`0xC0000409`, no Rust panic — it bypasses the
+/// panic hook). Deferring to the main thread also makes `build_menu`'s
+/// `block_on` safe, since the main thread is not a runtime worker (same context
+/// as the initial `build()` in `setup`, which has always worked).
 fn rebuild(app: &AppHandle) {
-    if let Ok(menu) = build_menu(app) {
-        if let Some(tray) = app.tray_by_id("main") {
-            let _ = tray.set_menu(Some(menu));
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || {
+        if let Ok(menu) = build_menu(&app) {
+            if let Some(tray) = app.tray_by_id("main") {
+                let _ = tray.set_menu(Some(menu));
+            }
         }
-    }
+    });
 }
 
 fn show_main(app: &AppHandle) {
@@ -119,11 +130,16 @@ fn tooltip_for(n: usize) -> String {
 }
 
 /// Refresh the tray tooltip with the current live-session count. Best-effort;
-/// silently no-ops if the tray was removed. Called from `ui_sessions_report`.
+/// silently no-ops if the tray was removed. Called from `ui_sessions_report`
+/// (a Tokio worker), so — like `rebuild` — the native mutation is deferred to
+/// the main (UI) thread.
 pub fn update_tooltip(app: &AppHandle, n: usize) {
-    if let Some(tray) = app.tray_by_id("main") {
-        let _ = tray.set_tooltip(Some(tooltip_for(n)));
-    }
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || {
+        if let Some(tray) = app.tray_by_id("main") {
+            let _ = tray.set_tooltip(Some(tooltip_for(n)));
+        }
+    });
 }
 
 fn label(h: &Host) -> String {

@@ -32,6 +32,9 @@ fn main() {
     if let Err(e) = logging::init() {
         eprintln!("warning: logging init failed: {e}");
     }
+    // Capture panics to <app_data>/logs/panic.log even in the windowless
+    // release build (panic = "abort" otherwise dies silently).
+    logging::install_panic_hook();
 
     info!(
         version = env!("CARGO_PKG_VERSION"),

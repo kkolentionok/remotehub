@@ -52,3 +52,33 @@ pub fn init() -> Result<(), std::io::Error> {
 
     Ok(())
 }
+
+/// Install a panic hook that writes the panic (location + message + backtrace)
+/// **synchronously** to `<app_data>/logs/panic.log`.
+///
+/// Needed because the release build is windowless (`windows_subsystem =
+/// "windows"`) so the default hook's stderr output is invisible, and with
+/// `panic = "abort"` the process dies immediately — the non-blocking tracing
+/// writer may not flush in time. A direct synchronous file append guarantees
+/// the panic reaches disk before the abort. Call once, after `init()`.
+pub fn install_panic_hook() {
+    let crash_path = paths::log_dir().join("panic.log");
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let when = chrono::Utc::now().to_rfc3339();
+        let bt = std::backtrace::Backtrace::force_capture();
+        let entry = format!("\n===== panic @ {when} =====\n{info}\n\nbacktrace:\n{bt}\n");
+        if let Ok(mut f) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&crash_path)
+        {
+            use std::io::Write;
+            let _ = f.write_all(entry.as_bytes());
+            let _ = f.flush();
+        }
+        // Best-effort: also surface it through tracing (may not flush on abort).
+        tracing::error!(target: "panic", "{info}");
+        prev(info);
+    }));
+}

@@ -191,8 +191,9 @@ Modal dialogs for editing · card-style read-only credential views (always two e
 3. **RDP polish** — clipboard (text), dynamic resize (DisplayControl DVC), server cursor; later GFX/H.264.
 4. **SSH agent-forward serving side** (spike) — handle the forwarded `auth-agent@openssh.com` channel + bridge bytes to the OS agent.
 5. **Hotkeys / command palette** — Ctrl/Cmd+K, J/K sidebar nav, `?` shortcuts sheet.
-6. **Import** from PuTTY / Termius / MobaXterm (post-MVP idea).
-7. Micro-polish ideas: OS-distro icon in the session tab; "live session" hint in tray tooltip; active-transfers badge on the SFTP tab; confirm-on-Quit if live sessions exist.
+6. **Auto-updater** (Tauri updater, self-host on pingie.ru) — sign keypair (`tauri signer generate`), `cargo tauri add updater`, `bundle.createUpdaterArtifacts:true` + `plugins.updater` (`pubkey` + `endpoints:[https://pingie.ru/updates/latest.json]` + `windows.installMode`) + `updater:default` capability; frontend `check()`→`downloadAndInstall()`→`relaunch()`; nginx `location /updates/` serving `latest.json` + signed `setup.exe`; `release.ps1` (bump version → build → read `.sig` → gen `latest.json` → upload over SSH). Until then: manual reinstall of the new `setup.exe`. Details in `docs/ROADMAP.md`.
+7. **Import** from PuTTY / Termius / MobaXterm (post-MVP idea).
+8. Micro-polish ideas: OS-distro icon in the session tab; "live session" hint in tray tooltip; active-transfers badge on the SFTP tab; confirm-on-Quit if live sessions exist.
 
 ---
 

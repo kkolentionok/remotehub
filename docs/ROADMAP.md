@@ -18,11 +18,30 @@
 - Настоящие иконки (`icon.ico`, `icon.icns`, AppIcon).
 - NSIS-конфиг: lic-agreement, выбор директории, shortcut, опционально `ssh://`/`rdp://` URL protocol handlers.
 - Code signing (Windows EV cert / Apple Developer ID). Без подписи SmartScreen / Gatekeeper покажут предупреждение.
-- Tauri updater + GitHub Releases для auto-update.
+- Tauri updater для auto-update — см. отдельный пункт «Авто-апдейтер» ниже.
 - Per-user install (`%LOCALAPPDATA%`), без admin-prompt'а.
 - CI: build бандлов на каждый release tag.
 
 **Workaround в текущий момент**: `cargo tauri build` уже создаст `.msi` и `.exe` в `crates/rh-app/target/release/bundle/`. Без подписи и иконок, но работающие. Достаточно «дать другу попробовать», не достаточно для public release.
+
+### Авто-апдейтер (Tauri updater, self-host на pingie.ru)
+
+**Что**: приложение само при запуске проверяет наличие новой версии, качает подписанный бандл и переустанавливается с рестартом — пользователю не нужно вручную скачивать новый `.exe`. Раздаём со своего сервера (pingie.ru + nginx, статикой), без GitHub Releases / CrabNebula.
+
+**Почему отложено**: пока 1-2 своих ПК — ручная переустановка (`cargo tauri build` → скопировать setup → запустить поверх, данные в `%APPDATA%\RemoteHub` сохраняются) проще. Апдейтер нужен, когда обновлять станет лень / появятся не-свои установки.
+
+**Когда вернуться**: после того как кросс-устройственный синк подтверждён на 2 ПК; перед тем как давать сборку кому-то ещё. Хорошо ложится рядом с пунктом про инсталлятор/иконки/подпись.
+
+**Подскоуп** (когда будем делать):
+- Ключи подписи: `cargo tauri signer generate` → `pubkey` в `tauri.conf.json`, приватный ключ + пароль в секрете (env `TAURI_SIGNING_PRIVATE_KEY` / `..._PASSWORD` при сборке). Подпись для апдейтера **обязательна**.
+- Плагин: `cargo tauri add updater` (+ `@tauri-apps/plugin-updater`, `@tauri-apps/plugin-process` для рестарта).
+- Конфиг: `bundle.createUpdaterArtifacts: true`; `plugins.updater` = `pubkey` + `endpoints: ["https://pingie.ru/updates/latest.json"]` + `windows.installMode` (passive/quiet); разрешение `updater:default` в capabilities.
+- Фронт-флоу: при старте `check()` → если есть апдейт, `downloadAndInstall()` + `relaunch()` (тихо в фоне или с маленьким индикатором «доступно обновление»).
+- Сервер: `location /updates/` в nginx (статика) под `/opt/pingie/...`; раздаёт `latest.json` + `RemoteHub_<ver>_x64-setup.exe`.
+- Релиз-скрипт `release.ps1`: бампит версию в `tauri.conf.json`, `cargo tauri build`, читает `.sig`, генерит `latest.json` (`version`/`notes`/`pub_date`/`platforms.windows-x86_64.{signature,url}`), заливает `.exe` + json по SSH. Релиз = одна команда.
+- Не забывать бампать `version` — апдейтер сравнивает по нему.
+
+**Workaround в текущий момент**: ручная переустановка нового `setup.exe` поверх старого (см. выше).
 
 ### macOS / Linux таргеты
 

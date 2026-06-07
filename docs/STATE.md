@@ -1,8 +1,18 @@
 # RemoteHub — Project State & Handoff
 
-**Last updated:** Sync slice 3d — **automatic sync** (no manual "Sync now"). Background actor `crates/rh-app/src/sync_engine.rs` runs a pass on startup, after every local edit (woken via `AppState::sync_wake` from `stamp_live`/`stamp_deleted`, debounced 1.5s), and every 30s; `sync_inflight` try-lock prevents overlap; status → `AppState::sync_status` + `sync:status` event. Vault (master) password entered **once** via a modal (prompted after sign-in and each launch until set), cached in the OS keychain (`sync_remote::vault_key_*`), cleared on logout. IPC `sync_set_master` (validates by a real pass, rejects wrong password) + `sync_status`; `sync_now` removed; `SyncConfigResponse.has_master`. UI: `SyncMasterDialog`, status card in `ProfileSection` + Vault dropdown, refetch-on-apply in `AppShell`. Frontend tsc + vite green; rh-app unverified (user compiles). **Next:** RDP keyboard / GFX backlog.
+**Last updated:** **Tray rebuild crash fix** — `tray::rebuild`/`update_tooltip` now defer their native menu/tooltip mutations to the main (UI) thread via `AppHandle::run_on_main_thread`. The `hosts:changed`/`groups:changed` listeners fire on the emitting Tokio worker; mutating the thread-affine Win32 tray menu off the UI thread hard-crashed the release build (`0xC0000409`, no Rust panic — bypasses the panic hook). Manifested on a 2nd PC as a crash on first SSH connect (connect stamps `last_connected_at`/detects OS → `hosts:changed` → tray rebuild) and on any favorite-toggle/host-edit. Startup `build()` was unaffected (already on the main thread). rh-app unverified (user compiles). **Next:** RDP keyboard / GFX backlog.
 
-## Latest — Sync slice 3d: automatic sync
+## Latest — Tray rebuild crash fix (off-thread native menu mutation)
+
+A 2nd PC running the release build crashed the moment an SSH session became `Ready` (and on any favorite-toggle / host edit): exit code `0xC0000409`, faulting module `rh-app.exe`, **no `panic.log`** (so not a Rust panic — a native fastfail that bypasses the panic hook). `app.log` showed the crash landed in the same second as `ssh session ready`.
+
+Root cause: `tray::rebuild` (registered on `hosts:changed`/`groups:changed`) and `tray::update_tooltip` mutated the **thread-affine Win32 tray menu from the wrong thread**. Those listeners fire on the Tokio worker that emitted the event; building/setting the native menu off the UI thread corrupts native state → hard crash. The startup `tray::build()` was fine because it runs on the main thread in `setup`. SSH connect was just a trigger (it stamps `last_connected_at` + detects OS → `hosts:changed` → rebuild); local terminals never touch the tray, and the RDP attempt in the logs hadn't reached that path — which is why only SSH appeared to crash. Debug (`cargo tauri dev`) tolerated the UB; release (`panic = "abort"`, optimized layout) did not.
+
+Fix (`crates/rh-app/src/tray.rs`): both `rebuild` and `update_tooltip` now wrap their `tray_by_id(...).set_menu/set_tooltip(...)` in `app.run_on_main_thread(move || { ... })`. This runs the native mutation on the UI thread (same context as the working startup build) and also makes `build_menu`'s `block_on` safe (the main thread is not a runtime worker). No frontend change. rh-app unverified (user compiles).
+
+Diagnosis aid confirmed in-repo: `logging::install_panic_hook` writes `%APPDATA%\RemoteHub\logs\panic.log` synchronously for Rust panics; its absence here is what proved the crash was native, not a panic.
+
+
 
 Manual sync is gone. Once signed in and the vault password is set once, everything stays in sync with no buttons.
 
