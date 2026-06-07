@@ -1,6 +1,8 @@
 .term {
     width: 100%;
     height: 100%;
+    /* border-box so the padding lives inside height:100% (no global reset). */
+    box-sizing: border-box;
     padding: var(--space-2) var(--space-3);
     background: #15171c;
     overflow: hidden;
@@ -13,4 +15,36 @@
    gutter keeps the width constant so each resize is a single clean step. */
 .term :global(.xterm-viewport) {
     scrollbar-gutter: stable;
+}
+
+/* Link hover hint ("Ctrl + Click to open the link"). Positioned at the cursor
+ * (fixed); never intercepts the mouse. */
+.linkTip {
+    position: fixed;
+    z-index: 1000;
+    display: none;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 9px;
+    background: var(--color-elevated);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-pop);
+    font-size: var(--text-xs);
+    color: var(--text-2);
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.linkTipKbd {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--text-1);
+    line-height: 1.5;
 }

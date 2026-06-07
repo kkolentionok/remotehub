@@ -82,6 +82,20 @@ export function ConnectionsSection({ settings }: Props) {
                     className={styles.numInput}
                 />
             </div>
+
+            <div className={styles.field}>
+                <label className={styles.checkboxRow}>
+                    <input
+                        type="checkbox"
+                        checked={settings.rdp_gfx}
+                        onChange={(e) => void update({ rdp_gfx: e.target.checked })}
+                    />
+                    <span>{t("settings.connections.rdpGfx")}</span>
+                </label>
+                <div className={styles.fieldHint}>
+                    {t("settings.connections.rdpGfxHint")}
+                </div>
+            </div>
         </div>
     );
 }

@@ -13,10 +13,16 @@ tauri-build = { workspace = true }
 [dependencies]
 rh-core.workspace = true
 rh-storage.workspace = true
+rh-vault.workspace = true
 rh-ssh.workspace = true
 rh-rdp.workspace = true
 
 portable-pty = "0.8"
+
+# Sync client transport (slice 3b): HTTP to the rh-sync-server, bearer token in
+# the OS keychain. rustls so no native TLS toolchain is needed on Windows.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+keyring.workspace = true
 
 tauri = { workspace = true, features = ["devtools", "tray-icon"] }
 
@@ -33,6 +39,8 @@ chrono.workspace = true
 ulid.workspace = true
 base64 = "0.22"
 tauri-plugin-clipboard-manager = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
 
 [features]
 default = ["custom-protocol"]

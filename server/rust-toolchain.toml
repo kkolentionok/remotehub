@@ -1,0 +1,8 @@
+[toolchain]
+# Use the installed stable toolchain. MSRV (minimum supported Rust version)
+# for this project is 1.80 — enforced via Cargo.toml's `rust-version` field,
+# which cargo checks at build time. Pinning a specific version here would
+# force rustup to download an extra toolchain even on developer machines that
+# already have a newer stable installed.
+channel = "stable"
+components = ["rustfmt", "clippy"]

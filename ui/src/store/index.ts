@@ -165,7 +165,10 @@ export type DialogKind =
     | {
           kind: "discard-changes-confirm";
           onConfirm: () => void;
-      };
+      }
+    /** Quit confirmation shown when the tray Quit is hit while live
+     *  session tabs are open. `count` is how many will be disconnected. */
+    | { kind: "quit-confirm"; count: number };
 
 /**
  * Draft host being created in the right pane. Lives in UI state until
@@ -381,6 +384,36 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 }));
 
 // =====================================================================
+// SFTP transfer badge — a thin bridge from the per-session `useTransfers`
+// hook (component-local state inside SftpView) to the TabBar, which lives
+// elsewhere in the tree. SftpView publishes its in-flight count keyed by
+// session key; the TabBar reads it to show a badge on that SFTP tab.
+// =====================================================================
+
+interface TransferBadgeStore {
+    counts: Record<string, number>;
+    setCount: (key: string, n: number) => void;
+    clear: (key: string) => void;
+}
+
+export const useTransferBadgeStore = create<TransferBadgeStore>((set) => ({
+    counts: {},
+    setCount: (key, n) =>
+        set((s) =>
+            (s.counts[key] ?? 0) === n
+                ? s
+                : { counts: { ...s.counts, [key]: n } },
+        ),
+    clear: (key) =>
+        set((s) => {
+            if (!(key in s.counts)) return s;
+            const next = { ...s.counts };
+            delete next[key];
+            return { counts: next };
+        }),
+}));
+
+// =====================================================================
 // Sessions (Stage 2)
 //
 // Each open session is a tab. We key tabs by a stable local id (`key`)
@@ -412,6 +445,9 @@ export interface SessionTab {
     local?: boolean;
     /** True for an SFTP file-browser tab (SftpView manages its own backend). */
     sftp?: boolean;
+    /** Host's auto-detected OS (e.g. "Ubuntu 22.04"), shown in the tab tooltip.
+     *  Null for local/SFTP tabs or before detection. */
+    detectedOs?: string | null;
     /** Auth method reported by the last `auth_failed` event ("password" /
      *  "publickey" / "agent" / "jump"). Drives the auth-vs-badpass split and
      *  the inline re-auth default, independent of the (possibly clobbered)
@@ -427,6 +463,10 @@ export interface WorkspaceTab {
     id: string;
     root: PaneNode;
     activePaneKey: string;
+    /** When set (and the tab has >1 pane), the tab renders in *focus mode*:
+     *  this session fills the area and the rest move to the left rail. Null /
+     *  undefined = normal tiled split. */
+    focusKey?: string | null;
 }
 
 interface OutputSink {
@@ -582,6 +622,8 @@ interface SessionsStore {
     closeTab: (tabId: string) => Promise<void>;
     setActiveTab: (tabId: string | null) => void;
     setActivePane: (tabId: string, key: string) => void;
+    /** Enter focus mode on `key` (maximize + rail), or exit when `null`. */
+    setFocusPane: (tabId: string, key: string | null) => void;
     setDraggingSession: (key: string | null) => void;
     setDragPreviewTabId: (tabId: string | null) => void;
     setDragTabId: (tabId: string | null) => void;
@@ -806,6 +848,7 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
             state: "connecting",
             message: null,
             hostKey: null,
+            detectedOs: host.detected_os ?? null,
             rdpWidth: rdpW,
             rdpHeight: rdpH,
         };
@@ -1028,7 +1071,16 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
                         tb.activePaneKey === key
                             ? firstLeafKey(root)
                             : tb.activePaneKey;
-                    tabs.push({ ...tb, root, activePaneKey });
+                    // Keep focus mode coherent: if the focused pane was the one
+                    // closed (or no longer exists), follow the new active pane;
+                    // a single remaining pane drops out of focus mode entirely.
+                    let focusKey = tb.focusKey ?? null;
+                    if (focusKey != null) {
+                        if (leafKeys(root).length < 2 || !hasLeaf(root, focusKey)) {
+                            focusKey = leafKeys(root).length < 2 ? null : activePaneKey;
+                        }
+                    }
+                    tabs.push({ ...tb, root, activePaneKey, focusKey });
                 }
                 if (activeTabId === null && tabs.length > 0) {
                     activeTabId = tabs[tabs.length - 1]?.id ?? null;
@@ -1059,6 +1111,20 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
             set((s) => ({
                 tabs: s.tabs.map((tb) =>
                     tb.id === tabId ? { ...tb, activePaneKey: key } : tb,
+                ),
+            })),
+
+        setFocusPane: (tabId, key) =>
+            set((s) => ({
+                tabs: s.tabs.map((tb) =>
+                    tb.id === tabId
+                        ? {
+                              ...tb,
+                              focusKey: key,
+                              // Entering focus also makes that pane the active one.
+                              activePaneKey: key ?? tb.activePaneKey,
+                          }
+                        : tb,
                 ),
             })),
 

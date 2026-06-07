@@ -21,6 +21,8 @@ use tauri::{
     AppHandle, Emitter, Listener, Manager, Wry,
 };
 
+use std::sync::atomic::Ordering;
+
 use rh_core::{Host, HostFilter};
 
 use crate::api::events::names;
@@ -35,13 +37,26 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let menu = build_menu(app)?;
 
     let mut builder = TrayIconBuilder::with_id("main")
-        .tooltip("RemoteHub")
+        .tooltip(tooltip_for(0))
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();
             if id == "quit" {
-                app.exit(0);
+                // If the UI has live session tabs open, don't quit outright —
+                // surface the window and let the frontend show a confirm. The
+                // real exit comes back through the `app_quit` command. When
+                // nothing is live, quit immediately.
+                let live = app
+                    .try_state::<AppState>()
+                    .map(|s| s.session_count.load(Ordering::Relaxed))
+                    .unwrap_or(0);
+                if live > 0 {
+                    show_main(app);
+                    let _ = app.emit("app:confirm-quit", live as u32);
+                } else {
+                    app.exit(0);
+                }
             } else if id == "show" {
                 show_main(app);
             } else if let Some(host_id) = id.strip_prefix("connect:") {
@@ -91,6 +106,23 @@ fn show_main(app: &AppHandle) {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
+    }
+}
+
+/// Tray tooltip text for a given live-session count.
+fn tooltip_for(n: usize) -> String {
+    match n {
+        0 => "RemoteHub".to_string(),
+        1 => "RemoteHub · 1 active session".to_string(),
+        _ => format!("RemoteHub · {n} active sessions"),
+    }
+}
+
+/// Refresh the tray tooltip with the current live-session count. Best-effort;
+/// silently no-ops if the tray was removed. Called from `ui_sessions_report`.
+pub fn update_tooltip(app: &AppHandle, n: usize) {
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_tooltip(Some(tooltip_for(n)));
     }
 }
 

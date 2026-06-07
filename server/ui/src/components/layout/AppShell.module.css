@@ -1,0 +1,20 @@
+.shell {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+}
+
+.stage {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    position: relative;
+}
+
+.pane {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}

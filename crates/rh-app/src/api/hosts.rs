@@ -25,6 +25,7 @@ use crate::api::dto::{
 use crate::api::error::{ApiError, ApiResult};
 use crate::api::events;
 use crate::state::AppState;
+use crate::sync_clock::{KIND_CREDENTIAL, KIND_HOST};
 
 const MAX_NAME_LEN: usize = 256;
 const MAX_HOSTNAME_LEN: usize = 253;       // DNS RFC 1035 max
@@ -209,6 +210,7 @@ pub async fn host_create(
 
     let id = host.id.clone();
     state.hosts.create(&host).await?;
+    state.stamp_live(KIND_HOST, id.as_str()).await?;
 
     events::emit_hosts_changed(&app, events::Change::Created, &id);
     Ok(HostCreateResponse { id })
@@ -298,6 +300,7 @@ pub async fn host_update(
     host.touch();
 
     state.hosts.update(&host).await?;
+    state.stamp_live(KIND_HOST, host.id.as_str()).await?;
     events::emit_hosts_changed(&app, events::Change::Updated, &host.id);
     Ok(())
 }
@@ -309,7 +312,24 @@ pub async fn host_delete(
     app: AppHandle,
     req: HostIdRequest,
 ) -> ApiResult<()> {
+    // Credentials linked to this host. After the host is gone, any of these
+    // that no longer link to *another* host are orphaned (they'd vanish from
+    // the credential manager, which only lists linked creds, while their
+    // keychain secret lingered) — so we delete those too. Shared credentials
+    // (still linked elsewhere) are kept.
+    let linked = state.credentials.credentials_for_host(&req.id).await?;
     state.hosts.delete(&req.id).await?;
+    state.stamp_deleted(KIND_HOST, req.id.as_str()).await?;
+    for cred in &linked {
+        if state.credentials.host_link_count(&cred.id).await? == 0 {
+            // Best-effort: a failed credential cleanup shouldn't fail the
+            // host deletion the user already committed to.
+            if state.credentials.delete(&cred.id).await.is_ok() {
+                state.stamp_deleted(KIND_CREDENTIAL, cred.id.as_str()).await?;
+                events::emit_credentials_changed(&app, events::Change::Deleted, &cred.id);
+            }
+        }
+    }
     events::emit_hosts_changed(&app, events::Change::Deleted, &req.id);
     Ok(())
 }

@@ -2,7 +2,7 @@
     display: flex;
     align-items: center;
     gap: 2px;
-    height: 38px;
+    height: 44px;
     padding: 0 8px;
     background: var(--color-tabbar);
     border-bottom: 1px solid var(--color-border);
@@ -22,7 +22,7 @@
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    height: 30px;
+    height: 34px;
     padding: 0 12px;
     border-radius: var(--radius-md);
     color: var(--text-3);
@@ -65,7 +65,7 @@
     align-items: center;
     gap: 7px;
     max-width: 220px;
-    height: 30px;
+    height: 34px;
     padding: 0 10px;
     border-radius: var(--radius-lg);
     color: var(--text-3);
@@ -123,6 +123,22 @@
     margin-left: 2px;
 }
 
+.transferBadge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    margin-left: 4px;
+    border-radius: 8px;
+    background: var(--color-accent);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 1;
+}
+
 .label {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -155,8 +171,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
+    width: 30px;
+    height: 30px;
     border-radius: var(--radius-md);
     color: var(--text-3);
     flex-shrink: 0;

@@ -1,11 +1,12 @@
 import { useCallback } from "react";
-import { Columns2, Pencil, PictureInPicture2, RefreshCw, Rows2, X } from "lucide-react";
+import { Maximize2, Minimize2, Pencil, PictureInPicture2, RefreshCw, X } from "lucide-react";
 
 import { useT } from "../../i18n";
 import type { SessionTab } from "../../store";
 import {
     useHostsStore,
     useSessionsStore,
+    useSettingsStore,
     useUiStore,
 } from "../../store";
 import { rdpSession as rdpSessionApi } from "../../lib/ipc";
@@ -25,16 +26,21 @@ export function SessionView({
     visible,
     focused,
     showHeader,
+    tabId,
+    inFocusMode,
 }: {
     session: SessionTab;
     visible: boolean;
     focused: boolean;
     showHeader: boolean;
+    tabId: string;
+    inFocusMode: boolean;
 }) {
     const { t } = useT();
+    const gfxOn = useSettingsStore((s) => s.settings?.rdp_gfx ?? false);
     const close = useSessionsStore((s) => s.close);
     const open = useSessionsStore((s) => s.open);
-    const requestSplit = useSessionsStore((s) => s.requestSplit);
+    const setFocusPane = useSessionsStore((s) => s.setFocusPane);
     const setDraggingSession = useSessionsStore((s) => s.setDraggingSession);
     const acceptHostKey = useSessionsStore((s) => s.acceptHostKey);
     const rejectHostKey = useSessionsStore((s) => s.rejectHostKey);
@@ -112,18 +118,12 @@ export function SessionView({
                     <button
                         type="button"
                         className={styles.headerBtn}
-                        title={t("pane.splitRight")}
-                        onClick={() => requestSplit("row")}
+                        title={inFocusMode ? t("pane.exitFocus") : t("pane.focus")}
+                        onClick={() =>
+                            setFocusPane(tabId, inFocusMode ? null : session.key)
+                        }
                     >
-                        <Columns2 size={13} />
-                    </button>
-                    <button
-                        type="button"
-                        className={styles.headerBtn}
-                        title={t("pane.splitDown")}
-                        onClick={() => requestSplit("col")}
-                    >
-                        <Rows2 size={13} />
+                        {inFocusMode ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
                     </button>
                     <button
                         type="button"
@@ -230,6 +230,7 @@ export function SessionView({
                                         const sid = session.sessionId;
                                         if (sid) void rdpSessionApi.resize(sid, w, h);
                                     }}
+                                    enableDynamicResize={gfxOn}
                                     onKbdCapture={(on) => {
                                         const sid = session.sessionId;
                                         if (sid) void rdpSessionApi.kbdCapture(sid, on);

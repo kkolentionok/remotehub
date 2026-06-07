@@ -228,3 +228,55 @@ At 1640×988 full-window-drag, after all optimizations:
 
 `5.42.106.222:3389`, user `Administrator`. Connect/auth/graphics/mouse proven via
 live sessions. Password is not stored in the repo — rotate if it leaked into logs.
+
+---
+
+## Activation (Stage 4.x) — now a user setting
+
+GFX is opt-in via `Settings.rdp_gfx` (default off → proven legacy IronRDP path).
+Toggle in **Settings → Connections**. Plumbing: `rdp.gfx` key (flat k/v settings
+table) → `RdpOpenOptions.gfx` → `actor.rs` enables the GFX DVC when
+`params.options.gfx || env RDP_GFX`. The `RDP_GFX=1` env var still forces it on
+for dev. Reconnect to apply (read at session open).
+
+Diagnostic logging is quiet by default: the 1/s `GFX ops/sec` op-counter and the
+startup `S2Cache`/`Cache2S`/`Wts1 ClearCodec` dumps emit only under
+`RDP_GFX_TRACE=1`. The `Wts2 prog` trace prints per-row coverage
+`rows=[y:x0-x1 ...]` in addition to the bbox.
+
+### Maximize→restore "disocclusion band" — resolved (was stale cache, not a clear-miss)
+
+Earlier suspected as the server not repainting the vacated region. A black-desktop
+trace disproved it: on restore the server DOES clear the vacated top strip (black
+`Cache2S` tiles into rows y=0/64/128). The residual fragments were a STALE
+bitmap-cache replay — a `CacheToSurface` of a cache slot still holding
+old-wallpaper-era pixels (blue) stamped where the current (black) desktop belongs.
+Root cause: the desktop wallpaper was changed **mid-session**, and the GFX bitmap
+cache lives for the whole session, so a slot cached under the old wallpaper got
+replayed. It does NOT reproduce on a fresh reconnect (empty cache). Not a real
+ongoing bug; a possible hardening item (cache coherence on wallpaper change) only.
+
+### Dynamic resize (DisplayControl DVC) — enabled, GFX-gated
+
+The full path exists: `RdpCommand::Resize` → `active_stage.encode_resize(w,h,None,None)`
+(coalesced; handles the server's resolution-change reactivation; emits `Resized`)
+→ `rdp_session_resize`/`RdpResizeRequest`/`RdpSessionManager.resize()` → IPC →
+`SessionView`/`RdpPopoutApp`. The continuous window-resize `ResizeObserver` in
+`RdpViewport` was previously hard-disabled (`ENABLE_DYNAMIC_RESIZE=false`) because
+the legacy RemoteFX reactivation degrades repaint (IronRDP #447) and can leave an
+unrepainted region. It is now an `enableDynamicResize` prop, driven by the
+`rdp_gfx` setting: **GFX sessions reflow live, legacy stays off**. The fullscreen
+one-shot resize is independent and always on. Reconnect after toggling GFX so the
+live session's path matches the gate.
+
+### AVC/H.264 GFX decode — PARKED (needs an AVC-capable server)
+
+The last RDP item, parked in the backlog. Caps already advertise AVC420; the current
+build logs AVC arrival via the skip arm. Blocked because the test server negotiates
+RemoteFX Progressive, never AVC. To resume: enable the "Prioritize H.264/AVC 444 graphics
+mode" GPO on a Windows host (works without a GPU, software encode), connect with GFX on,
+confirm `skip codec Avc420/Avc444` in the log. Then: backend manual `RFX_AVC420_METABLOCK`
+parse + forward H.264 to the webview (`RdpSessionEvent::Avc`), frontend WebCodecs
+`VideoDecoder` → draw region rects (decode already spiked green). AVC444 dual-stream after.
+Design: AVC pixels live on the canvas (parallel draw path), not the backend fb. Full
+plan in docs/STATE.md "RDP AVC/H.264 — parked".

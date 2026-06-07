@@ -93,6 +93,11 @@
 /* empty + error */
 .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
     height: 100%; color: var(--text-4); padding: 30px; font-size: 13px; }
+.reconnectBtn { margin-top: 14px; display: inline-flex; align-items: center; gap: 7px;
+    padding: 7px 14px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-md);
+    background: var(--color-elevated); color: var(--text-1); font-size: var(--text-sm); cursor: pointer; }
+.reconnectBtn:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.reconnectBtn:disabled { opacity: 0.5; cursor: default; }
 
 /* bottom transfer status (queue dock comes later) */
 .status { flex: 0 0 auto; padding: 6px 14px; border-top: 1px solid var(--color-border-strong); background: var(--color-tabbar);

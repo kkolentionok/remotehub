@@ -216,10 +216,12 @@ fn blocking_session(
     // Authenticating) as it progresses, so the UI reflects what's actually
     // happening instead of claiming "Authenticating" before we've even
     // reached the host.
-    // Graphics pipeline (GFX) is opt-in via RDP_GFX. When set, we allocate the
-    // shared framebuffer state and hand a clone to the GFX DVC processor; the
-    // worker loop below ships its dirty rects.
-    let gfx_state = if std::env::var("RDP_GFX").is_ok() {
+    // Graphics pipeline (GFX) is opt-in via the user's `Settings.rdp_gfx`
+    // (threaded in as `params.options.gfx`); the `RDP_GFX` env var still forces
+    // it on for dev regardless. When enabled we allocate the shared framebuffer
+    // state and hand a clone to the GFX DVC processor; the worker loop below
+    // ships its dirty rects.
+    let gfx_state = if params.options.gfx || std::env::var("RDP_GFX").is_ok() {
         Some(Arc::new(Mutex::new(crate::gfx::GfxState::new())))
     } else {
         None

@@ -1,0 +1,571 @@
+/* Import / Export section — encrypted vault. Ported from the prototype's
+   vault.css onto the app's real design tokens. No global box-sizing reset
+   exists in this project, so inputs/buttons set it locally. */
+
+/* export / import toggle */
+.tabs {
+    display: flex;
+    gap: 3px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 3px;
+    margin: 18px 0 2px;
+    width: fit-content;
+}
+.tab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 18px;
+    border-radius: var(--radius-sm);
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--text-3);
+    transition: background 0.12s, color 0.12s;
+}
+.tab:hover:not(.tabOn) {
+    color: var(--text-2);
+}
+.tabOn {
+    background: var(--color-elevated);
+    color: var(--text-1);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* generic flow block */
+.flow {
+    padding-top: 18px;
+    animation: ioFade 0.2s ease;
+}
+@keyframes ioFade {
+    from {
+        opacity: 0;
+        transform: translateY(4px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+.spin {
+    animation: spin 0.8s linear infinite;
+    display: flex;
+}
+
+/* labelled field */
+.field {
+    margin-bottom: 13px;
+}
+.fieldL {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+/* password input + eye toggle */
+.pw {
+    position: relative;
+}
+.input {
+    box-sizing: border-box;
+    width: 100%;
+    height: 42px;
+    padding: 0 44px 0 13px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    color: var(--text-1);
+    font-size: 14px;
+    transition: border-color 0.12s, box-shadow 0.12s;
+}
+.input::placeholder {
+    color: var(--text-4);
+}
+.input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.mono {
+    font-family: var(--font-mono);
+}
+.inputErr {
+    border-color: var(--color-danger) !important;
+}
+.inputOk {
+    border-color: rgba(74, 222, 128, 0.5) !important;
+}
+.pwEye {
+    position: absolute;
+    right: 8px;
+    top: 8px;
+    width: 26px;
+    height: 26px;
+    border-radius: var(--radius-sm);
+    color: var(--text-3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.pwEye:hover {
+    color: var(--text-1);
+    background: var(--color-subtle);
+}
+
+/* strength meter */
+.str {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 9px;
+}
+.strBars {
+    display: flex;
+    gap: 4px;
+    flex: 1;
+}
+.strBars i {
+    flex: 1;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--color-subtle);
+    transition: background 0.2s;
+}
+.strLbl {
+    font-size: 11.5px;
+    font-weight: 500;
+    flex: 0 0 auto;
+    font-family: var(--font-mono);
+}
+.match {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    margin-top: 8px;
+}
+.matchOk {
+    color: var(--color-success);
+}
+.matchNo {
+    color: var(--text-4);
+}
+
+/* warning / note line */
+.note {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-3);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 11px 13px;
+    margin: 2px 0 16px;
+}
+.noteIc {
+    flex: 0 0 auto;
+    margin-top: 1px;
+    display: flex;
+}
+.note b {
+    color: var(--text-2);
+    font-weight: 600;
+}
+.noteDanger {
+    background: var(--color-danger-bg);
+    border-color: rgba(248, 113, 113, 0.25);
+    color: #f0a9a9;
+}
+.noteDanger .noteIc {
+    color: var(--color-danger);
+}
+.noteDanger b {
+    color: #f3c0c0;
+}
+
+/* action row + buttons */
+.actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.btn {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    height: 42px;
+    padding: 0 20px;
+    border-radius: var(--radius-md);
+    font-size: 14px;
+    font-weight: 600;
+    transition: filter 0.1s, background 0.1s, border-color 0.1s;
+}
+.btnPrimary {
+    background: var(--color-accent);
+    color: var(--color-accent-fg, #fff);
+}
+.btnPrimary:hover {
+    filter: brightness(1.1);
+}
+.btnPrimary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    filter: none;
+}
+.btnGhost {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-strong);
+    color: var(--text-2);
+}
+.btnGhost:hover {
+    border-color: var(--text-3);
+    color: var(--text-1);
+}
+.btnDanger {
+    background: var(--color-danger);
+    color: #fff;
+}
+.btnDanger:hover {
+    filter: brightness(1.08);
+}
+
+/* import dropzone */
+.drop {
+    border: 1.5px dashed var(--color-border-strong);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface);
+    padding: 34px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.14s, background 0.14s;
+}
+.drop:hover,
+.dropOver {
+    border-color: var(--color-accent);
+    background: var(--accent-soft);
+}
+.dropIc {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius-lg);
+    background: var(--color-subtle);
+    color: var(--text-2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 6px;
+}
+.drop:hover .dropIc,
+.dropOver .dropIc {
+    color: var(--color-accent);
+}
+.dropT {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-1);
+}
+.dropS {
+    font-size: 12px;
+    color: var(--text-4);
+    font-family: var(--font-mono);
+}
+
+/* selected file card */
+.file {
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 13px 15px;
+    margin-bottom: 15px;
+}
+.fileIc {
+    width: 42px;
+    height: 42px;
+    border-radius: var(--radius-md);
+    background: var(--accent-soft);
+    color: var(--color-accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+}
+.fileM {
+    flex: 1;
+    min-width: 0;
+}
+.fileN {
+    font-size: 13.5px;
+    font-weight: 500;
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fileS {
+    font-size: 11.5px;
+    color: var(--text-3);
+    margin-top: 3px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+.lockPill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--color-warn);
+    background: rgba(230, 192, 123, 0.1);
+    border-radius: 99px;
+    padding: 2px 8px;
+    letter-spacing: 0.01em;
+}
+.fileX {
+    width: 30px;
+    height: 30px;
+    border-radius: var(--radius-md);
+    color: var(--text-3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+}
+.fileX:hover {
+    background: var(--color-elevated);
+    color: var(--text-1);
+}
+
+/* merge strategy radios */
+.radio {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+.opt {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 9px 13px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    background: var(--color-surface);
+    transition: border-color 0.1s, background 0.1s;
+    text-align: left;
+}
+.opt:hover {
+    border-color: var(--color-border-strong);
+}
+.optOn {
+    border-color: var(--color-accent);
+    background: var(--accent-soft);
+}
+.optRd {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2px solid var(--text-3);
+    flex: 0 0 auto;
+    margin-top: 1px;
+    position: relative;
+    transition: border-color 0.1s;
+}
+.optOn .optRd {
+    border-color: var(--color-accent);
+}
+.optOn .optRd::after {
+    content: "";
+    position: absolute;
+    inset: 3px;
+    border-radius: 50%;
+    background: var(--color-accent);
+}
+.optTx {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.optT {
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--text-1);
+}
+.optS {
+    font-size: 12px;
+    color: var(--text-3);
+    line-height: 1.45;
+}
+
+/* shake on wrong password */
+.shake {
+    animation: shake 0.4s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+@keyframes shake {
+    10%,
+    90% {
+        transform: translateX(-1px);
+    }
+    20%,
+    80% {
+        transform: translateX(2px);
+    }
+    30%,
+    50%,
+    70% {
+        transform: translateX(-4px);
+    }
+    40%,
+    60% {
+        transform: translateX(4px);
+    }
+}
+
+/* success / done card */
+.done {
+    text-align: center;
+    padding: 12px 0 4px;
+    animation: ioFade 0.25s ease;
+}
+.doneBadge {
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    margin: 0 auto 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--color-success-bg);
+    color: var(--color-success);
+    animation: ioPop 0.3s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+@keyframes ioPop {
+    from {
+        transform: scale(0.9);
+        opacity: 0;
+    }
+    to {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+.doneT {
+    font-size: 18px;
+    font-weight: 600;
+}
+.doneS {
+    font-size: 13px;
+    color: var(--text-3);
+    margin-top: 7px;
+    line-height: 1.5;
+    max-width: 420px;
+    margin-left: auto;
+    margin-right: auto;
+    text-wrap: pretty;
+}
+.doneCard {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 13px 15px;
+    margin: 20px auto 0;
+    max-width: 440px;
+    text-align: left;
+}
+.doneCardIc {
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-md);
+    background: var(--color-subtle);
+    color: var(--text-2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+}
+.doneFn {
+    font-size: 13px;
+    font-weight: 500;
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.doneFp {
+    font-size: 11px;
+    color: var(--text-4);
+    font-family: var(--font-mono);
+    margin-top: 3px;
+}
+.doneActions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 24px;
+}
+
+/* decrypted result preview list */
+.prev {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    margin: 20px auto 0;
+    max-width: 460px;
+}
+.prevRow {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 11px 15px;
+    border-bottom: 1px solid var(--color-border);
+    font-size: 13px;
+}
+.prevRow:last-child {
+    border-bottom: none;
+}
+.prevIc {
+    color: var(--text-3);
+    display: flex;
+    flex: 0 0 auto;
+}
+.prevNm {
+    flex: 1;
+    color: var(--text-2);
+}
+.prevN {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--text-1);
+}

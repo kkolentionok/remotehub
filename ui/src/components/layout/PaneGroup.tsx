@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 
 import { useSessionsStore } from "../../store";
 import type { PaneNode } from "../../lib/paneTree";
+import { hasLeaf } from "../../lib/paneTree";
 import { SessionView } from "../session/SessionView";
 import { SftpView } from "../sftp/SftpView";
 import styles from "./PaneGroup.module.css";
@@ -12,6 +13,9 @@ interface Ctx {
     /** The whole tab is the active tab (its panes are visible). */
     tabVisible: boolean;
     paneCount: number;
+    /** When set, the tab is in focus mode: this leaf fills the area, the
+     *  other leaves are kept mounted but collapsed (flex-basis 0 + hidden). */
+    focusKey: string | null;
 }
 
 /**
@@ -51,6 +55,15 @@ function Split({
     const bPct = `${((1 - node.ratio) * 100).toFixed(2)}%`;
     const isRow = node.dir === "row";
 
+    // Focus mode: collapse the subtree that does NOT contain the focused leaf
+    // to zero (kept mounted, just hidden) so the focused pane fills the area
+    // and the divider disappears.
+    const focusing = ctx.focusKey != null;
+    const aHasFocus = focusing && hasLeaf(node.a, ctx.focusKey!);
+    const bHasFocus = focusing && !aHasFocus;
+    const aBasis = focusing ? (aHasFocus ? "100%" : "0%") : aPct;
+    const bBasis = focusing ? (bHasFocus ? "100%" : "0%") : bPct;
+
     const onDividerPointerDown = (e: React.PointerEvent) => {
         e.preventDefault();
         const container = ref.current;
@@ -83,14 +96,22 @@ function Split({
             ref={ref}
             className={`${styles.split} ${isRow ? styles.row : styles.col}`}
         >
-            <div className={styles.cell} style={{ flexBasis: aPct }}>
+            <div
+                className={`${styles.cell} ${focusing && !aHasFocus ? styles.collapsed : ""}`}
+                style={{ flexBasis: aBasis }}
+            >
                 <PaneGroup node={node.a} ctx={ctx} path={[...path, "a"]} />
             </div>
+            {!focusing && (
+                <div
+                    className={`${styles.divider} ${isRow ? styles.dividerV : styles.dividerH}`}
+                    onPointerDown={onDividerPointerDown}
+                />
+            )}
             <div
-                className={`${styles.divider} ${isRow ? styles.dividerV : styles.dividerH}`}
-                onPointerDown={onDividerPointerDown}
-            />
-            <div className={styles.cell} style={{ flexBasis: bPct }}>
+                className={`${styles.cell} ${focusing && !bHasFocus ? styles.collapsed : ""}`}
+                style={{ flexBasis: bBasis }}
+            >
                 <PaneGroup node={node.b} ctx={ctx} path={[...path, "b"]} />
             </div>
         </div>
@@ -113,6 +134,11 @@ function PaneLeaf({ sessionKey, ctx }: { sessionKey: string; ctx: Ctx }) {
     if (!session) return null;
 
     const focused = ctx.activePaneKey === sessionKey;
+    const tiled = ctx.focusKey == null;
+    const carded = ctx.paneCount > 1;
+    // Accent ring marks the active pane only in tiled (split) mode — in focus
+    // mode there is only one visible pane, so an accent would be noise.
+    const accent = carded && tiled && focused;
     // A session drag is in progress and it isn't this very pane. (When a tab
     // is dragged, the target tab is previewed, so the visible pane is never
     // the dragged one.)
@@ -141,7 +167,7 @@ function PaneLeaf({ sessionKey, ctx }: { sessionKey: string; ctx: Ctx }) {
     return (
         <div
             ref={ref}
-            className={`${styles.leaf} ${ctx.paneCount > 1 && focused ? styles.focused : ""}`}
+            className={`${styles.leaf} ${carded ? styles.card : ""} ${accent ? styles.cardFocused : ""}`}
             onMouseDownCapture={() => {
                 if (!focused) setActivePane(ctx.tabId, sessionKey);
             }}
@@ -154,6 +180,8 @@ function PaneLeaf({ sessionKey, ctx }: { sessionKey: string; ctx: Ctx }) {
                     visible={ctx.tabVisible}
                     focused={ctx.tabVisible && focused}
                     showHeader={ctx.paneCount > 1}
+                    tabId={ctx.tabId}
+                    inFocusMode={ctx.focusKey != null}
                 />
             )}
             {dropActive && (

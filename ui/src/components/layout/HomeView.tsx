@@ -14,6 +14,7 @@ import {
 
 import { useT } from "../../i18n";
 import { groupColor } from "../../lib/groupColor";
+import { hosts as hostsApi } from "../../lib/ipc";
 import type { HostDto } from "../../lib/types";
 import {
     useGroupsStore,
@@ -41,6 +42,31 @@ function hostIcon(h: HostDto): ComponentType<{ size?: number | string }> {
  * HostDetail, kept intact for focus continuity — its visual pass comes
  * next). Sessions open as sibling tabs in the TabBar.
  */
+/**
+ * Parse a quick-connect target from the search box: `[user@]host[:port]`.
+ * Returns null for ordinary search words so normal filtering still works —
+ * only clear addresses (have a user, a port, a dot, or "localhost") qualify.
+ */
+function parseQuickConnect(
+    raw: string,
+): { username: string; hostname: string; port: string } | null {
+    const q = raw.trim();
+    if (!q) return null;
+    const m = /^(?:([^@\s]+)@)?([^@\s:]+)(?::(\d{1,5}))?$/.exec(q);
+    if (!m) return null;
+    const user = m[1];
+    const host = m[2];
+    const port = m[3];
+    if (!host) return null;
+    const looksHost = host.includes(".") || host.toLowerCase() === "localhost";
+    if (!user && !port && !looksHost) return null;
+    if (port) {
+        const p = Number(port);
+        if (p < 1 || p > 65535) return null;
+    }
+    return { username: user ?? "", hostname: host, port: port ?? "" };
+}
+
 export function HomeView() {
     const { t } = useT();
     const hosts = useHostsStore((s) => s.items);
@@ -51,6 +77,7 @@ export function HomeView() {
     const draft = useUiStore((s) => s.draft);
     const selectHost = useUiStore((s) => s.selectHost);
     const startDraft = useUiStore((s) => s.startDraft);
+    const updateDraft = useUiStore((s) => s.updateDraft);
     const setDialog = useUiStore((s) => s.setDialog);
     const openSession = useSessionsStore((s) => s.open);
     const sessions = useSessionsStore((s) => s.sessions);
@@ -149,7 +176,65 @@ export function HomeView() {
     const connect = (h: HostDto) => {
         void openSession(h);
     };
-    const newHost = () => startDraft(filter === "all" ? null : filter);
+    // Quick-connect: type `[user@]host[:port]` (port defaults to 22) and press
+    // Enter → connect straight to the standard session screen. If the address
+    // isn't saved yet we create a bare host first (no credential), then open.
+    // The password is asked for inline on the connecting screen (its built-in
+    // re-auth panel) — no separate popup.
+    const tryQuickConnect = (tgt: {
+        username: string;
+        hostname: string;
+        port: string;
+    }) => {
+        const port = tgt.port ? Number(tgt.port) : 22;
+        setSearch("");
+        const existing = hosts.find(
+            (h) =>
+                h.protocol === "ssh" &&
+                h.hostname === tgt.hostname &&
+                h.port === port &&
+                (tgt.username ? h.username === tgt.username : true),
+        );
+        if (existing) {
+            void openSession(existing);
+            return;
+        }
+        void (async () => {
+            try {
+                const created = await hostsApi.create({
+                    name: tgt.username
+                        ? `${tgt.username}@${tgt.hostname}`
+                        : tgt.hostname,
+                    protocol: "ssh",
+                    hostname: tgt.hostname,
+                    port,
+                    username: tgt.username || null,
+                });
+                await useHostsStore.getState().load();
+                const host = useHostsStore
+                    .getState()
+                    .items.find((h) => h.id === created.id);
+                if (host) void openSession(host);
+            } catch {
+                // Creating the host failed (rare) — nothing to connect to.
+            }
+        })();
+    };
+    // The "Create host" button keeps opening the full editor (pre-filled from
+    // the query when it parses as an address — convenience, not connect).
+    const newHost = () => {
+        const tgt = parseQuickConnect(search);
+        startDraft(filter === "all" ? null : filter);
+        if (tgt) {
+            updateDraft({
+                hostname: tgt.hostname,
+                inlineUsername: tgt.username,
+                port: tgt.port,
+                protocol: "ssh",
+            });
+            setSearch("");
+        }
+    };
 
     return (
         <div className={styles.home}>
@@ -163,8 +248,15 @@ export function HomeView() {
                                 value={search}
                                 onChange={(e) => setSearch(e.target.value)}
                                 onKeyDown={(e) => {
-                                    const first = filtered[0];
-                                    if (e.key === "Enter" && first) connect(first);
+                                    if (e.key === "Enter") {
+                                        const first = filtered[0];
+                                        if (first) {
+                                            connect(first);
+                                        } else {
+                                            const tgt = parseQuickConnect(search);
+                                            if (tgt) tryQuickConnect(tgt);
+                                        }
+                                    }
                                     if (e.key === "Escape") setSearch("");
                                 }}
                                 placeholder={t("storage.search.placeholder")}

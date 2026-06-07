@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Columns2, FolderOpen, HardDrive, Lock, Monitor, Plus, Server, Settings, Terminal, Users, Wrench, X } from "lucide-react";
 
 import { useT } from "../../i18n";
+import { sync } from "../../lib/ipc";
 import { leafKeys } from "../../lib/paneTree";
-import { useSessionsStore, useUiStore } from "../../store";
+import { useSessionsStore, useTransferBadgeStore, useUiStore } from "../../store";
 import { WindowControls } from "./WindowControls";
 import styles from "./TabBar.module.css";
 
@@ -23,6 +24,7 @@ export function TabBar() {
     const { t } = useT();
     const sessions = useSessionsStore((s) => s.sessions);
     const tabs = useSessionsStore((s) => s.tabs);
+    const transferCounts = useTransferBadgeStore((s) => s.counts);
     const activeTabId = useSessionsStore((s) => s.activeTabId);
     const setActiveTab = useSessionsStore((s) => s.setActiveTab);
     const closeTab = useSessionsStore((s) => s.closeTab);
@@ -67,6 +69,25 @@ export function TabBar() {
     // future sync feature — disabled until a backend exists.
     const [scopeOpen, setScopeOpen] = useState(false);
     const [scopePos, setScopePos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+    // Account/sync state, refreshed each time the scope menu opens (cheap).
+    const [syncCfg, setSyncCfg] = useState<{ logged_in: boolean; email: string | null } | null>(
+        null,
+    );
+    useEffect(() => {
+        if (!scopeOpen) return;
+        let cancelled = false;
+        void sync
+            .getConfig()
+            .then((c) => {
+                if (!cancelled) setSyncCfg({ logged_in: c.logged_in, email: c.email });
+            })
+            .catch(() => {
+                /* sync server unreachable / not configured — leave as null */
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [scopeOpen]);
     const vaultRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
         if (!scopeOpen) return;
@@ -149,12 +170,28 @@ export function TabBar() {
                             <span>{t("storage.personal")}</span>
                             <Check size={14} className={styles.scopeCheck} />
                         </button>
+                        <div className={styles.scopeHint}>
+                            {syncCfg?.logged_in
+                                ? t("storage.syncedAs", { email: syncCfg.email ?? "" })
+                                : t("storage.notSignedIn")}
+                        </div>
                         <button type="button" className={styles.scopeItem} disabled title={t("storage.teamLocked")}>
                             <Users size={14} />
                             <span>{t("storage.team")}</span>
                             <Lock size={12} className={styles.scopeLock} />
                         </button>
                         <div className={styles.scopeHint}>{t("storage.teamLocked")}</div>
+                        <button
+                            type="button"
+                            className={styles.scopeItem}
+                            onClick={() => {
+                                setScopeOpen(false);
+                                setDialog({ kind: "settings", section: "profile" });
+                            }}
+                        >
+                            <Settings size={14} />
+                            <span>{t("storage.manageSync")}</span>
+                        </button>
                     </div>
                 )}
             </div>
@@ -190,6 +227,11 @@ export function TabBar() {
                     sessions.find((s) => s.key === keys[0]);
                 const paneCount = keys.length;
                 const SessIco = focused?.sftp ? FolderOpen : focused?.local ? Terminal : focused?.protocol === "rdp" ? Monitor : Server;
+                const transferCount = focused?.sftp ? (transferCounts[focused.key] ?? 0) : 0;
+                const tabTooltip =
+                    focused?.detectedOs && !focused.sftp && !focused.local
+                        ? `${focused.title} · ${focused.detectedOs}`
+                        : focused?.title;
                 const connecting =
                     !!focused &&
                     ["resolving", "connecting", "authenticating", "host_key_pending"].includes(
@@ -202,6 +244,7 @@ export function TabBar() {
                         role="tab"
                         data-tabid={tab.id}
                         aria-selected={shownTabId === tab.id}
+                        title={tabTooltip}
                         draggable
                         className={`${styles.sessionTab} ${shownTabId === tab.id ? styles.active : ""} ${dragging && shownTabId === tab.id ? styles.shown : ""} ${dragging && shownTabId !== tab.id ? styles.dimmed : ""} ${dragId === tab.id ? styles.dragging : ""}`}
                         onClick={() => setActiveTab(tab.id)}
@@ -249,6 +292,14 @@ export function TabBar() {
                                 ? t("tab.split")
                                 : (focused?.title ?? "—")}
                         </span>
+                        {transferCount > 0 && (
+                            <span
+                                className={styles.transferBadge}
+                                title={t("tab.transfersActive", { n: String(transferCount) })}
+                            >
+                                {transferCount}
+                            </span>
+                        )}
                         {paneCount > 1 && (
                             <span className={styles.count} title={t("tab.panes", { n: paneCount })}>
                                 <Columns2 size={11} />

@@ -29,11 +29,12 @@
     z-index: 1;
 }
 
-/* Hairline centered in the hit area. */
+/* Hairline centered in the hit area — invisible by default so split cards are
+ * separated by clean air; shows an accent line on hover/drag. */
 .divider::before {
     content: "";
     position: absolute;
-    background: var(--color-border);
+    background: transparent;
     transition: background 0.1s;
 }
 
@@ -73,14 +74,26 @@
     position: relative;
 }
 
-/* Subtle accent ring on the focused pane (only when split). */
-.focused::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    box-shadow: inset 0 0 0 1px var(--color-accent);
-    opacity: 0.5;
+/* Split-mode panes look like cards: hairline, rounded, with air between them
+ * (the divider) and to the window edges (the .splitWrap padding). */
+.card {
+    box-sizing: border-box;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface);
+    overflow: hidden;
+}
+
+/* Active pane in tiled (split) mode — accent border. */
+.cardFocused {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+/* Focus mode: the subtree not containing the focused leaf is collapsed but
+ * kept mounted (terminals keep their scrollback). */
+.collapsed {
+    display: none;
 }
 
 /* Drag-to-split overlay (shown while a session is being dragged). */

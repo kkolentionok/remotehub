@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Eye, EyeOff, KeyRound, Lock, Zap } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Zap } from "lucide-react";
 
 import { useT } from "../../i18n";
 import { useCredentialsStore, useSessionsStore } from "../../store";
@@ -115,11 +115,6 @@ export function ReauthPanel({
 
     return (
         <div className={styles.reauthCard}>
-            <div className={styles.reauthHead}>
-                <Lock size={14} />
-                {t("conn.reauth.title")}
-            </div>
-
             <div className={styles.reauthRow}>
                 <span className={styles.reauthLabel}>{t("conn.reauth.access")}</span>
                 <div className={styles.seg}>

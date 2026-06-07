@@ -1,0 +1,38 @@
+[package]
+name = "rh-sync-server"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+description = "RemoteHub sync server — authenticated, versioned, opaque-blob vault store (E2E; sees only ciphertext)"
+
+# Standalone workspace: this crate shares no code with the RemoteHub app and is
+# built/dockerized on its own. Declaring an empty [workspace] makes it its own
+# root so the parent app workspace never compiles it.
+[workspace]
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jsonwebtoken = "9"
+argon2 = "0.5"
+# argon2 pulls rand_core 0.6 but not its `getrandom` feature, so
+# `password_hash::rand_core::OsRng` is configured out. Depending on the same
+# rand_core with `getrandom` unifies the feature and makes OsRng available.
+rand_core = { version = "0.6", features = ["getrandom"] }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+# Yandex OAuth (slice 3a-2): call Yandex token/userinfo endpoints; rustls so no
+# native TLS toolchain is needed in the build image.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+urlencoding = "2"
+
+[profile.release]
+strip = true
+lto = "thin"

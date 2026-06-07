@@ -1,6 +1,368 @@
 # RemoteHub — Project State & Handoff
 
-**Last updated:** NSCodec decoder works — log clean, UI/colors correct, fps up to 20. One remaining GFX artifact: persistent band at the TOP of a window after maximize->restore (disocclusion; predates NSCodec) — awaiting a focused RDP_GFX_TRACE=1 capture of a single maximize->restore. Added a comprehensive docs/CHEATSHEET.md (full project briefing).
+**Last updated:** Sync slice 3a-2 — **server-side Yandex OAuth + email verification**. New `server/src/oauth.rs` (Yandex authorize/token/userinfo via reqwest; signed `state` carrying the app loopback `cb`; verify-link tokens — all stateless JWTs). Routes `/v1/oauth/yandex/{start,callback}` (server-mediated loopback: app opens browser → we exchange the code with the client secret → mint our bearer → 302 back to `cb?token=…`) and `/v1/verify`. `register` logs a verify link + `login` rejects unverified when `REQUIRE_EMAIL_VERIFICATION=1`. Config: `PUBLIC_BASE_URL`/`YANDEX_CLIENT_ID`/`YANDEX_CLIENT_SECRET` (OAuth inert until all set) + `oauth_enabled()`; `AppError::Forbidden`. Desktop default endpoint now `https://pingie.ru` (self-host overrides; existing localhost config preserved). Server unverified (no cargo; user builds via `cargo run`/Docker) + untestable until pingie.ru is deployed with a registered Yandex app. **Next:** 3b-oauth — desktop loopback listener + "Sign in with Yandex" button; then deploy (pingie.ru + TLS).
+
+## Latest — Sync slice 3a-2: server Yandex OAuth + email verification
+
+Managed default with self-host override: the desktop now defaults its endpoint to `https://pingie.ru` (override in Settings for self-hosters; the dev's existing `localhost:8080` config is untouched). The server gained Yandex sign-in and email verification.
+
+- **`server/src/oauth.rs`** (new) — Yandex `authorize`/`token`/`userinfo` over reqwest (rustls); a signed `state` JWT that carries the app's loopback `cb` (CSRF + return address); stateless verify-link JWTs. `is_loopback_cb` guards against open-redirect (only `http://127.0.0.1|localhost`).
+- **`server/src/routes.rs`** — `GET /v1/oauth/yandex/start?cb=…` (validate loopback → 302 to Yandex) and `/v1/oauth/yandex/callback` (exchange code with the client secret → read id+email → `upsert_oauth_account` by `yandex_sub`, else link by email, else create password-less + verified → mint bearer → 302 to `cb?token=…`, or `cb?error=…`). `GET /v1/verify?token=…` flips `email_verified`. `register` logs a verify link and `login` returns 403 for unverified **only when** `REQUIRE_EMAIL_VERIFICATION=1`.
+- **`config.rs`** — `PUBLIC_BASE_URL`, `YANDEX_CLIENT_ID/SECRET`, `REQUIRE_EMAIL_VERIFICATION`, `oauth_enabled()` (all-or-nothing). **`error.rs`** — `Forbidden(String)`→403. **Cargo** — reqwest + urlencoding. README/.env document the Yandex app (redirect `https://pingie.ru/v1/oauth/yandex/callback`, scopes `login:email`+`login:info`).
+
+Server-mediated loopback keeps the client secret on the server; the app only ever receives its own bearer token. **Unverified** (no cargo locally) and **untestable until pingie.ru is deployed** with a registered Yandex app — the email/password path stays the dev flow. **Next:** 3b-oauth (desktop loopback listener spawned by the app + "Sign in with Yandex" button in the sync settings), then deployment (pingie.ru behind TLS — Caddy/Cloudflare).
+
+
+
+The Vault chevron (TabBar storage-scope menu) now reflects sync rather than just showing a locked seam.
+
+- **`ui/src/components/layout/TabBar.tsx`** — on menu open, fetch `sync.getConfig()`; under "Personal" show `Synced · {email}` (signed in) or `Local only — not signed in`. New `Sync settings…` item opens Settings → Account & Sync (`setDialog({ kind: "settings", section: "profile" })`).
+- **"Team" intentionally still locked.** It's a real multi-tenant team-vault feature, and the server is single-vault-per-account — unlocking it now would be a fake. Left as the honest future seam.
+- i18n `storage.syncedAs`/`notSignedIn`/`manageSync` (en+ru). Pure frontend; tsc + vite green.
+
+**Next:** 3a-2 — server-side Yandex OAuth (`/v1/oauth/yandex/{start,callback}`) + email verification (the `accounts.yandex_sub`/`email_verified` columns already exist).
+
+
+
+Live no-op fix confirmed (`1 1 1`). Now the user-facing sync screen. Settings → **Account & Sync** (the old Profile placeholder tab, repurposed; tab is still id `profile`).
+
+- **`ui/src/components/settings/sections/ProfileSection.tsx`** (+ `.module.css`) — full rewrite from Placeholder to the real client. Loads `sync.getConfig()` on mount. **Signed out:** endpoint + email + account-password fields, `Log in` (primary) / `Create account` (ghost, registers then logs in). **Signed in:** identity card (email + endpoint mono + `Log out`) and a **Vault password** field + `Sync now`, with status: idle → spinner → done (per-type counts hosts/groups/credentials + `vN` chip + first-push vs merged note) / inline error. After a successful sync it refetches the host/group/credential stores (apply may have changed local data). Account password (server auth) and vault password (E2E key) are visually and functionally separate.
+- All backend calls via `lib/ipc.ts` `sync.*`; no raw `invoke`. New `settings.sync.*` strings in `en.ts` + `ru.ts`; tab label → "Account & Sync" / "Аккаунт и синхронизация". tsc + vite green.
+
+Pure frontend — no Rust touched. **Next:** wire the TabBar "Team" storage-scope chevron (locked "needs sync" → enabled when signed in); 3a-2 server Yandex OAuth + email verification.
+
+
+
+After 2c, a change-free `sync_now` still bumped the server rev live (`1`→`2`) while the engine unit tests passed. Root cause was on the rh-app side, not the engine: `apply_snapshot`'s credential branch ran `update` (which preserves the record's `updated_at`) and **then** `rotate_secret`, which stamps `updated_at = now`. So every apply drifted the serialized credential's timestamp; the next `build_snapshot` read the drifted value, `records_equal` returned false, and the engine re-pushed. (Hosts already preserve `updated_at`; `link_host`/group `rename` don't touch it; `stamp_from` writes the record's own rev; `merge` clones winners verbatim — so credentials were the sole drift.)
+
+- **`crates/rh-app/src/api/vault.rs`** — in `apply_snapshot`, for an existing credential, call `rotate_secret` **before** `update`, so `update` restores the record's `updated_at`. Apply→rebuild is now byte-stable, so a no-net-change sync produces an identical snapshot and the 2c fast path skips the push.
+- Verify live: fresh account → `sync_now` twice → both `pushed_version` should now read `"1"` (was `"1"`, `"2"`).
+
+
+
+3b's first live test showed a second, change-free `sync_now` still bumped the server rev (`v1`→`v2`): `sync_once` always re-sealed and pushed after merge. Re-sealing mints a fresh AES nonce, so the blob always looks "new" — needless rev inflation, full re-uploads, and (worst) idle multi-device version ping-pong.
+
+- **`crates/rh-vault/src/engine.rs`** — after `merge`, compare the result to the decrypted remote by **content** (`records_equal`: a `(kind,id)`-keyed map over records' `meta`+`data`, ignoring `node`/`generated`/nonce/order). If equal → return the remote's existing version with no push. First-ever sync (empty remote) and any sync that contributes a real change still push as before.
+- Tests: `second_sync_with_no_changes_skips_push` (no rev bump, version unchanged), `sync_with_a_local_change_still_pushes` (rev bumps, merged set correct). `cargo test -p rh-vault`.
+
+Verified live before this: 3b loop works end-to-end against `localhost:8080` — r1 `had_remote:false` pushed 16 hosts/4 groups/22 creds; r2 `had_remote:true` pulled+decrypted+merged the own envelope. The only wart (r2 pushing `v2`) is exactly what 2c removes. **Next:** 3c sync settings UI + Team scope; 3a-2 Yandex OAuth + email verification.
+
+
+
+The app can now sync against the server. All dev-testable against `localhost:8080` — no VPS. Frontend wrappers verified (tsc + vite green); Rust unverified (no cargo — `cargo tauri dev`).
+
+- **`crates/rh-app/src/sync_remote.rs`** — `ServerRemote: rh_vault::SyncRemote` over reqwest (rustls). `pull` = `GET /v1/vault` (200→`Some`, 204→`None`); `push` = `PUT /v1/vault` (+`If-Match` when updating), `409`/`412`→`RemoteConflict` so the engine re-pulls/re-merges. Plus `SyncConfig` (endpoint + email in `sync-config.json`), token in the **OS keychain** via `keyring` (`token_get/set/clear`), and `server_register`/`server_login` HTTP helpers.
+- **`crates/rh-app/src/api/sync.rs`** — IPC: `sync_get_config`, `sync_set_endpoint`, `sync_register`, `sync_login`, `sync_logout`, `sync_now`. `sync_now(master_password)` = `vault::build_snapshot` → `rh_vault::sync_once(ServerRemote, …)` → `vault::apply_snapshot`; seeds a detached `HlcGenerator` from the shared clock and `observe`s it back, so the clock lock is never held over network I/O. Master password seals/opens the E2E envelope, never sent.
+- `vault::build_snapshot`/`apply_snapshot`/`ImportCounts` made `pub(crate)`; `SyncClock::last()` added. reqwest + keyring added to `rh-app`.
+- **Frontend:** `lib/ipc.ts` `sync` namespace + `lib/types.ts` `SyncConfigResponse`/`SyncNowResponse`. UI to consume them is 3c.
+
+**Smoke (after `cargo tauri dev`, server running on :8080):** set endpoint → register/login → `sync_now`. Two app instances pointed at the same account should converge. **Next:** 3c sync settings UI (endpoint, login/Yandex button, Sync now, status) + wire Team scope; 3a-2 Yandex OAuth + email verification on the server.
+
+
+
+The self-hostable backend. Standalone crate **`server/`** (`rh-sync-server`, its own `[workspace]` — the app workspace `exclude`s it, so `cargo tauri dev` never compiles it). **Unverified: no cargo in the sandbox — build with `cd server && docker compose up --build` (set `JWT_SECRET` in `.env`) or `cargo run`.**
+
+- **Protocol (§9.1).** `POST /v1/register` `{email,password}` (Argon2 hash) → 201/409; `POST /v1/login` → `{token}` (JWT, 7-day TTL); `GET /v1/vault` (Bearer) → `{blob_b64,rev}` / 204; `PUT /v1/vault` (Bearer, `If-Match:<rev>`) → `{rev}` / 409 stale / 412 create-collision. Concurrency is race-free via single atomic SQL (conditional `UPDATE ... WHERE rev=?`, `INSERT ... ON CONFLICT DO NOTHING`). `GET /health`.
+- **E2E preserved.** `blob` is the client's sealed export string stored verbatim; the server never sees plaintext or the master password.
+- **Auth decoupled from the vault password** (since Yandex OAuth has no password to split): account auth = email+password **or** (3a-2) Yandex OAuth → JWT; vault key derives from a separate on-device master password. `accounts(id,email,password_hash?,yandex_sub?,email_verified,created_at)` + `vaults(account_id,blob,rev,updated_at)`.
+- **Files:** `server/src/{main,config,db,auth,error,routes}.rs`, `Dockerfile` (multi-stage rust→debian-slim, non-root, `/data` volume), `docker-compose.yml`, `.env.example`, `.dockerignore`, `README.md`. Deps: axum 0.7, sqlx 0.8 (sqlite, runtime queries), jsonwebtoken 9, argon2 0.5, uuid, chrono, tracing.
+- **Stack decision recorded** in `docs/specs/sync.md` §9.3 (Rust/axum + the auth-decoupling rationale).
+
+**TLS:** terminate in front (Caddy/Cloudflare); the managed `Default` endpoint is a domain behind a proxy so the origin IP stays hidden (§9.4). **Next:** 3a-2 Yandex OAuth + email verification (columns already there); then 3b client `ServerRemote: SyncRemote` + `sync_now` IPC + `sync.endpoint`/account storage; then 3c frontend sync UX + Team scope.
+
+
+
+Merge is now true **last-edit-wins**, end to end. `cargo tauri dev` compiles + runs; the v9→v10 migration applied on the real DB with data preserved.
+
+- **`crate::sync_clock::SyncClock`** — process-wide device identity in `AppState`: a stable `NodeId` (ULID) + one `HlcGenerator` behind an async mutex, persisted to `%APPDATA%\RemoteHub\sync-identity.json` (local, never synced). `next()`/`next_stamp()` advance + persist the seed; `observe()` folds in remote/merged time. Replaces slice 1/2's per-call identity.
+- **Stamp on mutation.** `AppState::stamp_live(kind,id)` / `stamp_deleted(kind,id)` wrap `sync_meta.bump`/`tombstone` with a fresh stamp. Called after every successful host/group/credential create/update/delete (and group delete's orphaned-host re-parent). Machine-set marks (`last_connected_at`, detected OS) intentionally do **not** bump — observational, not user edits.
+- **`build_snapshot` reads real revisions.** Each record's `(rev, origin)` comes from `sync_meta.stamp_of` (its last actual edit), with a deterministic fallback to the entity's own timestamp for rows that predate 2b. Tombstones are emitted from `sync_meta.tombstones()` so deletions propagate. Snapshot `generated` = next stamp from the shared clock.
+- **`apply_snapshot` persists provenance.** Incoming merged records `bump` their `(rev,origin)` into `sync_meta`; incoming tombstones `tombstone` it (entity-row delete best-effort). After apply, the clock `observe`s the max stamp so future local stamps sort after merged content. `wipe_local` (replace-import) also `clear_all`s provenance.
+- Warnings cleaned: removed unused `KIND_HOST` import in `credentials.rs`; removed unused `KIND_SETTING` (returns with settings replication).
+
+This closes slice 2b. Concurrent edits on different records on different devices now survive a merge (the gap the old "last-build-wins" had). Next is the network: slice 3.
+
+
+
+Rust-only (no frontend). The foundation for "last-edit-wins" merges. **No `cargo` in the sandbox — verify with `cargo test -p rh-storage -p rh-core`.**
+
+Why: slice 2's `build_snapshot` re-stamps *all* records at build time → real merges are "last-build-wins" and concurrent edits on different records get lost. The fix is a persisted per-record rev/origin updated only on actual mutation (and tombstones so deletions propagate, which matters most with 3+ devices: a long-offline device must not resurrect a deleted host).
+
+- **Schema (migration v10, additive).** One generic table `sync_meta(kind, id, rev_wall, rev_counter, origin, deleted, PK(kind,id))`. Deliberately *not* rev/origin columns on each entity table: a single table means no per-entity SQL changes, and a deletion survives its entity row as a `deleted=1` tombstone so it can replicate. `db.rs` bumped to v10 + chain entry `MIGRATE_V9_TO_V10`; `v1.sql` carries the table and now stamps fresh DBs at version 10; added to the drop-recreate list and the fresh-tables test.
+- **`rh_core::SyncStamp`** `{rev_wall:u64, rev_counter:u32, origin:String}` — storage-neutral form of the sync layer's `(Hlc, NodeId)` (rh-vault converts; keeps `rh-core` free of the sync crate). **`rh_core::SyncMetaStore`** trait: `bump` (live upsert), `tombstone` (deleted upsert), `stamp_of`, `live_stamps(kind)`, `tombstones()`, `clear`.
+- **`SqliteSyncMetaStore`** (`rh-storage`) — runtime `query()`+`bind` (no compile-time DB), shared UPSERT on `(kind,id)` so bump resurrects a tombstone and tombstone buries a live record. 7 real-SQLite (`open_memory`) tests: roundtrip, upsert-overwrite, tombstone excluded-from-live, bump-resurrects-tombstone, kind filtering, clear, large-epoch i64 roundtrip.
+
+**Not yet wired (2b-2, next):** nothing in `rh-app` calls these yet. Next slice adds a shared `HlcGenerator`+`NodeId` to `AppState`, calls `bump`/`tombstone` after every host/group/credential mutation, and rewrites `build_snapshot` (read `live_stamps`/`tombstones` instead of `clock.now()` per record) + `apply_snapshot` (persist incoming `record.meta` into `sync_meta`). Only then does the merge become true last-edit-wins.
+
+
+
+Rust-only (no frontend). See `docs/specs/sync.md` §11 slice 2. **No `cargo` in the sandbox — verify with `cargo test -p rh-vault`.**
+
+- **`rh-vault/src/engine.rs` — the sync engine.** Pure `sync_once(remote, password, local, &mut clock) → SyncReport{merged, version, had_remote}`: pull → (if present) decrypt + `merge` into local (record-level LWW) → seal → push with the pulled version as the optimistic-concurrency precondition. On `RemoteConflict` it re-pulls/re-merges up to 5×. Lives in rh-vault because it touches only vault crypto/model/merge/transport (no storage/keychain/Tauri) — so it is public lib API (no dead-code) and `rh-app`'s future `sync_now` (slice 3) just wires `build_snapshot → sync_once → apply_snapshot`. Re-exported from `lib.rs`.
+- **Tests against `MemoryRemote`** (in engine.rs, setting-records so no `rh_core` construction): first-sync-to-empty-remote, two-devices-converge (A pushes x, B merges→{x,y}, A pulls→{x,y}; both sets equal), newer-revision-wins, wrong-password-errors-and-leaves-remote-untouched, retries-on-conflict-then-succeeds (a `FlakyOnce` remote that conflicts once).
+- **Persistent device identity** (`rh-app/src/api/vault.rs`, private `SyncIdentity`). NodeId (ULID) + HLC seed in `%APPDATA%\RemoteHub\sync-identity.json` (local, never synced). `build_snapshot` now loads it, stamps records with that stable node + monotonic clock, and saves the advanced seed. Replaces slice 1's fresh `dev-<now>` node + wall-reseeded clock (which made local always win). Best-effort file IO; no schema/AppState/main.rs changes.
+
+**Known limitation → slice 2b.** `build_snapshot` still re-stamps *every* record with `clock.now()` at build time, so a real merge is effectively "last-build-wins", not "last-edit-wins" — a concurrent edit on a different record can be lost. The true fix needs per-record `rev`/`origin` persisted on the hosts/groups/credentials rows (+ tombstones), updated only on actual mutation. The engine + stable identity delivered here are the prerequisite foundation; the convergence tests prove the engine is correct given proper per-record stamps.
+
+
+
+Frontend-only CSS (`HomeView.module.css`). The host list felt empty because a bordered card around sparse rows underlines the emptiness.
+
+- **Removed the card.** `.hl` lost its border / radius / surface bg / `overflow` — now a plain column (2px row gap). Rows sit directly on the canvas (Termius-style); the empty space on the right reads as air, not a hole.
+- **No row dividers; rounded selection.** `.lrow` dropped `border-bottom` (+ the `:last-child` reset) and gained `border-radius: var(--radius-md)`, so hover/selected (`--accent-soft`) is a soft rounded highlight. The connection-state left stripe (`inset 3px var(--gc)`) is kept.
+- **Tighter rows.** `min-height` 52→46 px (padding 7/14 → 6/12) — more hosts per screen.
+
+Scrolling unaffected (it lives on `.liststack`, not `.hl`). No data-backed per-host "online" dot was added (we only know live-session state).
+
+## Latest — Terminal links: fix Ctrl+click open + hover tooltip
+
+Follow-up to the link feature. Underline + zoom worked, but Ctrl+click didn't open.
+
+**Cause.** The JS `openUrl` (from `@tauri-apps/plugin-opener`) invokes `plugin:opener|open_url`, which is gated by the plugin's IPC **URL scope** — empty by default → the call was silently rejected (we `void`-ed it).
+
+**Fix.** Open via the opener plugin's **Rust API** instead, behind our own command `open_external { url }` (`api/meta.rs`, `app.opener().open_url(url, None)`) — the Rust API isn't subject to the IPC scope, so any link the user explicitly Ctrl-clicks opens. The terminal handler now calls `appApi.open(uri)` (ipc `app.open` → `invoke("open_external", { url })`) with a `.catch` that logs. The JS `@tauri-apps/plugin-opener` import is dropped (package stays installed; the Rust plugin is still registered for its Rust API). No new deps this turn — **Rust rebuild only** (new command).
+
+**Tooltip.** Wired the WebLinksAddon `hover`/`leave` options to a small fixed-position pill ("Ctrl + Click to open the link") built from `.linkTip`/`.linkTipKbd` (kbd badges, `--shadow-pop`). i18n `terminal.clickWord` + `terminal.openLinkHint` (en+ru). Frontend verified (tsc + vite).
+
+Risk flag (user compiles): `tauri_plugin_opener::OpenerExt` + `app.opener().open_url(_, None::<&str>)` is the one unproven Rust surface; standard for the plugin's 2.x but worth a glance if it complains.
+
+## Latest — Terminal: Ctrl+wheel zoom + clickable links
+
+Two terminal niceties (`session/Terminal.tsx`, applies to SSH **and** local PTY).
+
+1. **Ctrl + mouse wheel zoom.** Drives the global `terminal_font_size` setting (the existing live-apply effect refits every terminal): instant local `setState`, debounced (500 ms) `settings_update` so a scroll burst doesn't storm the backend. Clamped 8–32 px. A plain wheel (no Ctrl) is left to xterm for scrollback. Frontend-only.
+2. **Clickable links.** Added `@xterm/addon-web-links` — URLs underline on hover; **Ctrl/Cmd+click** opens them in the system browser (a plain click stays inert so it never hijacks shell clicks/selection). Opening uses the new **opener plugin**.
+
+**New dependencies** — needs `pnpm install` AND a Rust rebuild:
+- JS: `@xterm/addon-web-links`, `@tauri-apps/plugin-opener`.
+- Rust: `tauri-plugin-opener = "2"` + `.plugin(tauri_plugin_opener::init())` in main.rs + capability perm `opener:allow-open-url`.
+
+Risk flag (user compiles): the capability id `opener:allow-open-url` is validated by `tauri-build`; `opener:default` is the fallback if it complains.
+
+## Latest — Split rework: card panes + focus mode
+
+Frontend-only (no Rust recompile — hot-reloads in dev). Three changes from the user's screenshots.
+
+1. **Card panes.** In a tiled split (paneCount > 1) each pane is now a card: hairline border, `--radius-lg`, `box-sizing:border-box`, with air to the window edges (`.splitWrap` padding) and a clean gap between cards (the divider hairline is transparent until hover→accent). The active pane gets an accent border. Single-pane tabs stay full-bleed (unchanged). (`PaneGroup.module.css` `.card`/`.cardFocused`; `AppShell.module.css` `.splitWrap`.)
+2. **Pane header trimmed.** Removed the split-right / split-down preset buttons from the pane header; it now carries only the focus toggle + close. (Split is still available via drag-to-edge and Ctrl+Shift+E/D.)
+3. **Focus mode.** New per-tab `WorkspaceTab.focusKey` + `setFocusPane(tabId, key|null)`. The pane-header `Maximize2` enters focus on that pane (`Minimize2` exits). In focus mode the focused pane fills the area and the other sessions move to a left rail (`session/FocusRail.tsx`, titled "Терминалы · N") — click a row to switch focus, the active row has a close button, the rail header collapses back to the split. Implemented by collapsing the non-focused subtree to `flex-basis:0 + display:none` (`PaneGroup` `.collapsed`) so **terminals stay mounted and keep scrollback**; xterm refits via its ResizeObserver. Closing the focused pane follows to the next session; dropping to one pane exits focus.
+
+New i18n: `pane.focus`, `pane.exitFocus`, `focusRail.title` (en+ru). `pane.splitRight/splitDown` keys kept (still used by the keyboard-shortcut tooltips elsewhere / harmless).
+
+## Latest — Native Save/Open dialogs for the vault (package C)
+
+Export used to drop the `.rvault` into Downloads via a webview blob; import used a hidden `<input type=file>`. Both now use the OS-native pickers.
+
+**Dependency** (user compiles): `tauri-plugin-dialog = "2"` (Cargo) + `.plugin(tauri_plugin_dialog::init())` in `main.rs` + capability perms `dialog:allow-open`, `dialog:allow-save` in `capabilities/default.json`. JS side: `@tauri-apps/plugin-dialog@^2`.
+
+**Flow.** The webview can't write/read arbitrary files, so the native picker (JS `save`/`open`, returns a path) is paired with two scoped Rust commands instead of pulling in the fs plugin:
+- `vault_write_file { path, body }` — `std::fs::write` (export → user picks location/name).
+- `vault_read_file { path } -> { body, name, size }` — `std::fs::read_to_string` + basename (import → feeds the existing decrypt/merge/replace flow).
+
+`ImportExportSection.tsx`: export calls `saveDialog({ defaultPath, filters:[.rvault] })` → `vault.writeFile`; import calls `openDialog({ filters })` → `vault.readFile` → staged `{name,size,body}` (drag-drop still works, reading the dropped File's text in the webview). Cancelling a dialog returns to the form with no error. `VaultFileResponse` added to types.ts/ipc.ts.
+
+Risk flags (user compiles): the capability permission identifiers `dialog:allow-open`/`dialog:allow-save` are validated by `tauri-build` — if it rejects them, `dialog:default` is the fallback. The `gen/schemas` capability files regenerate automatically.
+
+## Latest — Taller header + tray session count & quit-confirm (package B)
+
+Two small quality-of-life items.
+
+**Header height.** The tab bar (`TabBar.module.css`) was 38px tall and the user kept misclicking the tabs. Raised `.bar` to 44px, `.section`/`.sessionTab` to 34px, `.add` to 30px — bigger hit targets, same layout (nothing else keys off the bar height).
+
+**Tray session count + confirm-on-quit** (Rust — user compiles):
+- `AppState` gains `session_count: Arc<AtomicUsize>`. The UI reports its live session-tab count via a new `ui_sessions_report { count }` command (`api/meta.rs`), called from an `AppShell` effect on `useSessionsStore(s => s.sessions.length)`.
+- `tray.rs` `update_tooltip(app, n)` sets the tooltip to `RemoteHub`, `RemoteHub · 1 active session`, or `RemoteHub · N active sessions`. Called from `ui_sessions_report`.
+- Tray **Quit**: if `session_count > 0`, instead of `exit(0)` it surfaces the window and emits `app:confirm-quit` (payload = count). `AppShell` listens → `setDialog({ kind: "quit-confirm", count })` → `DialogHost` renders a `ConfirmDialog` → on confirm calls the new `app_quit` command → real `exit(0)`. Zero sessions → quits immediately (unchanged).
+- New `DialogKind` variant `quit-confirm`; new ipc namespace `app` (`reportSessions`, `quit`); i18n `dialog.confirm.quit.{title,description,action}` (en+ru, `{n}` interpolation).
+
+Risk flags (unproven until the user compiles): `TrayIcon::set_tooltip(Some(_))`, `Manager::try_state::<AppState>()` in the menu-event closure. Both are standard Tauri 2 surface but worth a glance if the build complains.
+
+**Fix (same session):** the count never reached the backend — the `app` ipc namespace went through `call()`, which wraps the payload as `{ req: … }` (the project's commands take a single `req` DTO). But `ui_sessions_report` takes a top-level `count: u32`, so Rust saw no `count` and the command failed → `session_count` stayed 0 (no tooltip, no quit confirm). Switched the `app` wrappers to call `invoke()` directly with `{ count }`. Frontend-only fix — the Rust signature was already correct, no recompile needed for this part.
+
+## Latest — Vault UI moved to Import/Export tab + backend Replace mode
+
+The portable vault now lives in **Settings → Import / Export** (was crammed into Profile, sharing one ambiguous master-password field across export and import). Two clean flows behind a toggle, ported from the standalone prototype onto real tokens/ipc/i18n:
+
+- **Export** (you *set* a password): master-password + repeat, strength meter, match check; button enabled only when strength ≥ fair and the two match → `vault.export` → blob download `rhub-vault-<date>.rvault` → done card (filename + `Argon2id + AES-256-GCM`).
+- **Import** (you *enter* the file's password): file-first (drop or pick) → enter password → **Merge / Replace** choice. Merge runs straight away; **Replace** shows a destructive confirm ("delete current N hosts…") before running. Wrong password → inline error + shake. Done → counts from `VaultImportResponse`, stores reloaded.
+
+**Backend** (`crates/rh-app/src/api`): `dto.rs` adds `ImportMode { Merge (default), Replace }` + `mode` on `VaultImportRequest`. `vault.rs` `vault_import` branches on mode — Replace decrypts the envelope first, then `wipe_local` (delete all hosts → credentials+keychain → groups, FK-safe) and applies the file's snapshot verbatim; a wrong password fails *before* the wipe, so nothing is lost. Merge is the previous build-snapshot + record-level LWW path. User compiles Rust.
+
+`ProfileSection` reverted to a Stage-5 placeholder (accounts/sync). New files: `ImportExportSection.module.css`. i18n: `settings.io.*` (46 keys, en+ru) + `common.back`. Frontend verified (tsc clean, vite build OK).
+
+
+
+**Product model (decided):** managed **cloud by default** — the vendor runs one **multi-tenant** `rh-sync-server`; end users register/log in and sync, deploying nothing. **Enterprise** can run their own server (app `serverUrl` setting: default = cloud, override = their host) — same binary/protocol. E2E holds against the vendor (trust + liability story). Implications recorded in `sync.md` §9: server is multi-tenant ⇒ auth = the two-secret model (static token is personal-only); it's a *service* (uptime/backups/abuse/recovery/legal). Decide before the server slice: master-password recovery (E2E ⇒ lost = unrecoverable ⇒ recovery key + warning), registration (email/OAuth?), quotas/tier. None gates slices 1–2.
+
+**Slice 1a — vault EXPORT (built this turn):**
+- `crates/rh-app/src/api/vault.rs` — `build_snapshot()` reads all hosts/groups/credentials via the stores and reveals secrets from the keychain into `SyncCredentialPayload` (`SshKeyAgent` creds carry no secret — `kind.has_secret()` gate); stamps records with a fresh `NodeId` + monotonic `HlcGenerator` (stable node/clock deferred to the sync engine). `vault_export(req.master_password)` seals via `rh_vault::seal_snapshot` and returns `to_export_string` (KDF header + nonce + AES-256-GCM ciphertext). `#[instrument(skip(state, req))]` keeps the password out of logs. New `VaultExportRequest` DTO (`deny_unknown_fields`); registered in `main.rs`; `rh-vault` added as an `rh-app` dep.
+- Frontend: `ProfileSection` (was a Stage-5 placeholder) now has a master-password field + "Export encrypted vault" → calls `vault.export` (new `ipc.ts` wrapper) and downloads `remotehub-vault-<date>.json` via a Blob (no fs plugin needed). i18n EN+RU; vault CSS.
+- Deferred: settings replication; a *stable* per-device NodeId + persisted clock (slice 2).
+
+**Slice 1b — IMPORT — next:** `vault_import` (open → merge → write entities back to storage + secrets to keychain, apply tombstones) + persisted NodeId/clock + master-password unlock UX.
+
+Frontend verified (`tsc --noEmit` clean, `vite build` ok). Rust (`vault.rs`, DTO, dep) compiles on the user's machine — rh-vault APIs verified against the crate source (`seal_snapshot`, `SyncRecord::*`, `HlcGenerator::now/last`, `NodeId: Clone`, `reveal/reveal_passphrase`).
+
+## Latest — micro-polish A: SFTP transfer badge + OS in tab tooltip (frontend)
+
+First of the agreed micro-polish packages (frontend-only, fully verified here).
+
+**(3) Active-transfers badge on the SFTP tab.** `useTransfers` is per-session (SftpView is mounted per pane), so a new thin bridge store `useTransferBadgeStore` (`store/index.ts`) maps `sessionKey → in-flight count`. SftpView computes active+queued and publishes it (effect keyed on count + `_session.key`; clears on unmount). TabBar reads `counts[focused.key]` for SFTP tabs and renders a small accent badge (`.transferBadge`). i18n `tab.transfersActive`.
+
+**(4) OS in the session-tab tooltip.** `SessionTab` gained `detectedOs?: string | null`, set from `host.detected_os` when a session tab is built in the sessions store. TabBar sets the tab button `title` to `"{title} · {OS}"` for host sessions (plain title for local/SFTP). Chose a tooltip over an icon because lucide has no distro/OS brand marks (would need bundled SVGs) — flagged for later if real logos are wanted.
+
+Frontend verified (`tsc --noEmit` clean, `vite build` ok). No Rust. Remaining micro-polish: **B** (Rust — confirm-on-quit if live sessions + tray tooltip with session count; shared tray/quit surface, compile once) and **C** (native Save/Open dialogs for vault via `tauri-plugin-dialog` — needs the plugin + capabilities, kept isolated).
+
+## Latest — host access toggle reflects the saved auth method
+
+Bug: a host with a saved password (no key) showed the "Доступ" toggle on **SSH-key** with an empty "Выбрать ключ". Cause: `CredentialPanel.authMode` was only ever set *to* `"key"` (when a key/agent was linked) and never back to `"password"`; since the state persists across host switches, it stayed sticky from a previously-opened key host.
+
+Fix (frontend): the panel now takes `defaultMethod` (the host's **default credential** kind → key/password, computed in the parent from `linkedCred`) and `hostId`. `authMode` initializes from `defaultMethod` and re-syncs to it in an effect keyed on `hostId` — so opening/switching to a host shows its saved method, while a manual toggle during editing of the same host is preserved (the credential-link effect no longer touches `authMode`).
+
+Frontend verified (`tsc --noEmit` clean, `vite build` ok). No Rust change.
+
+## Latest — Sync slice 1 done: vault import (merge + write-back)
+
+Discovered slice 1 export was already shipped (`api/vault.rs` `vault_export` + `ProfileSection` UI). Added the missing half — **import**:
+
+- **`vault_import`** (`api/vault.rs`): `from_export_string` → `open_envelope(password)` (wrong password / corrupt = one decrypt error, by design) → `build_snapshot` of local state → `merge(local, remote, local.node)` (rh-vault record-level LWW) → `apply_snapshot` write-back.
+- **`apply_snapshot`** — FK-safe ordering: groups (two-pass: create flat, then `move_to` parents) → credentials (`create` or `update`+`rotate_secret`; secrets to keychain) → hosts (create with `jump_host_id`/`default_credential_id` stripped, then a reconcile pass relinks the default credential via `link_host` and sets `jump_host_id`) → deletions reverse (hosts → credentials → groups). Deletes + link reconcile are best-effort so one conflict edge can't abort the import.
+- DTOs `VaultImportRequest`/`VaultImportResponse`; registered in `main.rs`; `vault.import` in `ipc.ts` + `VaultImportResponse` in `types.ts`.
+- Frontend: `ProfileSection` gains an **Import vault…** button + hidden file picker; reads the file, calls `vault.import`, refetches hosts/groups/credentials stores on success, shows a count summary. i18n EN+RU.
+
+**v1 limitations (documented in the module + sync.md):** only the **default** host↔credential link is restored (the model carries `default_credential_id`, not the full `host_credentials` set — a multi-credential host loses secondary links); settings are not yet replicated; node id + clock are per-call (stable identity arrives with the sync engine). **Import mutates local storage + keychain — back up `%APPDATA%\RemoteHub\remotehub.db` before testing.**
+
+Frontend verified (`tsc --noEmit` clean, `vite build` ok). Rust (`vault_import` + `apply_snapshot`) compiles on the user's machine — flag: it's data-mutating and write-back ordering is unproven against the live schema; test on a backup. Next: slice 2 (sync engine against `MemoryRemote`), then slice 3 (multi-tenant cloud `rh-sync-server` + `ServerRemote`).
+
+## Latest — Sync: backend A (self-hosted) chosen; A protocol + auth + slice plan locked
+
+The user picked **backend A — self-hosted server** (they run a VPS). The transport-agnostic foundation (`rh-vault`: Argon2id KDF, AES-256-GCM, HLC clock, deterministic LWW merge, `VaultEnvelope`, `SyncRemote` A/B/C trait, tests) was already implemented in a prior session, so A is now just: a small server + one `SyncRemote` impl + the `rh-app` sync engine + UX. Nothing in the foundation changes.
+
+Recorded in `docs/specs/sync.md`:
+- **§9.1 server protocol** — HTTPS opaque-blob KV with optimistic concurrency: `POST /v1/login`, `GET /v1/vault` (→ `{blob,rev}`/204), `PUT /v1/vault` with `If-Match: <rev>` (→ `409` on stale = `RemoteConflict`). Server sees only ciphertext (E2E holds against the server). Storage = SQLite/file `(account, blob, rev)`; TLS mandatory.
+- **§9.2 auth** — one password → two Argon2id-derived secrets (vault key stays on device; auth_secret goes to the server, which stores only a server-side hash). Pure-personal shortcut: a static API token first, add login later (additive). OPEN.
+- **§9.3 server stack** — recommend Rust+axum as `crates/rh-sync-server` (single binary, shares wire DTOs; depends on neither rh-vault nor rh-core); Go fine if preferred. OPEN.
+- **§11 rollout** — slice 1 export/import to file (no server), 2 sync engine vs `MemoryRemote`, 3 server + `ServerRemote` transport + wire engine, 4 frontend sync UX + Team scope. Slice 1–2 need none of the open decisions.
+
+No code this turn — design checkpoint for a major multi-session feature. Slice 1 (vault export/import) is ready to start.
+
+## Latest — re-auth header removed; host-delete now GCs orphaned credentials
+
+Two requested polish items:
+
+**Re-auth panel header gone.** Removed the `Lock` icon + "Ввести данные заново" / "conn.reauth.title" line from `ReauthPanel` — the SSH-key/Password access toggle is self-explanatory. Dropped the orphaned i18n key and the `.reauthHead` CSS.
+
+**Host delete deletes orphaned credentials (backend).** Previously `host_delete` only removed the host; `host_credentials` links went via FK cascade but the credential row + keychain secret stayed — invisible (the manager lists only linked creds) and leaking a secret. Now the handler captures the host's linked creds, deletes the host, and for each cred whose `host_link_count()` is then 0 deletes the credential (DB + keychain, best-effort) and emits `credentials:changed`. Shared creds (still linked to another host) are kept. New trait method `CredentialStore::host_link_count` (+ Sqlite impl: `SELECT COUNT(*) FROM host_credentials WHERE credential_id = ?`). The confirm copy is now the honest, simple "Хост и учётные данные будут удалены." (EN: "The host and its credentials will be deleted.").
+
+Frontend verified (`tsc --noEmit` clean, `vite build` ok). Backend (`host_link_count` + the host_delete orchestration) compiles on the user's machine — straightforward SQL + existing `credential.delete` (keychain cleanup already handled there). Note: shared-credential case keeps the cred, so the simple copy slightly under-describes that rare path — acceptable per the user's request for simple wording.
+
+## Latest — quick-connect: drop the popup, use the session screen's inline re-auth
+
+The QuickConnectDialog from last turn flashed briefly and was then replaced by the standard connecting screen — which already has an inline re-auth panel (password / SSH-key toggle + "Save and connect"). The popup was redundant. Removed it entirely (file, `DialogKind` variant, `DialogHost` case, i18n `quickConnect.*`, `.quickTarget` CSS).
+
+`tryQuickConnect` now: look up a saved SSH host matching the address (port default 22) → if found, `openSession` straight away; if not, create a bare host (no credential) then `openSession`. Either way the user lands on the normal connecting screen; if auth needs a password, its `ReauthPanel` collects it inline ("Save and connect" links the credential + reconnects). No separate dialog, no host-creation form.
+
+**Auth method confirmed:** a live screenshot showed `kolen@192.168.2.50` reach "Authentication · password — wrong password" (server accepted the password method, rejected a bad secret). So **keyboard-interactive is NOT needed** — retracting that earlier hypothesis. The original "couldn't connect / infinite spinner" was the first-password truncation (fixed) plus the missing auth timeout (fixed). The 30s `AUTH_TIMEOUT` and `try_auth_bounded` stay as robustness.
+
+Minor nuance: for a brand-new host (no credential) the re-auth panel defaults to the SSH-key tab (category is generic "auth", not "badpass"); the user can toggle to Password. For an existing host with a wrong password it defaults to Password (the screenshot case). Could default to Password when the host has a username but no key — not done (keeps ConnState category logic untouched).
+
+Frontend verified (`tsc --noEmit` clean, `vite build` ok). No Rust change this turn.
+
+## Latest — quick-connect: true one-shot connect (no create-host form)
+
+Follow-up to the previous quick-connect attempt (which opened the host editor — the user explicitly didn't want a form). Now Enter on `[user@]host[:port]` in the Storage search:
+1. **Host lookup** — find a saved SSH host matching hostname + port (default 22) + username (when typed).
+2. **Found with a credential** (`default_credential_id != null`) → `openSession` immediately; the normal connecting overlay (resolve → TCP → auth) runs and the keychain secret is used. No prompt.
+3. **Found without a credential, or brand-new** → open the compact **QuickConnectDialog** (`ui/src/components/dialog/QuickConnectDialog.tsx`): shows `user@host:port` + one password field. On Connect it creates the host if missing, creates + links a password credential (username taken from the typed login — the SSH password method authenticates with the *credential's* username, not the host's), refetches, and `open`s the session. No host-creation form.
+
+Wiring: new `DialogKind` variant `{ kind: "quick-connect"; target; existingHostId }`; case in `DialogHost`; `tryQuickConnect()` in `HomeView` replaces the old draft-prefill; the "Create host" button still opens the full editor (pre-filled from the query for convenience). i18n EN+RU (`quickConnect.*`); `.quickTarget` style.
+
+Notes / possible refinements (not done): the password is prompted up-front (Termius-style), not after a reachability probe — a dead host fails cleanly at resolve/TCP after submit. The host is saved (matches the user's prior flow and "наши обычные шаги"); a throwaway/ephemeral connect (no save) would need a backend ad-hoc-open IPC. If the saved password later fails on the `password` method specifically, that's the keyboard-interactive gap flagged earlier.
+
+Frontend verified (`tsc --noEmit` clean, `vite build` ok). No Rust change this turn.
+
+## Latest — connect-flow bug fixes (quick-connect, password truncation, auth spinner)
+
+Three bugs reported from a real session (couldn't connect to a LAN host; fell back to CMD `ssh`):
+
+**1. Quick-connect did nothing (frontend, fixed).** The Storage (HomeView) search placeholder advertises `user@host:port`, but Enter only connected to `filtered[0]`; an address that matched no saved host left the list empty and Enter was a no-op. Added `parseQuickConnect()` (parses `[user@]host[:port]`; ignores plain words — needs a user, a port, a dot, or "localhost" to qualify). Enter with no match → `quickConnect()` opens a draft pre-filled with username/hostname/port (ssh), docked and ready for a password. The empty-state "Create host" button pre-fills the same way. NOT one-shot connect (that needs an unsaved-host connect + the auth fix below) — a real improvement over "nothing happens".
+
+**2. First password entry truncated (frontend, fixed).** On a new host, the first debounced save created+linked a password credential; that flipped two switches mid-typing: (A) HostDetail's `linkedCred` effect reset `inlinePassword:""`, and (B) `CredentialPanel`'s link effect set `pwEditing=false` → `pwLocked` → the same `<input>` went `readOnly`, swallowing the rest of the keystrokes. Fix: a `selfCreatedPwIdRef` (set in `saveAction` after create+link) makes the reset effect skip the credential we just made; and `CredentialPanel` now keeps the field editable when `props.password !== ""` (user still typing) instead of unconditionally locking. The field is one `<input>` (no remount), so focus is preserved.
+
+**3. Infinite "Authenticating" spinner (backend, mitigated).** `connect_and_pump` bounds connect/TCP but the auth step had no timeout — a stalled auth future spun forever (the screenshot). Added `AUTH_TIMEOUT = 30s` and a `try_auth_bounded` wrapper (timeout → treat method as rejected, try the next; all exhausted → clean `AuthFailed`). Used at both auth sites (direct target + bastion `try_all_auth`).
+   - **Likely real cause, flagged, not yet fixed:** our client only does `authenticate_password` (the "password" method) + publickey/agent — no **keyboard-interactive** fallback. CMD `ssh kolen@192.168.2.50` worked, ours didn't → the server probably offers only keyboard-interactive (common on Linux/PAM). Bug 2 also meant the saved password was partial, so the proximate failure may have been a wrong secret. Plan: user retests with the full password (bug 2 fixed); if it now cleanly fails (not hangs) on `password`, implement keyboard-interactive — but that's unproven russh 0.45 surface (start/respond-with-prompts, version-sensitive), so spike it then rather than write it blind now.
+
+Frontend verified (`tsc --noEmit` clean, `vite build` ok); Rust (auth timeout) compiles on the user's machine.
+
+## Latest — RDP AVC/H.264 GFX decode: PARKED in backlog (needs an AVC server)
+
+Decision: stop here on RDP for now. AVC/H.264 GFX decode is the one remaining RDP item and it is **blocked on test infrastructure**, not on us: our GFX pipeline already advertises AVC420 (`CapabilitiesV81Flags::AVC420_ENABLED`) and the current build already logs AVC arrival (the `_ => skip codec` arm in `gfx.rs` prints `GFX: skip codec Avc420/Avc444 …`). But the test server (`5.42.106.222`) negotiates **RemoteFX Progressive**, never AVC, so the AVC code path never executes and nothing is verifiable.
+
+### Prerequisite to resume (test server must send AVC)
+On a Windows RDP host (the test box works — we're Administrator), `gpedit.msc` →
+Computer Config → Admin Templates → Windows Components → Remote Desktop Services →
+Remote Desktop Session Host → **Remote Session Environment**:
+- "Prioritize H.264/AVC 444 graphics mode for Remote Desktop connections" → **Enabled**
+  (this one works **without** a GPU — software encode; the separate "Configure H.264/AVC
+  hardware encoding…" policy needs a GPU and falls back to software).
+- `gpupdate /force` or reboot.
+- ⚠️ On a **headless box without a GPU**, enabling 444 has been reported to black-out the
+  RDP screen for some — keep console/physical access to roll back.
+Then connect with GFX on (the `rdp_gfx` setting) and look in the console for
+`GFX: skip codec Avc420 …` / `Avc444 …` (codec + byte count). That confirms AVC flows
+and tells us 420 vs 444.
+
+### Build plan when resumed (slices)
+1. **Backend slice 1** — in the `Codec1Type::Avc420` arm of `gfx.rs` WireToSurface1,
+   parse `RFX_AVC420_METABLOCK` **manually** (numRegionRects:u32 + RECT16[8B each] +
+   RDPGFX_AVC420_QUANT_QUALITY[2B each]; remainder = H.264 Annex-B bitstream) — manual
+   parse avoids depending on IronRDP's AVC struct shape. First as a rich diagnostic
+   (rect count, rects, bitstream length, first NAL type), then forward the bitstream to
+   the webview as a new `RdpSessionEvent::Avc { surface_id, dest_rect, region_rects, data }`.
+   (Confirm the exact `Codec1Type::Avc420/Avc444` variant names against the pinned
+   ironrdp-pdu 0.7 — docs.rs is already on 0.8 where GFX types moved, so verify via the
+   first real compile, not docs.)
+2. **Frontend slice 2** — one `VideoDecoder` (WebCodecs) per session; decode the access
+   unit → draw the `regionRects` onto the canvas. The WebCodecs hardware-decode path was
+   already spiked green (~825 fps round-trip) on the user's machine.
+3. **AVC444 sub-slice** — dual-stream (luma + aux-chroma 4:2:0 → reassemble to 4:4:4);
+   do it after AVC420 renders.
+
+### Key design decision (carry forward)
+AVC pixels live on the **canvas (frontend)**, NOT in the backend `GfxState.fb` (which
+Cache/SurfaceToSurface/region-diff read from). In an AVC session the server drives
+everything via AVC, so AVC frames take a **parallel draw path** while the existing
+fb/region-diff transport keeps serving only the non-AVC ops. Mixed AVC + cache/S2S is
+rare; flag it if it appears.
+
+Everything else in RDP is done & live-verified (connect/auth/graphics/mouse/keyboard +
+modifier-sync, clipboard text+images, server cursor, fullscreen, cert TOFU, GFX pipeline
+with the user toggle, dynamic resize gated on GFX). Optional non-AVC leftovers: audio,
+smartcard, perf-micro (adaptive JPEG / turbojpeg), non-extrapolate DWT fallback.
+
+## Latest — dynamic resize (DisplayControl DVC) enabled, gated on GFX
+
+The DisplayControl resize path was already complete end-to-end: `RdpCommand::Resize` → `actor.rs` `active_stage.encode_resize(w,h,…)` (coalesced, handles the resolution-change reactivation + emits `Resized`) → `rdp_session_resize` + `RdpResizeRequest` DTO + `RdpSessionManager.resize()` → `ipc.ts rdpSession.resize` → `SessionView`/`RdpPopoutApp` call it. The only thing off was the continuous window-resize `ResizeObserver` in `RdpViewport.tsx`, hard-disabled via `const ENABLE_DYNAMIC_RESIZE = false` (legacy RemoteFX post-resize reactivation degrades repaint — IronRDP #447 — and can leave an unrepainted strip; the fullscreen one-shot resize was always on and unaffected).
+
+Change (frontend-only, so low compile risk): replaced the hardcoded `false` with an `enableDynamicResize?: boolean` prop on `RdpViewport`; both parents pass `enableDynamicResize={gfxOn}` where `gfxOn = useSettingsStore(s => s.settings?.rdp_gfx ?? false)`. So a GFX session reflows the remote desktop live as you drag the window/pane edge; a legacy session behaves exactly as before (no live reflow). GFX's self-correcting fb-diff repaints the freshly-sized surface cleanly, which is why the original author tied re-enabling to "once GFX replaces the RemoteFX codepath". The pop-out window loads settings on mount so the gate is correct there too.
+
+Caveat: the gate reads the *current* `rdp_gfx` setting, while a live session's path is fixed at open. In the normal A/B flow (toggle GFX → reconnect) they match; if you flip GFX on without reconnecting while a legacy session is live, that session could get a resize on the degraded path. So: reconnect after toggling GFX.
+
+Frontend verified (`tsc --noEmit` clean, `vite build` ok).
+
+RDP backlog remaining: H.264/AVC GFX decode (large), audio/smartcard, perf-micro (adaptive JPEG / turbojpeg). Per backlog, next non-RDP item is Profiles/account/sync.
+
+## Latest — GFX is a setting (legacy/GFX A/B toggle) + finalize + cache-staleness verdict
+
+GFX is no longer env-only. Added `Settings.rdp_gfx: bool` (default false): key `rdp.gfx` in the flat settings table (no schema migration — k/v), threaded `RdpOpenOptions.gfx` → `actor.rs` (`params.options.gfx || env RDP_GFX`), set in `rdp_session_open` from `state.settings.load()`. UI: checkbox in Settings → Connections (`ConnectionsSection`), i18n EN+RU, `.checkboxRow` style. So the user can A/B legacy vs GFX from the UI (reconnect to apply). `RDP_GFX=1` env still forces it on for dev.
+
+**Disocclusion verdict (the long-chased maximize→restore artifact):** it is NOT "server doesn't clear the vacated strip". A focused black-desktop capture (RDP_GFX_TRACE per-row + top-row Cache2S) showed the server DOES clear the vacated top strip (104 black `Cache2S` tiles into rows y=0/64/128) on restore. The one wrong pixel was a single `Cache2S slot=461 center_rgb=(106,149,180)` (blue, i.e. old-wallpaper-era) stamped where black was expected = a STALE bitmap-cache replay (the known "glyph cache replays a wrong tile" class), caused by changing the desktop wallpaper mid-session (cache lives the whole session). It does NOT reproduce on a fresh reconnect (empty cache). So: not a real ongoing GFX bug; a hardening item at most (e.g. cache-coherence on wallpaper change), not urgent.
+
+**Finalization:** quieted the GFX diagnostic logs — the 1/s `GFX ops/sec` op-counter and the startup `S2Cache`/`Cache2S`/`Wts1 ClearCodec` dumps now only emit under `RDP_GFX_TRACE=1` (counts still tracked, just not logged). `Wts2 prog` trace now also prints per-row coverage `rows=[y:x0-x1 ...]` (made the disocclusion diagnosis possible). Removed the noisy non-trace startup Cache2S line.
+
+Frontend verified (`tsc --noEmit` clean, `vite build` ok). Rust compiles on the user's machine.
+
+RDP backlog remaining (deferred until the A/B verdict): dynamic resize (DisplayControl DVC — already registered but inert), H.264/AVC GFX decode, audio/smartcard, perf-micro (adaptive JPEG / turbojpeg).
 
 ## Latest — NSCodec landed clean; chasing the maximize/restore top-of-window disocclusion
 

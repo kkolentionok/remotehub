@@ -207,11 +207,12 @@ async fn host_delete_removes_row() {
 }
 
 #[tokio::test]
-async fn host_delete_unknown_id_errors() {
+async fn host_delete_unknown_id_is_idempotent() {
     let (hosts, ..) = setup().await;
     let fake = rh_core::HostId::new();
-    let err = hosts.delete(&fake).await.unwrap_err();
-    assert!(format!("{err}").contains("not found"));
+    // Deleting a host that doesn't exist is a no-op success: the desired
+    // postcondition (host absent) already holds. See `SqliteHostStore::delete`.
+    assert!(hosts.delete(&fake).await.is_ok());
 }
 
 // ====================================================================
@@ -512,7 +513,7 @@ async fn credential_unlink_default_clears_host_default() {
 async fn settings_load_returns_defaults_on_empty_db() {
     let (_, _, _, settings, _) = setup().await;
     let s = settings.load().await.unwrap();
-    assert_eq!(s.theme, Theme::System);
+    assert_eq!(s.theme, Theme::Navy);
     assert_eq!(s.terminal_font_size, 14);
 }
 

@@ -95,6 +95,7 @@ pub async fn rdp_session_open(
         color_depth,
         keyboard_layout: keyboard_layout.parse::<u32>().unwrap_or(0),
         enable_clipboard: false,
+        gfx: state.settings.load().await?.rdp_gfx,
     };
 
     let (tx_events, rx_events) = mpsc::unbounded_channel::<RdpSessionEvent>();

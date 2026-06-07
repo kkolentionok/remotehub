@@ -3,9 +3,11 @@ import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { SerializeAddon } from "@xterm/addon-serialize";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import "@xterm/xterm/css/xterm.css";
 
+import { useT } from "../../i18n";
 import {
     registerSessionTerminal,
     takeSessionSnapshot,
@@ -14,8 +16,13 @@ import {
     useSettingsStore,
     useUiStore,
 } from "../../store";
+import { app as appApi, settings as settingsApi } from "../../lib/ipc";
 import { TERMINAL_THEMES } from "../../lib/terminalThemes";
 import styles from "./Terminal.module.css";
+
+/** Terminal font-size zoom bounds (Ctrl+wheel). */
+const FONT_MIN = 8;
+const FONT_MAX = 32;
 
 const MONO_FALLBACK =
     "ui-monospace, 'Cascadia Mono', 'SF Mono', Consolas, monospace";
@@ -42,6 +49,7 @@ export function Terminal({
 }) {
     const containerRef = useRef<HTMLDivElement>(null);
     const termRef = useRef<XTerm | null>(null);
+    const { t } = useT();
     const fitRef = useRef<FitAddon | null>(null);
     const serializeRef = useRef<SerializeAddon | null>(null);
     const webglRef = useRef<WebglAddon | null>(null);
@@ -83,6 +91,45 @@ export function Terminal({
         term.loadAddon(fit);
         const serialize = new SerializeAddon();
         term.loadAddon(serialize);
+        // Links: underline on hover with a "Ctrl + Click" tooltip; open in the
+        // system browser on Ctrl/Cmd+click only (a plain click stays inert so
+        // it never hijacks a normal click/selection in the shell).
+        let linkTip: HTMLDivElement | null = null;
+        const showLinkTip = (e: MouseEvent) => {
+            if (!linkTip) {
+                linkTip = document.createElement("div");
+                linkTip.className = styles.linkTip ?? "";
+                const k1 = document.createElement("kbd");
+                k1.className = styles.linkTipKbd ?? "";
+                k1.textContent = "Ctrl";
+                const k2 = document.createElement("kbd");
+                k2.className = styles.linkTipKbd ?? "";
+                k2.textContent = t("terminal.clickWord");
+                const txt = document.createElement("span");
+                txt.textContent = t("terminal.openLinkHint");
+                linkTip.append(k1, document.createTextNode("+"), k2, txt);
+                document.body.appendChild(linkTip);
+            }
+            linkTip.style.left = `${e.clientX + 12}px`;
+            linkTip.style.top = `${e.clientY - 34}px`;
+            linkTip.style.display = "flex";
+        };
+        const hideLinkTip = () => {
+            if (linkTip) linkTip.style.display = "none";
+        };
+        const openLink = (uri: string) => {
+            appApi.open(uri).catch((err) => console.error("open link failed:", err));
+        };
+        const links = new WebLinksAddon(
+            (event, uri) => {
+                if (event.ctrlKey || event.metaKey) openLink(uri);
+            },
+            {
+                hover: (event) => showLinkTip(event as MouseEvent),
+                leave: hideLinkTip,
+            },
+        );
+        term.loadAddon(links);
         term.open(el);
 
         // GPU renderer for snappy, low-latency drawing (xterm's default
@@ -204,12 +251,40 @@ export function Terminal({
         };
         el.addEventListener("contextmenu", onContextMenu);
 
+        // Ctrl + mouse wheel zooms the terminal font. We drive the global
+        // `terminal_font_size` setting so every terminal stays in step and the
+        // size persists; apply locally at once and debounce the backend write
+        // so a scroll burst doesn't storm settings_update / reloads. A plain
+        // wheel (no Ctrl) is left to xterm for scrollback.
+        let zoomTimer = 0;
+        const onWheel = (e: WheelEvent) => {
+            if (!e.ctrlKey) return;
+            e.preventDefault();
+            const s = useSettingsStore.getState().settings;
+            if (!s) return;
+            const cur = s.terminal_font_size ?? 13;
+            const next = Math.min(
+                FONT_MAX,
+                Math.max(FONT_MIN, cur + (e.deltaY < 0 ? 1 : -1)),
+            );
+            if (next === cur) return;
+            useSettingsStore.setState({ settings: { ...s, terminal_font_size: next } });
+            clearTimeout(zoomTimer);
+            zoomTimer = window.setTimeout(() => {
+                void settingsApi.update({ patches: { terminal_font_size: next } });
+            }, 500);
+        };
+        el.addEventListener("wheel", onWheel, { passive: false });
+
         return () => {
             clearTimeout(fitTimer);
+            clearTimeout(zoomTimer);
             ro.disconnect();
             el.removeEventListener("mousedown", onMouseDown);
             document.removeEventListener("mouseup", onDocMouseUp);
             el.removeEventListener("contextmenu", onContextMenu);
+            el.removeEventListener("wheel", onWheel);
+            if (linkTip) linkTip.remove();
             unregister();
             dataDisp.dispose();
             resizeDisp.dispose();

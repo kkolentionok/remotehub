@@ -41,7 +41,7 @@ pub use secret::{RevealedSecret, SecretValue};
 pub use settings::{Language, Settings, Theme};
 pub use store::{
     CredentialStore, GroupStore, HostFilter, HostStore, KnownHostsStore, RdpCertStore, RevealError,
-    SettingsStore,
+    SettingsStore, SyncMetaStore, SyncStamp,
 };
 pub use types::{
     Credential, CredentialKind, EnvVar, Host, HostGroup, KnownHostEntry, KnownHostKey, Protocol,

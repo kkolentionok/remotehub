@@ -239,6 +239,38 @@ export type RdpResolution =
     | { kind: "fit" }
     | { kind: "fixed"; width: number; height: number };
 
+/** Summary returned by vault_import after the merge + write-back. */
+export interface VaultImportResponse {
+    hosts: number;
+    groups: number;
+    credentials: number;
+    deleted: number;
+}
+
+/** A vault file read from disk via the native Open dialog (vault_read_file). */
+export interface VaultFileResponse {
+    body: string;
+    name: string;
+    size: number;
+}
+
+/** Current sync endpoint/account state (sync_get_config). */
+export interface SyncConfigResponse {
+    endpoint: string;
+    email: string | null;
+    logged_in: boolean;
+}
+
+/** Result of one sync pass (sync_now). */
+export interface SyncNowResponse {
+    had_remote: boolean;
+    pushed_version: string;
+    hosts: number;
+    groups: number;
+    credentials: number;
+    deleted: number;
+}
+
 export interface Settings {
     language: Language;
     theme: Theme;
@@ -255,6 +287,7 @@ export interface Settings {
     ssh_keepalive_interval_secs: number;
     ssh_known_hosts_strict: boolean;
     local_shell: string;
+    rdp_gfx: boolean;
 }
 
 // =====================================================================

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit } from "@tauri-apps/api/event";
 
-import { useSessionsStore } from "../../store";
+import { useSessionsStore, useSettingsStore } from "../../store";
 import { rdpSession as rdpSessionApi } from "../../lib/ipc";
 import { RdpViewport } from "./RdpViewport";
 
@@ -24,12 +24,16 @@ export function RdpPopoutApp() {
     const h = Number(params.get("h")) || 800;
 
     const attachExternalRdp = useSessionsStore((s) => s.attachExternalRdp);
+    const gfxOn = useSettingsStore((s) => s.settings?.rdp_gfx ?? false);
     const [key, setKey] = useState<string | null>(null);
     const didAttach = useRef(false);
 
     useEffect(() => {
         if (didAttach.current || !sid) return;
         didAttach.current = true;
+        // Pop-out is its own webview/JS context — load settings so the GFX
+        // gate (enableDynamicResize) reflects the user's choice here too.
+        void useSettingsStore.getState().load();
         setKey(attachExternalRdp({ sessionId: sid, title, width: w, height: h }));
         // Tell the main window when this window is closing so it can drop the
         // tab (unless the close was a re-dock the main window initiated).
@@ -84,6 +88,7 @@ export function RdpPopoutApp() {
                 onResize={(rw, rh) => {
                     if (sid) void rdpSessionApi.resize(sid, rw, rh);
                 }}
+                enableDynamicResize={gfxOn}
                 onKbdCapture={(on) => {
                     if (sid) void rdpSessionApi.kbdCapture(sid, on);
                 }}

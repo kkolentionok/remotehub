@@ -371,25 +371,21 @@
 
 /* ── list view ── */
 .hl {
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-    background: var(--color-surface);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
 }
 .lrow {
     display: grid;
     grid-template-columns: 18px minmax(180px, 1.2fr) minmax(150px, 1fr) auto;
     align-items: center;
     gap: 14px;
-    min-height: 52px;
-    padding: 7px 14px;
-    border-bottom: 1px solid var(--color-border);
+    min-height: 46px;
+    padding: 6px 12px;
+    border-radius: var(--radius-md);
     box-shadow: inset 3px 0 0 var(--gc, transparent);
     transition: background 0.08s;
     cursor: pointer;
-}
-.lrow:last-child {
-    border-bottom: none;
 }
 .lrow:hover {
     background: var(--color-subtle);

@@ -10,6 +10,8 @@ mod rdp_session;
 mod session;
 mod sftp_session;
 mod state;
+mod sync_clock;
+mod sync_remote;
 mod tray;
 
 use std::sync::Arc;
@@ -20,7 +22,7 @@ use tracing::{error, info};
 use rh_core::{CredentialStore, GroupStore, HostStore, KnownHostsStore, RdpCertStore, SettingsStore};
 use rh_storage::{
     Db, OsKeychain, SqliteCredentialStore, SqliteGroupStore, SqliteHostStore,
-    SqliteKnownHostsStore, SqliteRdpCertStore, SqliteSettingsStore,
+    SqliteKnownHostsStore, SqliteRdpCertStore, SqliteSettingsStore, SqliteSyncMetaStore,
 };
 
 use crate::state::AppState;
@@ -38,6 +40,8 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .on_window_event(|window, event| {
             // Closing the window must NOT quit the app: live SSH/RDP/SFTP
             // sessions (and any mounted drives / port-forwards) would drop.
@@ -107,6 +111,17 @@ fn main() {
             api::credentials::credential_unlink_host,
             // Settings
             api::settings::settings_get_all,
+            api::vault::vault_export,
+            api::vault::vault_import,
+            api::vault::vault_write_file,
+            api::vault::vault_read_file,
+            // Sync (slice 3b: server transport)
+            api::sync::sync_get_config,
+            api::sync::sync_set_endpoint,
+            api::sync::sync_register,
+            api::sync::sync_login,
+            api::sync::sync_logout,
+            api::sync::sync_now,
             api::settings::settings_update,
             // Sessions (Stage 2: SSH)
             api::sessions::session_open,
@@ -154,6 +169,9 @@ fn main() {
             api::sftp_sessions::sftp_chmod,
             // Meta
             api::meta::app_version,
+            api::meta::ui_sessions_report,
+            api::meta::app_quit,
+            api::meta::open_external,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -196,9 +214,11 @@ async fn build_state(_app: &tauri::AppHandle) -> Result<AppState, String> {
         Arc::new(SqliteCredentialStore::new(db.clone(), keychain));
     let settings: Arc<dyn SettingsStore> = Arc::new(SqliteSettingsStore::new(db.clone()));
     let known_hosts: Arc<dyn KnownHostsStore> = Arc::new(SqliteKnownHostsStore::new(db.clone()));
-    let rdp_certs: Arc<dyn RdpCertStore> = Arc::new(SqliteRdpCertStore::new(db));
+    let rdp_certs: Arc<dyn RdpCertStore> = Arc::new(SqliteRdpCertStore::new(db.clone()));
+    let sync_meta: Arc<dyn rh_core::SyncMetaStore> = Arc::new(SqliteSyncMetaStore::new(db));
+    let sync = Arc::new(crate::sync_clock::SyncClock::load_or_init(&data_dir));
 
     Ok(AppState::new(
-        hosts, groups, credentials, settings, known_hosts, rdp_certs,
+        hosts, groups, credentials, settings, known_hosts, rdp_certs, sync_meta, sync,
     ))
 }

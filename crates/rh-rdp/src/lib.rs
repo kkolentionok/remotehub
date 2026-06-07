@@ -301,6 +301,9 @@ pub struct RdpOpenOptions {
     /// Windows keyboard-layout id (hint to the server in Client Info PDU).
     pub keyboard_layout: u32,
     pub enable_clipboard: bool,
+    /// Opt-in GFX (MS-RDPEGFX) decode pipeline. From the user's
+    /// `Settings.rdp_gfx`; the `RDP_GFX` env var also forces it on (dev).
+    pub gfx: bool,
 }
 
 /// Credential revealed for an RDP login. (SmartCard/cert — post-MVP.)

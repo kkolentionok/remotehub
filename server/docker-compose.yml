@@ -1,0 +1,20 @@
+services:
+  sync:
+    build: .
+    image: rh-sync-server
+    container_name: rh-sync-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Required — sign/verify bearer tokens. Put it in a .env file next to this.
+      JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env}"
+      BIND_ADDR: "0.0.0.0:8080"
+      DB_PATH: "/data/sync.db"
+      TOKEN_TTL_HOURS: "168"
+      RUST_LOG: "info"
+    volumes:
+      - sync-data:/data
+
+volumes:
+  sync-data:

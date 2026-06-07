@@ -108,6 +108,12 @@ pub trait CredentialStore: Send + Sync {
         host_id: &HostId,
     ) -> Result<Vec<Credential>, StorageError>;
 
+    /// How many hosts a credential is currently linked to. Used to detect
+    /// credentials orphaned by a host deletion (count == 0 → safe to delete
+    /// the credential + its keychain secret; a positive count means it's
+    /// still shared with another host and must be kept).
+    async fn host_link_count(&self, id: &CredentialId) -> Result<i64, StorageError>;
+
     /// Update metadata only (name, username). Secret is not touched —
     /// use [`Self::rotate_secret`] to change it.
     async fn update(&self, credential: &Credential) -> Result<(), StorageError>;
@@ -244,4 +250,63 @@ pub trait SettingsStore: Send + Sync {
     /// type information needed to check each value against its
     /// expected shape.
     async fn save(&self, patch: serde_json::Value) -> Result<(), StorageError>;
+}
+
+/// Provenance of a replicated record: the logical time of its last write
+/// (`rev_wall`/`rev_counter` — a Hybrid Logical Clock stamp split into its
+/// two integer fields for storage) and the device that produced it
+/// (`origin`). This is the storage-neutral form of the sync layer's
+/// `(Hlc, NodeId)`; `rh-vault` converts between them. Kept in `rh-core` so
+/// the storage trait does not depend on the sync crate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncStamp {
+    pub rev_wall: u64,
+    pub rev_counter: u32,
+    pub origin: String,
+}
+
+/// Per-record sync provenance: one row per replicated record keyed by
+/// `(kind, id)`, carrying its [`SyncStamp`] and a tombstone flag.
+///
+/// This sits beside the entity tables rather than adding `rev`/`origin`
+/// columns to each one — a single generic table means deletions survive the
+/// entity row (a tombstone is a `deleted = true` row whose entity is gone) so
+/// the deletion can propagate to other devices, and no per-entity SQL needs
+/// to learn about sync. `kind` is a free string (`"host"`, `"group"`,
+/// `"credential"`, `"setting"`); `id` is the entity ULID or the setting key.
+///
+/// The merge model (record-level LWW by `rev` then `origin`) lives in
+/// `rh-vault`; this trait only persists the stamps so a rebuilt snapshot
+/// reflects when each record was actually last *edited*, not when the
+/// snapshot was assembled.
+#[async_trait]
+pub trait SyncMetaStore: Send + Sync {
+    /// Record or refresh the provenance of a *live* record (upsert with
+    /// `deleted = false`). Call after a successful create/update. Resurrects
+    /// a prior tombstone for the same `(kind, id)`.
+    async fn bump(&self, kind: &str, id: &str, stamp: &SyncStamp) -> Result<(), StorageError>;
+
+    /// Mark a record deleted (upsert with `deleted = true`). Call after a
+    /// successful delete; the entity row is gone but this tombstone remains
+    /// so the deletion replicates.
+    async fn tombstone(&self, kind: &str, id: &str, stamp: &SyncStamp)
+        -> Result<(), StorageError>;
+
+    /// The stamp for one record, or `None` if never stamped.
+    async fn stamp_of(&self, kind: &str, id: &str) -> Result<Option<SyncStamp>, StorageError>;
+
+    /// All live (non-tombstone) stamps for `kind`, as `(id, stamp)`.
+    async fn live_stamps(&self, kind: &str) -> Result<Vec<(String, SyncStamp)>, StorageError>;
+
+    /// All tombstones across every kind, as `(kind, id, stamp)`.
+    async fn tombstones(&self) -> Result<Vec<(String, String, SyncStamp)>, StorageError>;
+
+    /// Forget a record's provenance entirely (both live rows and tombstones).
+    /// Used when a local wipe (replace-import) clears everything.
+    async fn clear(&self, kind: &str, id: &str) -> Result<(), StorageError>;
+
+    /// Forget **all** provenance — every live stamp and tombstone. Used by a
+    /// replace-import wipe so stale stamps for now-deleted entities can't
+    /// resurface in the next snapshot.
+    async fn clear_all(&self) -> Result<(), StorageError>;
 }

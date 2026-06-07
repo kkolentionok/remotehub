@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { useT } from "../../i18n";
 import {
@@ -11,7 +12,9 @@ import {
     useUiStore,
 } from "../../store";
 import { leafKeys } from "../../lib/paneTree";
+import { app as appApi } from "../../lib/ipc";
 import { DialogHost } from "./DialogHost";
+import { FocusRail } from "../session/FocusRail";
 import { HomeView } from "./HomeView";
 import { Launcher } from "./Launcher";
 import { PaneGroup } from "./PaneGroup";
@@ -40,6 +43,25 @@ export function AppShell() {
     const setDragPreviewTabId = useSessionsStore((s) => s.setDragPreviewTabId);
     const launcherOpen = useUiStore((s) => s.launcherOpen);
     const section = useUiStore((s) => s.section);
+
+    // Borderless window (decorations:false): when maximized on Windows the
+    // client area extends past the work area by the resize-border thickness,
+    // so the bottom strip slips under the taskbar and clips the last terminal
+    // row. Track the maximized state and inset the shell to compensate.
+    const [maximized, setMaximized] = useState(false);
+    useEffect(() => {
+        const win = getCurrentWindow();
+        let unlisten: (() => void) | undefined;
+        void win.isMaximized().then(setMaximized).catch(() => {});
+        void win
+            .onResized(() => {
+                void win.isMaximized().then(setMaximized).catch(() => {});
+            })
+            .then((u) => {
+                unlisten = u;
+            });
+        return () => unlisten?.();
+    }, []);
 
     // While dragging a tab, show the split-target tab's workspace (so the
     // green drop zones land on the tab being split into, not the dragged
@@ -97,6 +119,26 @@ export function AppShell() {
         return () => unlisten?.();
     }, []);
 
+    // Tray Quit with live sessions bounces here: show a confirm before the
+    // real exit (which the dialog triggers via the app_quit command).
+    useEffect(() => {
+        let unlisten: (() => void) | undefined;
+        void (async () => {
+            const { listen } = await import("@tauri-apps/api/event");
+            unlisten = await listen<number>("app:confirm-quit", (e) => {
+                useUiStore.getState().setDialog({ kind: "quit-confirm", count: e.payload });
+            });
+        })();
+        return () => unlisten?.();
+    }, []);
+
+    // Report the live-session count to the backend (drives the tray tooltip
+    // and the quit-confirm threshold). Runs whenever the count changes.
+    const sessionCount = useSessionsStore((s) => s.sessions.length);
+    useEffect(() => {
+        void appApi.reportSessions(sessionCount);
+    }, [sessionCount]);
+
     useEffect(() => {
         if (!settingsLanguage) return;
         if (settingsLanguage !== locale) {
@@ -127,7 +169,7 @@ export function AppShell() {
     }, []);
 
     return (
-        <div className={styles.shell}>
+        <div className={styles.shell} data-maximized={maximized || undefined}>
             <TabBar />
             <div className={styles.stage} onDragOver={onStageDragOver}>
                 <div
@@ -152,23 +194,39 @@ export function AppShell() {
                 >
                     <ToolsView />
                 </div>
-                {tabs.map((tab) => (
-                    <div
-                        key={tab.id}
-                        className={styles.pane}
-                        style={{ display: tab.id === visibleTabId ? "flex" : "none" }}
-                    >
-                        <PaneGroup
-                            node={tab.root}
-                            ctx={{
-                                tabId: tab.id,
-                                activePaneKey: tab.activePaneKey,
-                                tabVisible: tab.id === visibleTabId,
-                                paneCount: leafKeys(tab.root).length,
-                            }}
-                        />
-                    </div>
-                ))}
+                {tabs.map((tab) => {
+                    const paneCount = leafKeys(tab.root).length;
+                    const focusActive = tab.focusKey != null && paneCount > 1;
+                    const ctx = {
+                        tabId: tab.id,
+                        activePaneKey: tab.activePaneKey,
+                        tabVisible: tab.id === visibleTabId,
+                        paneCount,
+                        focusKey: focusActive ? tab.focusKey ?? null : null,
+                    };
+                    return (
+                        <div
+                            key={tab.id}
+                            className={styles.pane}
+                            style={{ display: tab.id === visibleTabId ? "flex" : "none" }}
+                        >
+                            {focusActive ? (
+                                <div className={styles.focusWrap}>
+                                    <FocusRail tabId={tab.id} />
+                                    <div className={styles.focusMain}>
+                                        <PaneGroup node={tab.root} ctx={ctx} />
+                                    </div>
+                                </div>
+                            ) : paneCount > 1 ? (
+                                <div className={styles.splitWrap}>
+                                    <PaneGroup node={tab.root} ctx={ctx} />
+                                </div>
+                            ) : (
+                                <PaneGroup node={tab.root} ctx={ctx} />
+                            )}
+                        </div>
+                    );
+                })}
             </div>
             <DialogHost />
             {launcherOpen && <Launcher />}

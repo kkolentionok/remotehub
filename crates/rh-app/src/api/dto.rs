@@ -773,6 +773,75 @@ where
     Option::<T>::deserialize(deserializer).map(Some)
 }
 
+/// Request to export the local state as a portable, E2E-encrypted vault.
+/// `master_password` derives the encryption key (Argon2id) and never
+/// leaves the device beyond producing the sealed blob — it is never
+/// stored or logged (the handler `#[instrument]` skips it).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultExportRequest {
+    pub master_password: String,
+}
+
+/// How an import reconciles with the local store.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportMode {
+    /// Add/merge the file into the local store (record-level LWW). Default.
+    #[default]
+    Merge,
+    /// Wipe the local store and replace it with the file's contents.
+    Replace,
+}
+
+/// Request to import a portable vault: decrypt `body` with `master_password`,
+/// reconcile per `mode`, and write the result back. `master_password` is never
+/// stored or logged (the handler `#[instrument]` skips it).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultImportRequest {
+    pub master_password: String,
+    /// The export-file body produced by `vault_export` (KDF header + nonce +
+    /// AES-256-GCM ciphertext, JSON).
+    pub body: String,
+    #[serde(default)]
+    pub mode: ImportMode,
+}
+
+/// Summary of what an import applied (after the merge), for the UI.
+#[derive(Debug, Serialize)]
+pub struct VaultImportResponse {
+    pub hosts: u32,
+    pub groups: u32,
+    pub credentials: u32,
+    pub deleted: u32,
+}
+
+/// Write a vault export string to a path the user picked via the native Save
+/// dialog. `body` is the sealed (encrypted) export — not a plaintext secret —
+/// but the `#[instrument]` skips it to keep logs small.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultWriteFileRequest {
+    pub path: String,
+    pub body: String,
+}
+
+/// Read a vault file the user picked via the native Open dialog.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultReadFileRequest {
+    pub path: String,
+}
+
+/// Contents + light metadata of a vault file read from disk.
+#[derive(Debug, Serialize)]
+pub struct VaultFileResponse {
+    pub body: String,
+    pub name: String,
+    pub size: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

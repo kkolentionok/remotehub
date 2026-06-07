@@ -34,7 +34,7 @@ import { useT } from "../../i18n";
 import { localFs, sftp } from "../../lib/ipc";
 import { formatApiError } from "../../lib/types";
 import type { FsEntry, FsListResponse, HostDto } from "../../lib/types";
-import { useHostsStore } from "../../store";
+import { useHostsStore, useTransferBadgeStore } from "../../store";
 import type { SessionTab } from "../../store";
 import styles from "./SftpView.module.css";
 
@@ -127,6 +127,7 @@ interface Panel {
     navHome: () => Promise<void>;
     navComputer: () => Promise<void>;
     refresh: () => Promise<void>;
+    reconnect: () => Promise<void>;
     toggleHidden: () => void;
     setSort: (key: "name" | "size") => void;
     selectRow: (path: string, additive: boolean) => void;
@@ -291,6 +292,26 @@ function usePanel(): Panel {
         if (listing) await openDir(listing.path);
     };
 
+    // Re-open a dead host SFTP session (e.g. after "session closed") and
+    // re-list the current directory so the user lands back where they were.
+    const reconnect = async () => {
+        if (source.kind !== "host") return;
+        const path = listing?.path ?? ".";
+        setErr(null);
+        setBusy(true);
+        try {
+            if (sessionId) void sftp.close(sessionId);
+            const res = await sftp.open(source.host.id);
+            setSessionId(res.session_id);
+            const r = await sftp.list(res.session_id, path);
+            setListing(r);
+        } catch (e: unknown) {
+            setErr(formatApiError(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
     const selectRow = (path: string, additive: boolean) => {
         setSel((prev) => {
             const next = new Set(additive ? prev : []);
@@ -357,6 +378,7 @@ function usePanel(): Panel {
         navHome,
         navComputer,
         refresh,
+        reconnect,
         toggleHidden: () => setShowHidden((h) => !h),
         setSort: (key) =>
             setSortState((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" })),
@@ -692,7 +714,18 @@ function Pane({
 
             <div className={styles.flist}>
                 {panel.err ? (
-                    <div className={styles.empty}>{panel.err}</div>
+                    <div className={styles.empty}>
+                        <div>{panel.err}</div>
+                        {panel.source.kind === "host" && (
+                            <button
+                                className={styles.reconnectBtn}
+                                onClick={() => void panel.reconnect()}
+                                disabled={panel.busy}
+                            >
+                                <RotateCw size={14} /> {t("sftp.reconnect")}
+                            </button>
+                        )}
+                    </div>
                 ) : panel.busy && !listing ? (
                     <div className={styles.empty}>
                         {isLocal ? t("sftp.loading") : t("sftp.connecting")}
@@ -1217,6 +1250,18 @@ export function SftpView({
     const dragRef = useRef<{ from: "left" | "right"; files: FsEntry[] } | null>(null);
     const [status, setStatus] = useState<Status>({ kind: "idle", text: "" });
     const transfers = useTransfers();
+    // Publish the in-flight (active + queued) count so the TabBar can show a
+    // badge on this SFTP tab; clear it when the view unmounts.
+    const activeTransfers = transfers.items.filter(
+        (i) => i.state === "active" || i.state === "queued",
+    ).length;
+    useEffect(() => {
+        useTransferBadgeStore.getState().setCount(_session.key, activeTransfers);
+    }, [activeTransfers, _session.key]);
+    useEffect(
+        () => () => useTransferBadgeStore.getState().clear(_session.key),
+        [_session.key],
+    );
     const epName = (p: Panel) =>
         p.source.kind === "local" ? t("sftp.local") : p.source.host.display_name ?? p.source.host.name;
     const [confirmDelete, setConfirmDelete] = useState<{

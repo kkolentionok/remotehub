@@ -193,6 +193,21 @@ impl CredentialStore for SqliteCredentialStore {
         rows.iter().map(row_to_credential).collect()
     }
 
+    #[instrument(level = "debug", skip(self), fields(cred_id = %id))]
+    async fn host_link_count(&self, id: &CredentialId) -> Result<i64, StorageError> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS n FROM host_credentials WHERE credential_id = ?",
+        )
+        .bind(id.as_str())
+        .fetch_one(self.db.pool())
+        .await
+        .map_err(map_err)?;
+        let n: i64 = row
+            .try_get("n")
+            .map_err(|e| StorageError::Backend(format!("read link count: {e}")))?;
+        Ok(n)
+    }
+
     #[instrument(level = "debug", skip(self, credential), fields(cred_id = %credential.id))]
     async fn update(&self, credential: &Credential) -> Result<(), StorageError> {
         // Metadata only — kind and keychain_ref are NOT updateable.

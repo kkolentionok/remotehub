@@ -644,6 +644,29 @@ where
     }
 }
 
+/// Hard ceiling on a single auth attempt. Without this a server that
+/// accepts the TCP handshake but then stalls the auth exchange (or a russh
+/// auth future that never resolves) leaves the UI spinning on
+/// "Authenticating" forever — connect/TCP are bounded, auth was not. On
+/// timeout we treat the method as rejected so remaining methods still get a
+/// turn; if all are exhausted the caller surfaces a clean AuthFailed.
+const AUTH_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `try_auth` with a hard timeout. Elapsed → `Ok(false)` (rejected), never a
+/// hang.
+async fn try_auth_bounded(
+    handle: &mut russh::client::Handle<ClientHandler>,
+    cred: RevealedCredential,
+) -> Result<bool, SshError> {
+    match tokio::time::timeout(AUTH_TIMEOUT, try_auth(handle, cred)).await {
+        Ok(res) => res,
+        Err(_) => {
+            warn!("ssh auth attempt timed out after {AUTH_TIMEOUT:?}; treating as rejected");
+            Ok(false)
+        }
+    }
+}
+
 /// Try each auth method in order; `Ok(true)` on the first success. Used
 /// for the bastion (the target keeps its own loop so it can report the
 /// last attempted method on failure).
@@ -652,7 +675,7 @@ async fn try_all_auth(
     creds: Vec<RevealedCredential>,
 ) -> Result<bool, SshError> {
     for cred in creds {
-        if try_auth(handle, cred).await? {
+        if try_auth_bounded(handle, cred).await? {
             return Ok(true);
         }
     }
@@ -805,7 +828,7 @@ async fn connect_and_pump(
             RevealedCredential::Key { .. } => "publickey",
             RevealedCredential::Agent { .. } => "agent",
         };
-        if try_auth(&mut handle, cred).await? {
+        if try_auth_bounded(&mut handle, cred).await? {
             authed = true;
             break;
         }

@@ -33,6 +33,7 @@
 pub mod b64;
 pub mod clock;
 pub mod crypto;
+pub mod engine;
 pub mod envelope;
 pub mod error;
 pub mod kdf;
@@ -42,6 +43,7 @@ pub mod opt_b64;
 pub mod transport;
 
 pub use clock::{Hlc, HlcGenerator, NodeId};
+pub use engine::{sync_once, SyncReport};
 pub use envelope::{
     from_export_string, open_envelope, seal_snapshot, seal_snapshot_with, to_export_string,
     VaultEnvelope, ENVELOPE_FORMAT,

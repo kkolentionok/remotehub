@@ -294,6 +294,16 @@ function HostForm(props: HostFormProps) {
         () => linkedCreds.find((c) => c.kind === "ssh_key_agent") ?? null,
         [linkedCreds],
     );
+    // The auth method to show in the panel by default = the host's default
+    // credential's kind (so opening a password host shows Password, a key host
+    // shows SSH key). Falls back to any linked method, else password.
+    const savedAuthMethod: "key" | "password" = linkedCred
+        ? linkedCred.kind === "password"
+            ? "password"
+            : "key"
+        : linkedKeyCred || linkedAgentCred
+          ? "key"
+          : "password";
 
     // Build initial form state from the host. Re-derived only on host.id change.
     const [form, setForm] = useState<FormState>(() =>
@@ -317,6 +327,13 @@ function HostForm(props: HostFormProps) {
         const linkedId = linkedCred?.id ?? null;
         if (linkedId === lastLinkedIdRef.current) return;
         lastLinkedIdRef.current = linkedId;
+        // The user just typed a password that auto-saved into a brand-new
+        // credential which is now linked + default. Don't reset the form:
+        // the typed value is still in flight and committedPasswordRef was
+        // already set in saveAction. Resetting here drops their keystrokes.
+        if (linkedId !== null && linkedId === selfCreatedPwIdRef.current) {
+            return;
+        }
         if (linkedCred) {
             const kind = linkedCred.kind === "ssh_key" ? "key" : "password";
             // Note: do NOT touch inlineUsername here. Username lives on the
@@ -391,6 +408,14 @@ function HostForm(props: HostFormProps) {
     // key), which can't be an in-place update — it needs a fresh credential.
     const committedKindRef = useRef<"password" | "key">("password");
 
+    // Id of a password credential that saveAction just created from the
+    // user's in-progress typing (and auto-linked). When this id shows up as
+    // the newly-linked credential, the linkedCred effect must NOT reset the
+    // form — the user is still typing into that very field and the form
+    // already holds the correct value. Without this, the first auto-save
+    // would blank the password and swallow the rest of the keystrokes.
+    const selfCreatedPwIdRef = useRef<string | null>(null);
+
     // Track the previous host.id so we can distinguish two cases:
     //
     // 1. Draft promotion: id changes from "__draft__" to a real id.
@@ -422,6 +447,7 @@ function HostForm(props: HostFormProps) {
         committedPassphraseRef.current = "";
         committedKindRef.current =
             linkedCred?.kind === "ssh_key" ? "key" : "password";
+        selfCreatedPwIdRef.current = null;
         setSaveStatus({ kind: "idle" });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [props.host.id]);
@@ -550,6 +576,7 @@ function HostForm(props: HostFormProps) {
                                 credential_id: created.id,
                                 set_as_default: !anyLinked,
                             });
+                            selfCreatedPwIdRef.current = created.id;
                         }
                         committedPasswordRef.current = state.inlinePassword;
                     }
@@ -1237,6 +1264,8 @@ function HostForm(props: HostFormProps) {
                 linkedKeyId={linkedKeyCred?.id ?? null}
                 linkedKeyName={linkedKeyCred?.name ?? null}
                 linkedAgentId={linkedAgentCred?.id ?? null}
+                hostId={props.host.id}
+                defaultMethod={savedAuthMethod}
             />
 
             <div className={styles.frow}>
@@ -1671,6 +1700,11 @@ interface CredentialPanelProps {
     linkedKeyName: string | null;
     /** Linked SSH-agent credential id, if any — shown as an agent chip. */
     linkedAgentId: string | null;
+    /** Current host id — re-syncs the access toggle to the saved method on
+        host switch (without fighting a manual toggle within the same host). */
+    hostId: string;
+    /** Saved/default auth method to preselect (the default credential's kind). */
+    defaultMethod: "key" | "password";
 }
 
 const REVEAL_SECONDS = 10;
@@ -1686,9 +1720,7 @@ function CredentialPanel(props: CredentialPanelProps) {
     // edits/removal). A pencil unlocks editing; only then is ✕ shown.
     const [pwEditing, setPwEditing] = useState(false);
     const [authMode, setAuthMode] = useState<"key" | "password">(
-        props.linkedKeyId !== null || props.linkedAgentId !== null
-            ? "key"
-            : "password",
+        props.defaultMethod,
     );
 
     const keyLinked = props.linkedKeyId !== null;
@@ -1726,15 +1758,25 @@ function CredentialPanel(props: CredentialPanelProps) {
     }, []);
 
     useEffect(() => stopReveal, [stopReveal]);
+    // Re-sync the access toggle to the saved method when the host changes —
+    // keyed on hostId only, so it follows the saved credential on switch but
+    // doesn't fight a manual toggle while editing the same host.
+    useEffect(() => {
+        setAuthMode(props.defaultMethod);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [props.hostId]);
+
     useEffect(() => {
         stopReveal();
         setShowPassword(false);
         setPickerOpen(false);
         setAddKeyOpen(false);
-        setPwEditing(false);
-        if (props.linkedKeyId !== null || props.linkedAgentId !== null) {
-            setAuthMode("key");
-        }
+        // Don't lock (readOnly) the field out from under the user mid-entry:
+        // if they're still typing a password that just auto-saved + linked,
+        // the remaining keystrokes must keep landing. Lock only when there's
+        // no in-progress text (a pre-existing linked credential, or cleared).
+        setPwEditing(props.password !== "");
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [props.linkedPasswordId, props.linkedKeyId, props.linkedAgentId, stopReveal]);
 
     const revealStored = useCallback(async () => {

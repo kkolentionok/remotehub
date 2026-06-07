@@ -28,6 +28,11 @@ interface Props {
     onLocalClipboardImage?: (width: number, height: number, rgbaBase64: string) => void;
     /** Viewport size changed (device px) → request a DisplayControl resize. */
     onResize?: (width: number, height: number) => void;
+    /** Enable the continuous window-resize → DisplayControl reflow. Off by
+     *  default; the parent turns it on for GFX sessions (the legacy RemoteFX
+     *  reactivation degrades repaint rate — IronRDP #447 — so it stays off
+     *  there). The fullscreen one-shot resize is independent and always on. */
+    enableDynamicResize?: boolean;
     /** Toggle OS-level keyboard capture (true on fullscreen, false on exit). */
     onKbdCapture?: (on: boolean) => void;
     /** Detach this session into its own OS window (shown as a bar button).
@@ -88,7 +93,7 @@ function pointerToCss(ev: {
  * and key event via `getModifierState`). Fix for the classic "stuck
  * Ctrl/Alt/Shift after Alt-Tab" RDP bug. (Input wire lands in round 2b-2.)
  */
-export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, connected, onLocalClipboard, onLocalClipboardImage, onResize, onKbdCapture, onPopOut, className }: Props) {
+export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, connected, onLocalClipboard, onLocalClipboardImage, onResize, enableDynamicResize, onKbdCapture, onPopOut, className }: Props) {
     const { t } = useT();
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
@@ -308,14 +313,13 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, con
     // size, ask the server to re-render at that resolution so the desktop
     // fills the pane instead of letterboxing.
     //
-    // TEMPORARILY DISABLED: on RemoteFX servers the post-resize reactivation
-    // both degrades server repaint rate (IronRDP #447) and can leave an
-    // unrepainted region. The DVC/backend path stays wired and dormant; flip
-    // this on once the reactivation repaint is debugged on a live session
-    // (and/or GFX/H.264 replaces the RemoteFX codepath).
-    const ENABLE_DYNAMIC_RESIZE = false;
+    // Gated by `enableDynamicResize` (parent enables it for GFX sessions). On
+    // the legacy RemoteFX path the post-resize reactivation degrades the server
+    // repaint rate (IronRDP #447) and can leave an unrepainted region, so the
+    // parent leaves it off there; GFX's self-correcting fb-diff repaints the
+    // new surface cleanly. The DVC/backend path is always wired.
     useEffect(() => {
-        if (!ENABLE_DYNAMIC_RESIZE) return;
+        if (!enableDynamicResize) return;
         const el = wrapRef.current;
         if (!el) return;
         let timer = 0;
@@ -339,8 +343,7 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, con
             clearTimeout(timer);
             ro.disconnect();
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [sessionKey]);
+    }, [sessionKey, enableDynamicResize]);
 
     // --- coordinate mapping: display (CSS) px → backing px ---
     const toCanvas = (clientX: number, clientY: number): { x: number; y: number } => {

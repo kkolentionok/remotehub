@@ -20,7 +20,7 @@ use rh_core::StorageError;
 /// Schema version this binary expects. Bumping this triggers either an
 /// incremental migration (when a path exists, e.g. v2 → v3) or, for any
 /// other mismatch, a drop-recreate in alpha mode.
-pub const CURRENT_SCHEMA_VERSION: u32 = 9;
+pub const CURRENT_SCHEMA_VERSION: u32 = 10;
 
 /// Embedded migration script for the current version.
 const V1_SQL: &str = include_str!("migrations/v1.sql");
@@ -69,6 +69,23 @@ const MIGRATE_V7_TO_V8: &str = "CREATE TABLE rdp_known_certs (\n    hostname    
 const MIGRATE_V8_TO_V9: &str =
     "ALTER TABLE hosts ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0;";
 
+/// Incremental, data-preserving migration v9 → v10: `sync_meta` table —
+/// per-record provenance (HLC rev + origin node) and tombstones for the
+/// sync engine (slice 2b). New table, no existing rows touched. A single
+/// generic table (keyed by `kind, id`) avoids adding rev/origin columns to
+/// every entity table and lets a deletion survive its entity row as a
+/// `deleted = 1` tombstone so it can replicate.
+const MIGRATE_V9_TO_V10: &str = "\
+CREATE TABLE sync_meta (\
+    kind        TEXT NOT NULL,\
+    id          TEXT NOT NULL,\
+    rev_wall    INTEGER NOT NULL,\
+    rev_counter INTEGER NOT NULL,\
+    origin      TEXT NOT NULL,\
+    deleted     INTEGER NOT NULL DEFAULT 0,\
+    PRIMARY KEY (kind, id)\
+);";
+
 /// Ordered forward migrations `(from_version, sql)`. The runner applies
 /// every step whose `from_version >= existing` in sequence, so a DB any
 /// number of versions behind (as long as the chain is contiguous from
@@ -82,6 +99,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (6, MIGRATE_V6_TO_V7),
     (7, MIGRATE_V7_TO_V8),
     (8, MIGRATE_V8_TO_V9),
+    (9, MIGRATE_V9_TO_V10),
 ];
 
 /// What [`Db::open`] decided to do with the schema.
@@ -316,6 +334,8 @@ impl Db {
             DROP TABLE IF EXISTS credentials;
             DROP TABLE IF EXISTS host_groups;
             DROP TABLE IF EXISTS known_hosts;
+            DROP TABLE IF EXISTS rdp_known_certs;
+            DROP TABLE IF EXISTS sync_meta;
             DROP TABLE IF EXISTS settings;
             DROP TABLE IF EXISTS schema_meta;
             PRAGMA foreign_keys = ON;
@@ -382,6 +402,7 @@ mod tests {
             "known_hosts",
             "schema_meta",
             "settings",
+            "sync_meta",
         ] {
             assert!(
                 names.iter().any(|n| n == expected),

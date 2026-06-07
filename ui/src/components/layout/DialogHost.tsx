@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { useT } from "../../i18n";
-import { credentials as credApi, groups as groupsApi, hosts as hostsApi } from "../../lib/ipc";
+import { app as appApi, credentials as credApi, groups as groupsApi, hosts as hostsApi } from "../../lib/ipc";
 import type { HostGroupDto } from "../../lib/types";
 import { useGroupsStore, useUiStore } from "../../store";
 import { ConfirmDialog } from "../dialog/ConfirmDialog";
@@ -140,5 +140,21 @@ export function DialogHost() {
 
         case "settings":
             return <SettingsDialog onClose={closeDialog} initialSection={dialog.section} />;
+
+        case "quit-confirm":
+            return (
+                <ConfirmDialog
+                    open
+                    onClose={closeDialog}
+                    title={t("dialog.confirm.quit.title")}
+                    description={t("dialog.confirm.quit.description", {
+                        n: String(dialog.count),
+                    })}
+                    confirmLabel={t("dialog.confirm.quit.action")}
+                    onConfirm={async () => {
+                        await appApi.quit();
+                    }}
+                />
+            );
     }
 }

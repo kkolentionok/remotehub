@@ -112,6 +112,7 @@ pub mod keys {
     pub const SSH_KEEPALIVE_INTERVAL_SECS: &str = "ssh.keepalive_interval_secs";
     pub const SSH_KNOWN_HOSTS_STRICT: &str = "ssh.known_hosts_strict";
     pub const LOCAL_SHELL: &str = "local.shell";
+    pub const RDP_GFX: &str = "rdp.gfx";
 }
 
 /// Typed view of all settings with their default values.
@@ -138,6 +139,10 @@ pub struct Settings {
     /// Override shell for local terminals (absolute path or name on PATH).
     /// Empty = platform default (PowerShell on Windows, $SHELL on Unix).
     pub local_shell: String,
+    /// Opt-in GFX (MS-RDPEGFX) RDP decode pipeline. When false, the proven
+    /// legacy IronRDP bitmap/RemoteFX path is used. The `RDP_GFX` env var
+    /// still forces it on for dev regardless of this flag.
+    pub rdp_gfx: bool,
 }
 
 impl Default for Settings {
@@ -158,6 +163,7 @@ impl Default for Settings {
             ssh_keepalive_interval_secs: 30,
             ssh_known_hosts_strict: true,
             local_shell: String::new(),
+            rdp_gfx: false,
         }
     }
 }
@@ -221,6 +227,7 @@ mod tests {
         assert_eq!(s.ssh_keepalive_interval_secs, 30);
         assert!(s.ssh_known_hosts_strict);
         assert_eq!(s.rdp_default_resolution, RdpResolution::Fit);
+        assert!(!s.rdp_gfx);
     }
 
     #[test]

@@ -24,7 +24,7 @@ CREATE TABLE schema_meta (
     value   TEXT NOT NULL
 );
 
-INSERT INTO schema_meta (key, value) VALUES ('version', '8');
+INSERT INTO schema_meta (key, value) VALUES ('version', '10');
 
 -- ---------------------------------------------------------------------
 -- Host groups (hierarchical folders).
@@ -131,4 +131,22 @@ CREATE TABLE rdp_known_certs (
     subject             TEXT NOT NULL,
     trusted_at          TEXT NOT NULL,
     PRIMARY KEY (hostname, port)
+);
+
+-- ---------------------------------------------------------------------
+-- Per-record sync provenance + tombstones (sync engine, slice 2b).
+-- One row per replicated record, keyed by (kind, id). `rev_wall` /
+-- `rev_counter` are the two halves of the record's last-write HLC stamp;
+-- `origin` is the device that produced it; `deleted = 1` marks a
+-- tombstone (the entity row is gone, this row remains so the deletion
+-- replicates). A single generic table keeps the entity schemas untouched.
+-- ---------------------------------------------------------------------
+CREATE TABLE sync_meta (
+    kind        TEXT NOT NULL,
+    id          TEXT NOT NULL,
+    rev_wall    INTEGER NOT NULL,
+    rev_counter INTEGER NOT NULL,
+    origin      TEXT NOT NULL,
+    deleted     INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (kind, id)
 );

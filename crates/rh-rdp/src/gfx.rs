@@ -521,9 +521,11 @@ impl DvcProcessor for GraphicsPipeline {
 
             *self.op_counts.entry(Self::pdu_name(&pdu)).or_insert(0) += 1;
             if self.last_op_log.elapsed() >= std::time::Duration::from_secs(1) {
-                let summary: Vec<String> =
-                    self.op_counts.iter().map(|(k, v)| format!("{k}={v}")).collect();
-                info!("GFX ops/sec: {}", summary.join(" "));
+                if self.trace {
+                    let summary: Vec<String> =
+                        self.op_counts.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                    info!("GFX ops/sec: {}", summary.join(" "));
+                }
                 self.op_counts.clear();
                 self.last_op_log = std::time::Instant::now();
             }
@@ -602,7 +604,7 @@ impl DvcProcessor for GraphicsPipeline {
                         Codec1Type::ClearCodec => {
                             let dims = st.surfaces.get(&w.surface_id).map(|s| (s.w, s.h));
                             if let Some((sw, sh)) = dims {
-                                if self.dbg_n < 8 {
+                                if self.trace && self.dbg_n < 8 {
                                     self.dbg_n += 1;
                                     let org = st.origin.get(&w.surface_id).copied();
                                     info!(
@@ -671,7 +673,7 @@ impl DvcProcessor for GraphicsPipeline {
                         s.source_rectangle.right,
                         s.source_rectangle.bottom,
                     );
-                    if self.dbg_cache < 40 {
+                    if self.trace && self.dbg_cache < 40 {
                         self.dbg_cache += 1;
                         info!(
                             "GFX: S2Cache slot={} key={} src[l={} t={} r={} b={}] -> xywh=({},{},{},{})",
@@ -697,21 +699,6 @@ impl DvcProcessor for GraphicsPipeline {
                         info!(
                             "TRACE Cache2S slot={} surf={} center_rgb={} dst_pts={}",
                             c.cache_slot, c.surface_id, col, pts.join(",")
-                        );
-                    } else if self.dbg_cache < 40 {
-                        self.dbg_cache += 1;
-                        let pts: Vec<String> = c
-                            .destination_points
-                            .iter()
-                            .take(4)
-                            .map(|p| format!("({},{})", p.x, p.y))
-                            .collect();
-                        info!(
-                            "GFX: Cache2S slot={} surf={} npts={} first_pts=[{}]",
-                            c.cache_slot,
-                            c.surface_id,
-                            c.destination_points.len(),
-                            pts.join(" ")
                         );
                     }
                     for p in &c.destination_points {
@@ -757,18 +744,32 @@ impl DvcProcessor for GraphicsPipeline {
                         let tiles = self.prog.decode(&w.bitmap_data);
                         if self.trace && !tiles.is_empty() {
                             let (mut x0, mut y0, mut x1, mut y1) = (u16::MAX, u16::MAX, 0u16, 0u16);
+                            // Per-row coverage (y -> min..max x). The bbox alone
+                            // hid whether Progressive actually repaints a given
+                            // row of a vacated band; this lists the exact rows
+                            // and their x-extent so a disocclusion gap is visible.
+                            let mut rows: std::collections::BTreeMap<u16, (u16, u16)> =
+                                std::collections::BTreeMap::new();
                             for t in &tiles {
                                 x0 = x0.min(t.x);
                                 y0 = y0.min(t.y);
                                 x1 = x1.max(t.x + 64);
                                 y1 = y1.max(t.y + 64);
+                                let e = rows.entry(t.y).or_insert((u16::MAX, 0));
+                                e.0 = e.0.min(t.x);
+                                e.1 = e.1.max(t.x + 64);
                             }
+                            let rowstr: Vec<String> = rows
+                                .iter()
+                                .map(|(y, (a, b))| format!("{y}:{a}-{b}"))
+                                .collect();
                             info!(
-                                "TRACE Wts2 prog surf={} tiles={} bbox=({x0},{y0},{},{})",
+                                "TRACE Wts2 prog surf={} tiles={} bbox=({x0},{y0},{},{}) rows=[{}]",
                                 w.surface_id,
                                 tiles.len(),
                                 x1.saturating_sub(x0),
-                                y1.saturating_sub(y0)
+                                y1.saturating_sub(y0),
+                                rowstr.join(" ")
                             );
                         }
                         for t in &tiles {

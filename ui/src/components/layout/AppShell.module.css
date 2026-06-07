@@ -3,7 +3,16 @@
     flex-direction: column;
     height: 100%;
     width: 100%;
+    box-sizing: border-box;
     overflow: hidden;
+}
+
+/* Borderless maximize on Windows overflows the work area by the resize-border
+   (~8px), pushing the bottom under the taskbar — clips the last terminal row.
+   Inset the bottom so content stays above the work-area edge; the 8px sits in
+   the hidden strip. (box-sizing:border-box keeps the inset inside height:100%.) */
+.shell[data-maximized] {
+    padding-bottom: 8px;
 }
 
 .stage {
@@ -17,4 +26,29 @@
     flex: 1;
     min-width: 0;
     min-height: 0;
+}
+
+/* Session tab content wrappers.
+ * splitWrap: air around a tiled multi-pane layout.
+ * focusWrap/focusMain: focus mode = left rail + the maximized pane. */
+.splitWrap {
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    padding: var(--space-2);
+}
+.focusWrap {
+    box-sizing: border-box;
+    display: flex;
+    gap: var(--space-2);
+    width: 100%;
+    height: 100%;
+    padding: var(--space-2);
+    min-height: 0;
+}
+.focusMain {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
 }

@@ -8,6 +8,10 @@ members = [
     "crates/rh-vault",
     "crates/rh-app",
 ]
+# The sync server is a standalone crate (its own [workspace]); it shares no code
+# with the app and builds/dockerizes independently. Excluded so `cargo build`
+# / `cargo tauri dev` never touch it.
+exclude = ["server"]
 
 [workspace.package]
 version = "0.1.0"

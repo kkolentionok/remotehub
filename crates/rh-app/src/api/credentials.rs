@@ -18,6 +18,7 @@ use crate::api::dto::{
 use crate::api::error::{ApiError, ApiResult};
 use crate::api::events;
 use crate::state::AppState;
+use crate::sync_clock::KIND_CREDENTIAL;
 
 const MAX_CRED_NAME: usize = 256;
 const MAX_USERNAME: usize = 256;
@@ -89,6 +90,7 @@ pub async fn credential_create(
         .credentials
         .create(&cred, secret_for_store, passphrase)
         .await?;
+    state.stamp_live(KIND_CREDENTIAL, id.as_str()).await?;
 
     events::emit_credentials_changed(&app, events::Change::Created, &id);
     Ok(CredentialCreateResponse { id })
@@ -118,6 +120,7 @@ pub async fn credential_update(
     cred.touch();
 
     state.credentials.update(&cred).await?;
+    state.stamp_live(KIND_CREDENTIAL, cred.id.as_str()).await?;
     events::emit_credentials_changed(&app, events::Change::Updated, &cred.id);
     Ok(())
 }
@@ -158,6 +161,7 @@ pub async fn credential_rotate_secret(
         .credentials
         .rotate_secret(&req.id, secret, passphrase)
         .await?;
+    state.stamp_live(KIND_CREDENTIAL, req.id.as_str()).await?;
     events::emit_credentials_changed(&app, events::Change::Updated, &req.id);
     Ok(())
 }

@@ -13,3 +13,5 @@ pub mod rdp_sessions;
 pub mod sessions;
 pub mod sftp_sessions;
 pub mod settings;
+pub mod sync;
+pub mod vault;

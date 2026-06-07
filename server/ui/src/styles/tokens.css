@@ -1,0 +1,295 @@
+/* =====================================================================
+ * Design tokens.
+ *
+ * Single source of truth for colors, spacing, radii, typography.
+ * Components reference `var(--color-...)` etc. Never hardcode hex.
+ *
+ * Redesign visual pass: darker command-center palette (near-black
+ * canvas, hairline rgba borders), Geist + Geist Mono (self-hosted,
+ * see fonts.css). Foreground is an opacity scale (--text-1..4) so it
+ * reads correctly on either theme; the older --color-fg* names alias
+ * onto it for back-compat with not-yet-migrated components.
+ * ===================================================================== */
+
+:root {
+    /* ---- Theme-independent ---- */
+
+    /* Accent — one color for selection, focus, primary actions */
+    --color-accent: #4c8eff;
+    --color-accent-hover: #5b99ff;
+    --color-accent-fg: #ffffff;
+
+    /* Group label palette (same on both themes) */
+    --g-blue: #4c8eff;
+    --g-green: #4ade80;
+    --g-amber: #f59e0b;
+    --g-violet: #a78bfa;
+    --g-pink: #f472b6;
+    --g-cyan: #22d3ee;
+    --g-rose: #fb7185;
+    --g-slate: #94a3b8;
+
+    /* Typography — Geist for UI, Geist Mono for IDs/addresses.
+     * Self-hosted (fonts.css); fallback stack keeps the app usable if a
+     * face fails to load. */
+    --font-sans:
+        "Geist", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+    --font-mono:
+        "Geist Mono", ui-monospace, "Cascadia Mono", "SF Mono", "Consolas",
+        "Liberation Mono", monospace;
+
+    /* Type scale (kept for existing components; new dense components use
+     * literal px from the design where the scale is finer-grained). */
+    --text-xs: 11px;
+    --text-sm: 13px;
+    --text-base: 14px;
+    --text-md: 15px;
+    --text-lg: 17px;
+    --text-xl: 22px;
+
+    /* Spacing — 4px grid */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 24px;
+    --space-8: 32px;
+
+    /* Radius */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 12px;
+
+    /* Sidebar width (legacy; shell moves to top tabs) */
+    --sidebar-width: 280px;
+
+    /* Z-layers */
+    --z-popover: 120;
+    --z-dialog: 150;
+    --z-toast: 200;
+
+    /* ---- Theme-dependent: DARK (default) ---- */
+
+    --color-canvas: #0a0a0d;
+    --color-surface: #16161a;
+    --color-elevated: #1f1f24;
+    --color-subtle: rgba(255, 255, 255, 0.04);
+    --color-border: rgba(255, 255, 255, 0.08);
+    --color-border-strong: rgba(255, 255, 255, 0.13);
+    --color-tabbar: #0d0d11;
+
+    --color-scrollbar: rgba(255, 255, 255, 0.1);
+    --color-scrollbar-hover: rgba(255, 255, 255, 0.18);
+
+    /* Foreground opacity scale */
+    --text-1: rgba(255, 255, 255, 0.92);
+    --text-2: rgba(255, 255, 255, 0.6);
+    --text-3: rgba(255, 255, 255, 0.4);
+    --text-4: rgba(255, 255, 255, 0.26);
+    /* legacy aliases */
+    --color-fg: var(--text-1);
+    --color-fg-muted: var(--text-2);
+    --color-fg-faint: var(--text-3);
+
+    --color-accent-faint: rgba(76, 142, 255, 0.13);
+    --accent-soft: rgba(76, 142, 255, 0.13);
+
+    --color-danger: #f87171;
+    --color-danger-bg: rgba(248, 113, 113, 0.1);
+    --color-success: #4ade80;
+    --color-success-bg: rgba(74, 222, 128, 0.1);
+    --color-warning: #fbbf24;
+    --color-warn: #e6c07b;
+
+    --color-ssh: #4ade80;
+    --color-rdp: #60a5fa;
+    --color-ssh-bg: rgba(74, 222, 128, 0.11);
+    --color-rdp-bg: rgba(96, 165, 250, 0.11);
+
+    --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.45);
+}
+
+/* Navy — the "in-between" dark: deep blue surfaces instead of near-black.
+ * Same accent + foreground scale; only the neutral surfaces shift to navy. */
+:root[data-theme="navy"] {
+    --color-canvas: #0b0e18;
+    --color-surface: #141a2b;
+    --color-elevated: #1f2742;
+    --color-subtle: rgba(255, 255, 255, 0.05);
+    --color-border: rgba(255, 255, 255, 0.09);
+    --color-border-strong: rgba(255, 255, 255, 0.15);
+    --color-tabbar: #090c14;
+
+    --color-scrollbar: rgba(255, 255, 255, 0.12);
+    --color-scrollbar-hover: rgba(255, 255, 255, 0.2);
+
+    --text-1: rgba(255, 255, 255, 0.92);
+    --text-2: rgba(255, 255, 255, 0.6);
+    --text-3: rgba(255, 255, 255, 0.4);
+    --text-4: rgba(255, 255, 255, 0.27);
+
+    --color-accent-faint: rgba(76, 142, 255, 0.16);
+    --accent-soft: rgba(76, 142, 255, 0.16);
+
+    --color-danger: #f87171;
+    --color-danger-bg: rgba(248, 113, 113, 0.12);
+    --color-success: #4ade80;
+    --color-success-bg: rgba(74, 222, 128, 0.1);
+    --color-warning: #fbbf24;
+    --color-warn: #e6c07b;
+
+    --color-ssh: #4ade80;
+    --color-rdp: #60a5fa;
+    --color-ssh-bg: rgba(74, 222, 128, 0.11);
+    --color-rdp-bg: rgba(96, 165, 250, 0.11);
+
+    --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+:root[data-theme="redpanda"] {
+    --color-accent: #f0552f;
+    --color-accent-hover: #ff6a47;
+
+    --color-canvas: #110d0c;
+    --color-surface: #1b1513;
+    --color-elevated: #271e1a;
+    --color-subtle: rgba(255, 255, 255, 0.045);
+    --color-border: rgba(255, 255, 255, 0.08);
+    --color-border-strong: rgba(255, 255, 255, 0.14);
+    --color-tabbar: #0d0a09;
+
+    --color-scrollbar: rgba(255, 255, 255, 0.11);
+    --color-scrollbar-hover: rgba(255, 255, 255, 0.2);
+
+    --text-1: rgba(255, 255, 255, 0.92);
+    --text-2: rgba(255, 255, 255, 0.6);
+    --text-3: rgba(255, 255, 255, 0.4);
+    --text-4: rgba(255, 255, 255, 0.27);
+
+    --color-accent-faint: rgba(240, 85, 47, 0.15);
+    --accent-soft: rgba(240, 85, 47, 0.15);
+
+    --color-danger: #f87171;
+    --color-danger-bg: rgba(248, 113, 113, 0.12);
+    --color-success: #4ade80;
+    --color-success-bg: rgba(74, 222, 128, 0.1);
+    --color-warning: #fbbf24;
+    --color-warn: #e6c07b;
+
+    --color-ssh: #4ade80;
+    --color-rdp: #60a5fa;
+    --color-ssh-bg: rgba(74, 222, 128, 0.11);
+    --color-rdp-bg: rgba(96, 165, 250, 0.11);
+
+    --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+:root[data-theme="light"] {
+    --color-canvas: #f6f6f7;
+    --color-surface: #ffffff;
+    --color-elevated: #ffffff;
+    --color-subtle: rgba(0, 0, 0, 0.04);
+    --color-border: rgba(0, 0, 0, 0.09);
+    --color-border-strong: rgba(0, 0, 0, 0.14);
+    --color-tabbar: #eaeaec;
+
+    --color-scrollbar: rgba(0, 0, 0, 0.18);
+    --color-scrollbar-hover: rgba(0, 0, 0, 0.34);
+
+    --text-1: rgba(0, 0, 0, 0.9);
+    --text-2: rgba(0, 0, 0, 0.58);
+    --text-3: rgba(0, 0, 0, 0.4);
+    --text-4: rgba(0, 0, 0, 0.28);
+
+    --color-accent-faint: rgba(76, 142, 255, 0.12);
+    --accent-soft: rgba(76, 142, 255, 0.12);
+
+    --color-danger: #dc2626;
+    --color-danger-bg: rgba(220, 38, 38, 0.08);
+    --color-success: #16a34a;
+    --color-success-bg: rgba(22, 163, 74, 0.1);
+    --color-warning: #d97706;
+    --color-warn: #b45309;
+
+    --color-ssh: #16a34a;
+    --color-rdp: #2563eb;
+    --color-ssh-bg: rgba(22, 163, 74, 0.1);
+    --color-rdp-bg: rgba(37, 99, 235, 0.1);
+
+    --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.18);
+}
+
+@media (prefers-color-scheme: light) {
+    :root[data-theme="system"],
+    :root:not([data-theme]) {
+        --color-canvas: #f6f6f7;
+        --color-surface: #ffffff;
+        --color-elevated: #ffffff;
+        --color-subtle: rgba(0, 0, 0, 0.04);
+        --color-border: rgba(0, 0, 0, 0.09);
+        --color-border-strong: rgba(0, 0, 0, 0.14);
+        --color-tabbar: #eaeaec;
+
+        --color-scrollbar: rgba(0, 0, 0, 0.18);
+        --color-scrollbar-hover: rgba(0, 0, 0, 0.34);
+
+        --text-1: rgba(0, 0, 0, 0.9);
+        --text-2: rgba(0, 0, 0, 0.58);
+        --text-3: rgba(0, 0, 0, 0.4);
+        --text-4: rgba(0, 0, 0, 0.28);
+
+        --color-accent-faint: rgba(76, 142, 255, 0.12);
+        --accent-soft: rgba(76, 142, 255, 0.12);
+
+        --color-danger: #dc2626;
+        --color-danger-bg: rgba(220, 38, 38, 0.08);
+        --color-success: #16a34a;
+        --color-success-bg: rgba(22, 163, 74, 0.1);
+        --color-warning: #d97706;
+        --color-warn: #b45309;
+
+        --color-ssh: #16a34a;
+        --color-rdp: #2563eb;
+        --color-ssh-bg: rgba(22, 163, 74, 0.1);
+        --color-rdp-bg: rgba(37, 99, 235, 0.1);
+
+        --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.18);
+    }
+}
+
+/* Explicit dark re-assert — beats the media query for users who pick
+ * "dark" on a light-preferring OS. */
+:root[data-theme="dark"] {
+    --color-canvas: #0a0a0d;
+    --color-surface: #16161a;
+    --color-elevated: #1f1f24;
+    --color-subtle: rgba(255, 255, 255, 0.04);
+    --color-border: rgba(255, 255, 255, 0.08);
+    --color-border-strong: rgba(255, 255, 255, 0.13);
+    --color-tabbar: #0d0d11;
+
+    --color-scrollbar: rgba(255, 255, 255, 0.1);
+    --color-scrollbar-hover: rgba(255, 255, 255, 0.18);
+
+    --text-1: rgba(255, 255, 255, 0.92);
+    --text-2: rgba(255, 255, 255, 0.6);
+    --text-3: rgba(255, 255, 255, 0.4);
+    --text-4: rgba(255, 255, 255, 0.26);
+
+    --color-accent-faint: rgba(76, 142, 255, 0.13);
+    --accent-soft: rgba(76, 142, 255, 0.13);
+
+    --color-danger: #f87171;
+    --color-danger-bg: rgba(248, 113, 113, 0.1);
+    --color-success: #4ade80;
+    --color-success-bg: rgba(74, 222, 128, 0.1);
+    --color-warning: #fbbf24;
+    --color-warn: #e6c07b;
+
+    --color-ssh: #4ade80;
+    --color-rdp: #60a5fa;
+    --color-ssh-bg: rgba(74, 222, 128, 0.11);
+    --color-rdp-bg: rgba(96, 165, 250, 0.11);
+
+    --shadow-pop: 0 16px 48px rgba(0, 0, 0, 0.45);
+}

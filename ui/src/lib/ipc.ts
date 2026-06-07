@@ -57,6 +57,10 @@ import type {
     RdpInputRequest,
     RdpSessionEvent,
     SshSessionEvent,
+    VaultImportResponse,
+    VaultFileResponse,
+    SyncConfigResponse,
+    SyncNowResponse,
 } from "./types";
 import {
     EVENT_CREDENTIALS_CHANGED,
@@ -453,3 +457,67 @@ export function encodeSecret(plaintext: string): string {
     });
     return btoa(binary);
 }
+
+// =====================================================================
+// Vault / Sync (slice 1: export). See docs/specs/sync.md.
+// =====================================================================
+
+export const vault = {
+    /** Export local state as a portable, E2E-encrypted vault string. */
+    export: (master_password: string): Promise<string> =>
+        call("vault_export", { master_password }),
+    /** Decrypt + reconcile a vault export into local state. */
+    import: (
+        master_password: string,
+        body: string,
+        mode: "merge" | "replace" = "merge",
+    ): Promise<VaultImportResponse> =>
+        call("vault_import", { master_password, body, mode }),
+    /** Write a vault export string to a path the user chose via the native
+     *  Save dialog. */
+    writeFile: (path: string, body: string): Promise<void> =>
+        call("vault_write_file", { path, body }),
+    /** Read a vault file the user chose via the native Open dialog. */
+    readFile: (path: string): Promise<VaultFileResponse> =>
+        call("vault_read_file", { path }),
+};
+
+// =====================================================================
+// Sync (slice 3b: server transport). See docs/specs/sync.md §9.
+// =====================================================================
+
+export const sync = {
+    /** Current endpoint/account + whether a bearer token is stored. */
+    getConfig: (): Promise<SyncConfigResponse> => call("sync_get_config"),
+    /** Set the server base URL. */
+    setEndpoint: (endpoint: string): Promise<void> =>
+        call("sync_set_endpoint", { endpoint }),
+    /** Create an account on the configured server. */
+    register: (email: string, password: string): Promise<void> =>
+        call("sync_register", { email, password }),
+    /** Log in; stores the bearer token in the OS keychain. */
+    login: (email: string, password: string): Promise<void> =>
+        call("sync_login", { email, password }),
+    /** Forget the stored token. */
+    logout: (): Promise<void> => call("sync_logout"),
+    /** Run one sync: build → merge with server → apply. `master_password`
+     *  seals/opens the E2E envelope and never leaves the device. */
+    now: (master_password: string): Promise<SyncNowResponse> =>
+        call("sync_now", { master_password }),
+};
+
+// =====================================================================
+// App control (tray session count + real quit)
+// =====================================================================
+
+export const app = {
+    /** Report how many live session tabs are open (drives the tray tooltip
+     *  and the quit-confirm check). NOTE: bypasses `call()` on purpose — these
+     *  commands take top-level args (`count`), not the `{ req }` envelope. */
+    reportSessions: (count: number): Promise<void> =>
+        invoke<void>("ui_sessions_report", { count }),
+    /** Quit the app for real (after the user confirms with live sessions). */
+    quit: (): Promise<void> => invoke<void>("app_quit"),
+    /** Open a URL in the system browser (terminal Ctrl/Cmd+click on links). */
+    open: (url: string): Promise<void> => invoke<void>("open_external", { url }),
+};
