@@ -54,6 +54,16 @@ pub fn emit_credentials_changed(app: &AppHandle, kind: Change, id: &CredentialId
     emit(app, names::CREDENTIALS_CHANGED, &ChangePayload { kind, id });
 }
 
+/// Emit all three collection-changed events at once. Used after a bulk local
+/// mutation (logout purge / vault replace) where there is no single affected
+/// id — the UI listens per-collection and refetches, ignoring the payload, so a
+/// sentinel id is fine (`HostId::from_raw` etc. do not validate).
+pub fn emit_collections_reset(app: &AppHandle) {
+    emit_hosts_changed(app, Change::Deleted, &HostId::from_raw(""));
+    emit_groups_changed(app, Change::Deleted, &GroupId::from_raw(""));
+    emit_credentials_changed(app, Change::Deleted, &CredentialId::from_raw(""));
+}
+
 pub fn emit_settings_changed(app: &AppHandle, keys: &[&str]) {
     #[derive(Serialize)]
     struct Payload<'a> {

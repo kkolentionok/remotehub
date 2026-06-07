@@ -11,7 +11,7 @@
 
 use rh_vault::HlcGenerator;
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use tracing::instrument;
 
 use crate::api::error::{ApiError, ApiResult};
@@ -35,6 +35,10 @@ pub struct SyncAuthRequest {
 #[serde(deny_unknown_fields)]
 pub struct SyncMasterRequest {
     pub master_password: String,
+    /// Persist the vault password to the OS keychain ("remember on this
+    /// device"). When false, it's kept in memory for this session only and the
+    /// user is re-prompted on the next launch.
+    pub persist: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -112,12 +116,47 @@ pub async fn sync_login(req: SyncAuthRequest) -> ApiResult<()> {
     Ok(())
 }
 
-/// Forget the stored token and cached vault password.
+/// Log out: forget the token + cached vault password, and **purge the local
+/// vault** so the account can't bleed into the next one.
+///
+/// The local SQLite + keychain are shared across accounts, and the sync model
+/// propagates deletions via tombstones. If logout left local data and
+/// tombstones in place, signing into a *different* account would push this
+/// account's hosts into it (slice-3d bug #2) and, worse, replay this account's
+/// deletion tombstones against it (bug #4 — cross-account data loss). So logout
+/// clears hosts/groups/credentials (incl. keychain secrets) **and** all
+/// tombstones. The data is preserved server-side and returns on the next
+/// login + sync. (Adding hosts while signed out still works — they're adopted
+/// into whichever account you next sign into.)
 #[tauri::command]
-#[instrument(level = "debug")]
-pub async fn sync_logout() -> ApiResult<()> {
+#[instrument(level = "debug", skip(state, app))]
+pub async fn sync_logout(app: AppHandle, state: State<'_, AppState>) -> ApiResult<()> {
+    // Forget credentials FIRST so the background actor's next `ready()` check
+    // fails and it won't start a pass mid-teardown.
     sync_remote::token_clear();
     sync_remote::vault_key_clear();
+    *state.sync_master_mem.lock().await = None;
+
+    // Take the inflight lock so no in-progress/just-started pass can push the
+    // (about-to-be-empty) snapshot to the server while we wipe. Any pass that
+    // was already running finishes first (it pushes the correct pre-wipe data).
+    let _guard = state.sync_inflight.lock().await;
+
+    // Forget the account email so the UI returns cleanly to signed-out.
+    let mut cfg = SyncConfig::load();
+    cfg.email = None;
+    cfg.save();
+
+    // Account-scope the local vault: data + secrets + tombstones, all gone.
+    crate::api::vault::wipe_local(&state).await?;
+
+    // Tell the sidebar + tray to refetch (everything is empty now) and reset
+    // the sync-status indicator.
+    crate::api::events::emit_collections_reset(&app);
+    let reset = crate::sync_engine::SyncStatusSnapshot::default();
+    *state.sync_status.lock().await = reset.clone();
+    let _ = app.emit(crate::sync_engine::STATUS_EVENT, &reset);
+
     Ok(())
 }
 
@@ -221,9 +260,16 @@ pub async fn sync_set_master(
         Err(_) => {}
     }
 
-    sync_remote::vault_key_set(&req.master_password).map_err(|e| ApiError::Internal {
-        message: format!("keychain: {e}"),
-    })?;
+    // Always hold it in memory for this session so auto-sync runs immediately.
+    *state.sync_master_mem.lock().await = Some(req.master_password.clone());
+    if req.persist {
+        sync_remote::vault_key_set(&req.master_password).map_err(|e| ApiError::Internal {
+            message: format!("keychain: {e}"),
+        })?;
+    } else {
+        // Opted out of persistence — make sure no stale key lingers.
+        sync_remote::vault_key_clear();
+    }
     // Nudge the actor so any further reconciliation happens promptly.
     state.sync_wake.notify_one();
 

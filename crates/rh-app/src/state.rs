@@ -61,6 +61,10 @@ pub struct AppState {
     pub sync_wake: Arc<Notify>,
     pub sync_inflight: Arc<Mutex<()>>,
     pub sync_status: Arc<Mutex<SyncStatusSnapshot>>,
+    /// Vault (master) password held only in memory for this session — used
+    /// when the user declined to persist it to the keychain ("remember on this
+    /// device" unchecked). The background actor reads keychain-or-memory.
+    pub sync_master_mem: Arc<Mutex<Option<String>>>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -114,6 +118,7 @@ impl AppState {
             sync_wake: Arc::new(Notify::new()),
             sync_inflight: Arc::new(Mutex::new(())),
             sync_status: Arc::new(Mutex::new(SyncStatusSnapshot::default())),
+            sync_master_mem: Arc::new(Mutex::new(None)),
         }
     }
 

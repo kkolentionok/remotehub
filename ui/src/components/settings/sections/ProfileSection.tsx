@@ -1,36 +1,36 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
     AlertCircle,
     Check,
     Eye,
     EyeOff,
+    Folder,
     KeyRound,
     Loader2,
     LogIn,
     LogOut,
+    Pencil,
     Server,
     ShieldCheck,
     UserCircle2,
+    WifiOff,
+    X,
 } from "lucide-react";
 
 import { useT } from "../../../i18n";
 import { sync } from "../../../lib/ipc";
-import { formatApiError, type SyncConfigResponse } from "../../../lib/types";
+import { type SyncConfigResponse, type SyncStatus } from "../../../lib/types";
+import { localizeSyncError } from "../../../lib/syncErrors";
 import { useUiStore } from "../../../store";
 import dlg from "../SettingsDialog.module.css";
 import s from "./ProfileSection.module.css";
 
 /**
- * Account & Sync. Two states:
- *   - signed out → set the server endpoint + email/password, log in / create an
- *     account, or sign in with Yandex (the bearer token is stored in the OS
- *     keychain by the backend).
- *   - signed in → sync is fully automatic. We only show the live status; the
- *     vault (master) password is entered once via a modal (prompted on sign-in
- *     and each launch until set) and cached in the keychain. No "Sync now".
- *
- * The account password authenticates to the server; the vault password seals
- * the data the server can never read — they are deliberately separate.
+ * Account & Sync. Signed out → email/password (log in or create) or Yandex.
+ * Signed in → automatic sync: a live status card (synced / syncing / error)
+ * with per-type counts. No manual "sync now" — the only manual touchpoint is
+ * (re)entering the vault password via the modal. Everything is E2E-sealed with
+ * the vault password before leaving the device.
  */
 export function ProfileSection() {
     const { t } = useT();
@@ -40,12 +40,15 @@ export function ProfileSection() {
     const [cfg, setCfg] = useState<SyncConfigResponse | null>(null);
     const [loading, setLoading] = useState(true);
 
-    // signed-out form
+    const [authMode, setAuthMode] = useState<"login" | "register">("login");
     const [endpoint, setEndpoint] = useState("");
+    const [editingServer, setEditingServer] = useState(false);
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
+    const [confirm, setConfirm] = useState("");
     const [authBusy, setAuthBusy] = useState<"login" | "register" | "yandex" | null>(null);
     const [authError, setAuthError] = useState<string | null>(null);
+    const [confirmLogout, setConfirmLogout] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -57,7 +60,7 @@ export function ProfileSection() {
                 setEndpoint(c.endpoint);
                 setEmail(c.email ?? "");
             } catch (e: unknown) {
-                if (!cancelled) setAuthError(formatApiError(e));
+                if (!cancelled) setAuthError(localizeSyncError(t, e));
             } finally {
                 if (!cancelled) setLoading(false);
             }
@@ -68,7 +71,10 @@ export function ProfileSection() {
     }, []);
 
     const trimmedEndpoint = endpoint.trim();
-    const canAuth = !!trimmedEndpoint && !!email.trim() && !!password && !authBusy;
+    const pwScore = scorePw(password);
+    const matches = confirm.length > 0 && confirm === password;
+    const canLogin = !!trimmedEndpoint && !!email.trim() && !!password && !authBusy;
+    const canRegister = canLogin && matches;
     const canYandex = !!trimmedEndpoint && !authBusy;
 
     async function refresh() {
@@ -77,8 +83,9 @@ export function ProfileSection() {
         setEmail(c.email ?? "");
     }
 
-    async function doAuth(register: boolean) {
-        if (!canAuth) return;
+    async function doAuth() {
+        const register = authMode === "register";
+        if (register ? !canRegister : !canLogin) return;
         setAuthBusy(register ? "register" : "login");
         setAuthError(null);
         try {
@@ -86,12 +93,12 @@ export function ProfileSection() {
             if (register) await sync.register(email.trim(), password);
             await sync.login(email.trim(), password);
             setPassword("");
+            setConfirm("");
             await refresh();
-            // Prompt for the vault password immediately after sign-in.
             const c = await sync.getConfig();
             if (c.logged_in && !c.has_master) setDialog({ kind: "sync-master", mode: "set" });
         } catch (e: unknown) {
-            setAuthError(formatApiError(e));
+            setAuthError(localizeSyncError(t, e));
         } finally {
             setAuthBusy(null);
         }
@@ -109,7 +116,7 @@ export function ProfileSection() {
             setPassword("");
             if (c.logged_in && !c.has_master) setDialog({ kind: "sync-master", mode: "set" });
         } catch (e: unknown) {
-            setAuthError(formatApiError(e));
+            setAuthError(localizeSyncError(t, e));
         } finally {
             setAuthBusy(null);
         }
@@ -117,6 +124,7 @@ export function ProfileSection() {
 
     async function doLogout() {
         await sync.logout();
+        setConfirmLogout(false);
         await refresh();
     }
 
@@ -124,14 +132,32 @@ export function ProfileSection() {
         return <div className={dlg.loading}>{t("common.loading")}</div>;
     }
 
-    return (
-        <div className={dlg.section}>
-            <div className={dlg.sectionTitle}>{t("settings.sync.title")}</div>
-            <p className={dlg.sectionDescription}>{t("settings.sync.lead")}</p>
+    // OAuth redirect screen — shown while the browser dance is in flight.
+    if (authBusy === "yandex") {
+        return (
+            <div className={dlg.section}>
+                <div className={s.oauth}>
+                    <div className={s.oauthTile}>
+                        <span className={s.oauthRing} />Я
+                    </div>
+                    <div className={s.oauthTitle}>{t("settings.sync.oauthRedirect")}</div>
+                    <div className={s.oauthSub}>{t("settings.sync.oauthHint")}</div>
+                    <div className={s.dots}>
+                        <span /> <span /> <span />
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
-            {cfg?.logged_in ? (
+    if (cfg?.logged_in) {
+        return (
+            <div className={dlg.section}>
+                <div className={dlg.sectionTitle}>{t("settings.sync.title")}</div>
+                <p className={dlg.sectionDescription}>{t("settings.sync.lead")}</p>
+
                 <div className={s.flow}>
-                    {/* signed-in identity card */}
+                    {/* identity */}
                     <div className={s.idCard}>
                         <span className={s.idIc}>
                             <UserCircle2 size={22} />
@@ -144,12 +170,35 @@ export function ProfileSection() {
                                 <Server size={11} /> {cfg.endpoint}
                             </div>
                         </div>
-                        <button className={`${s.btn} ${s.btnGhost}`} onClick={() => void doLogout()}>
+                        <button
+                            className={`${s.btn} ${s.btnGhost}`}
+                            onClick={() => setConfirmLogout(true)}
+                        >
                             <LogOut size={15} /> {t("settings.sync.logout")}
                         </button>
                     </div>
 
-                    {/* auto-sync status (or a prompt to set the vault password) */}
+                    {confirmLogout && (
+                        <div className={s.logoutPlate}>
+                            <AlertCircle size={14} />
+                            <span>{t("settings.sync.logoutWarn")}</span>
+                            <div className={s.logoutActions}>
+                                <button
+                                    className={`${s.btn} ${s.btnGhost} ${s.btnSm}`}
+                                    onClick={() => setConfirmLogout(false)}
+                                >
+                                    {t("common.cancel")}
+                                </button>
+                                <button
+                                    className={`${s.btn} ${s.btnDanger} ${s.btnSm}`}
+                                    onClick={() => void doLogout()}
+                                >
+                                    <LogOut size={15} /> {t("settings.sync.logout")}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
                     {!cfg.has_master ? (
                         <div className={s.idCard}>
                             <span className={s.idIc}>
@@ -157,7 +206,7 @@ export function ProfileSection() {
                             </span>
                             <div className={s.idMeta}>
                                 <div className={s.idName}>{t("settings.sync.setMaster")}</div>
-                                <div className={s.idSub}>{t("settings.sync.masterNeeded")}</div>
+                                <div className={s.idSub2}>{t("settings.sync.masterNeeded")}</div>
                             </div>
                             <button
                                 className={`${s.btn} ${s.btnPrimary}`}
@@ -168,176 +217,282 @@ export function ProfileSection() {
                         </div>
                     ) : (
                         <SyncStatusCard
-                            state={syncStatus?.state ?? "idle"}
-                            atMs={syncStatus?.at_ms ?? null}
-                            message={syncStatus?.message ?? null}
+                            status={syncStatus}
                             onFix={() => setDialog({ kind: "sync-master", mode: "fix" })}
                         />
                     )}
                 </div>
-            ) : (
-                <div className={s.flow}>
-                    <div className={s.field}>
-                        <div className={s.fieldL}>
-                            <Server size={12} /> {t("settings.sync.endpoint")}
-                        </div>
+            </div>
+        );
+    }
+
+    // ---- signed out: login / register ----------------------------------
+    const register = authMode === "register";
+    return (
+        <div className={dlg.section}>
+            <div className={s.authHead}>
+                <span className={s.authLogo}>
+                    <ShieldCheck size={16} />
+                </span>
+                {register ? t("settings.sync.registerTitle") : t("settings.sync.loginTitle")}
+            </div>
+
+            <div className={s.flow}>
+                {/* server chip */}
+                <div className={s.serverRow}>
+                    {editingServer ? (
                         <input
                             className={`${s.input} ${s.mono}`}
                             value={endpoint}
-                            onChange={(e) => {
-                                setEndpoint(e.target.value);
-                                setAuthError(null);
-                            }}
+                            onChange={(e) => setEndpoint(e.target.value)}
+                            onBlur={() => setEditingServer(false)}
                             placeholder={t("settings.sync.endpointPlaceholder")}
                             spellCheck={false}
                             autoCapitalize="off"
+                            autoFocus
                         />
-                    </div>
+                    ) : (
+                        <button className={s.serverChip} onClick={() => setEditingServer(true)}>
+                            <Server size={13} className={s.serverChipIc} />
+                            <span className={s.serverChipLbl}>{t("settings.sync.server")}</span>
+                            <span className={s.serverChipVal}>
+                                {trimmedEndpoint.replace(/^https?:\/\//, "") || "pingie.ru"}
+                            </span>
+                            <Pencil size={13} className={s.serverChipPen} />
+                        </button>
+                    )}
+                </div>
 
-                    <div className={s.field}>
-                        <div className={s.fieldL}>
-                            <UserCircle2 size={12} /> {t("settings.sync.email")}
-                        </div>
-                        <input
-                            className={s.input}
-                            type="email"
-                            value={email}
-                            onChange={(e) => {
-                                setEmail(e.target.value);
-                                setAuthError(null);
-                            }}
-                            placeholder={t("settings.sync.emailPlaceholder")}
-                            spellCheck={false}
-                            autoCapitalize="off"
-                            autoComplete="username"
-                        />
+                <div className={s.field}>
+                    <div className={s.fieldL}>
+                        <UserCircle2 size={12} /> {t("settings.sync.email")}
                     </div>
+                    <input
+                        className={s.input}
+                        type="email"
+                        value={email}
+                        onChange={(e) => {
+                            setEmail(e.target.value);
+                            setAuthError(null);
+                        }}
+                        placeholder={t("settings.sync.emailPlaceholder")}
+                        spellCheck={false}
+                        autoCapitalize="off"
+                        autoComplete="username"
+                    />
+                </div>
 
-                    <div className={s.field}>
-                        <div className={s.fieldL}>
-                            <KeyRound size={12} /> {t("settings.sync.password")}
-                        </div>
-                        <Pw
-                            value={password}
-                            onChange={(v) => {
-                                setPassword(v);
-                                setAuthError(null);
-                            }}
-                            placeholder={t("settings.sync.passwordPlaceholder")}
-                            onEnter={() => void doAuth(false)}
-                            err={!!authError}
-                        />
+                <div className={s.field}>
+                    <div className={s.fieldL}>
+                        <KeyRound size={12} /> {t("settings.sync.password")}
                     </div>
-
-                    {authError && (
-                        <div className={s.errLine}>
-                            <AlertCircle size={14} /> {authError}
+                    <Pw
+                        value={password}
+                        onChange={(v) => {
+                            setPassword(v);
+                            setAuthError(null);
+                        }}
+                        placeholder={
+                            register
+                                ? t("settings.sync.passwordNewPlaceholder")
+                                : t("settings.sync.passwordPlaceholder")
+                        }
+                        onEnter={() => void doAuth()}
+                        err={!!authError}
+                    />
+                    {register && password.length > 0 && (
+                        <div className={s.strength}>
+                            <div className={s.strengthTrack}>
+                                <div
+                                    className={s.strengthFill}
+                                    data-score={pwScore}
+                                    style={{ width: `${(pwScore / 4) * 100}%` }}
+                                />
+                            </div>
+                            <span className={s.strengthLbl} data-score={pwScore}>
+                                {t(`settings.sync.pwStrength${pwScore}` as never)}
+                            </span>
                         </div>
                     )}
-
-                    <div className={s.actions}>
-                        <button
-                            className={`${s.btn} ${s.btnPrimary}`}
-                            disabled={!canAuth}
-                            onClick={() => void doAuth(false)}
-                        >
-                            {authBusy === "login" ? (
-                                <>
-                                    <Loader2 size={16} className={s.spin} />{" "}
-                                    {t("settings.sync.loggingIn")}
-                                </>
-                            ) : (
-                                <>
-                                    <ShieldCheck size={15} /> {t("settings.sync.login")}
-                                </>
-                            )}
-                        </button>
-                        <button
-                            className={`${s.btn} ${s.btnGhost}`}
-                            disabled={!canAuth}
-                            onClick={() => void doAuth(true)}
-                        >
-                            {authBusy === "register" ? (
-                                <>
-                                    <Loader2 size={16} className={s.spin} />{" "}
-                                    {t("settings.sync.registering")}
-                                </>
-                            ) : (
-                                t("settings.sync.register")
-                            )}
-                        </button>
-                    </div>
-
-                    <div className={s.orRow}>
-                        <span>{t("settings.sync.or")}</span>
-                    </div>
-                    <button
-                        className={`${s.btn} ${s.btnGhost} ${s.btnWide}`}
-                        disabled={!canYandex}
-                        onClick={() => void doYandex()}
-                    >
-                        {authBusy === "yandex" ? (
-                            <>
-                                <Loader2 size={16} className={s.spin} />{" "}
-                                {t("settings.sync.yandexBusy")}
-                            </>
-                        ) : (
-                            <>
-                                <LogIn size={15} /> {t("settings.sync.yandex")}
-                            </>
-                        )}
-                    </button>
                 </div>
-            )}
+
+                {register && (
+                    <div className={s.field}>
+                        <div className={s.fieldL}>
+                            <KeyRound size={12} /> {t("settings.sync.passwordRepeat")}
+                            {confirm.length > 0 &&
+                                (matches ? (
+                                    <span className={s.matchOk}>
+                                        <Check size={11} /> {t("settings.sync.match")}
+                                    </span>
+                                ) : (
+                                    <span className={s.matchBad}>
+                                        <X size={11} /> {t("settings.sync.noMatch")}
+                                    </span>
+                                ))}
+                        </div>
+                        <Pw
+                            value={confirm}
+                            onChange={(v) => setConfirm(v)}
+                            placeholder={t("settings.sync.passwordRepeatPlaceholder")}
+                            onEnter={() => void doAuth()}
+                            err={confirm.length > 0 && !matches}
+                        />
+                    </div>
+                )}
+
+                {authError && (
+                    <div className={s.errLine}>
+                        <AlertCircle size={14} /> {authError}
+                    </div>
+                )}
+
+                <button
+                    className={`${s.btn} ${s.btnPrimary} ${s.btnWide}`}
+                    disabled={register ? !canRegister : !canLogin}
+                    onClick={() => void doAuth()}
+                >
+                    {authBusy ? (
+                        <>
+                            <Loader2 size={16} className={s.spin} />{" "}
+                            {register
+                                ? t("settings.sync.registering")
+                                : t("settings.sync.loggingIn")}
+                        </>
+                    ) : register ? (
+                        <>
+                            <ShieldCheck size={15} /> {t("settings.sync.register")}
+                        </>
+                    ) : (
+                        <>
+                            <LogIn size={15} /> {t("settings.sync.login")}
+                        </>
+                    )}
+                </button>
+
+                <div className={s.orRow}>
+                    <span>{t("settings.sync.or")}</span>
+                </div>
+
+                <button
+                    className={`${s.btn} ${s.btnGhost} ${s.btnWide}`}
+                    disabled={!canYandex}
+                    onClick={() => void doYandex()}
+                >
+                    <span className={s.yIcon}>Я</span> {t("settings.sync.yandex")}
+                </button>
+
+                <div className={s.switchRow}>
+                    {register ? (
+                        <>
+                            {t("settings.sync.haveAccount")}{" "}
+                            <button className={s.switchLink} onClick={() => setAuthMode("login")}>
+                                {t("settings.sync.login")}
+                            </button>
+                        </>
+                    ) : (
+                        <>
+                            {t("settings.sync.noAccount")}{" "}
+                            <button
+                                className={s.switchLink}
+                                onClick={() => setAuthMode("register")}
+                            >
+                                {t("settings.sync.create")}
+                            </button>
+                        </>
+                    )}
+                </div>
+
+                <div className={s.e2eNote}>
+                    <ShieldCheck size={13} /> {t("settings.sync.e2eNote")}
+                </div>
+            </div>
         </div>
     );
 }
 
 function SyncStatusCard({
-    state,
-    atMs,
-    message,
+    status,
     onFix,
 }: {
-    state: string;
-    atMs: number | null;
-    message: string | null;
+    status: SyncStatus | null;
     onFix: () => void;
 }) {
     const { t } = useT();
-    const time = atMs ? new Date(atMs).toLocaleTimeString() : null;
+    const state = status?.state ?? "idle";
+    const time = status?.at_ms ? new Date(status.at_ms).toLocaleTimeString() : null;
+    const counts = status && (status.hosts || status.groups || status.credentials);
 
-    let icon = <ShieldCheck size={20} />;
-    let title = t("settings.sync.statusOn");
-    let sub: string | null = null;
+    let badge = s.badgeOk;
+    let icon = <Check size={18} />;
+    let title = t("settings.sync.statusSynced");
+    let sub: string | null = time ? t("settings.sync.lastSync", { time }) : t("settings.sync.statusOn");
 
     if (state === "syncing") {
-        icon = <Loader2 size={20} className={s.spin} />;
+        badge = s.badgeSyncing;
+        icon = <Loader2 size={18} className={s.spin} />;
         title = t("settings.sync.statusSyncing");
-    } else if (state === "ok") {
-        icon = <Check size={20} />;
-        title = t("settings.sync.statusSynced");
-        sub = time;
+        sub = t("settings.sync.syncingSub");
     } else if (state === "error") {
-        icon = <AlertCircle size={20} />;
+        badge = s.badgeError;
+        icon = <WifiOff size={18} />;
         title = t("settings.sync.statusError");
-        sub = message;
+        sub = time ? t("settings.sync.lastOk", { time }) : null;
+    } else if (state === "idle") {
+        title = t("settings.sync.statusOn");
+        sub = null;
     }
 
     return (
-        <div className={s.idCard}>
-            <span className={s.idIc}>{icon}</span>
-            <div className={s.idMeta}>
-                <div className={s.idName}>{title}</div>
-                {sub && <div className={s.idSub}>{sub}</div>}
+        <div className={s.result}>
+            <div className={s.resultHead}>
+                <span className={`${s.resultBadge} ${badge}`}>{icon}</span>
+                <div>
+                    <div className={s.resultT}>{title}</div>
+                    {sub && <div className={s.resultS}>{sub}</div>}
+                </div>
             </div>
+
             {state === "error" && (
-                <button className={`${s.btn} ${s.btnGhost}`} onClick={onFix}>
-                    {t("settings.sync.fix")}
-                </button>
+                <div className={s.errPlate}>
+                    <AlertCircle size={14} />
+                    <span>{status?.message ? localizeSyncError(t, status.message) : t("settings.sync.statusError")}</span>
+                    <button className={s.fixBtn} onClick={onFix}>
+                        {t("settings.sync.fix")}
+                    </button>
+                </div>
             )}
+
+            {counts ? (
+                <div className={s.prev}>
+                    <Row icon={<Server size={15} />} label={t("settings.sync.rowHosts")} n={status!.hosts} />
+                    <Row icon={<Folder size={15} />} label={t("settings.sync.rowGroups")} n={status!.groups} />
+                    <Row icon={<KeyRound size={15} />} label={t("settings.sync.rowCreds")} n={status!.credentials} />
+                </div>
+            ) : null}
         </div>
     );
+}
+
+function Row({ icon, label, n }: { icon: ReactNode; label: string; n: number }) {
+    return (
+        <div className={s.prevRow}>
+            <span className={s.prevIc}>{icon}</span>
+            <span className={s.prevNm}>{label}</span>
+            <span className={s.prevN}>{n}</span>
+        </div>
+    );
+}
+
+function scorePw(pw: string): number {
+    if (!pw) return 0;
+    let n = 0;
+    if (pw.length >= 8) n++;
+    if (pw.length >= 12) n++;
+    if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) n++;
+    if (/\d/.test(pw)) n++;
+    if (/[^A-Za-z0-9]/.test(pw)) n++;
+    return Math.min(n, 4);
 }
 
 function Pw({

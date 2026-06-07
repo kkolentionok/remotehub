@@ -504,9 +504,10 @@ export const sync = {
      *  catches the token). May take a while — the user completes consent. */
     oauthYandex: (): Promise<SyncConfigResponse> => call("sync_oauth_yandex"),
     /** Cache the vault (master) password so automatic sync runs unattended.
-     *  Validated by a real pass — rejects on a wrong password. */
-    setMaster: (master_password: string): Promise<SyncConfigResponse> =>
-        call("sync_set_master", { master_password }),
+     *  Validated by a real pass — rejects on a wrong password. `persist` stores
+     *  it in the OS keychain; when false it's kept in memory for this session. */
+    setMaster: (master_password: string, persist: boolean): Promise<SyncConfigResponse> =>
+        call("sync_set_master", { master_password, persist }),
     /** Current background-sync status (for first paint; live updates arrive
      *  via the `sync:status` event). */
     status: (): Promise<SyncStatus> => call("sync_status"),

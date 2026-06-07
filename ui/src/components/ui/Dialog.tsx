@@ -7,6 +7,10 @@ interface DialogProps {
     open: boolean;
     onClose: () => void;
     title: string;
+    /** Optional secondary line under the title. */
+    subtitle?: string;
+    /** Optional leading icon shown left of the title (e.g. a lucide glyph). */
+    icon?: ReactNode;
     children: ReactNode;
     footer?: ReactNode;
     /** Width: "sm" 380px, "md" 480px (default), "lg" 640px. */
@@ -20,7 +24,16 @@ interface DialogProps {
  * the dialog. For Stage 1.5 it's acceptable; if/when the app grows, swap
  * for a tested headless library (Radix, react-aria) rather than home-rolling.
  */
-export function Dialog({ open, onClose, title, children, footer, size = "md" }: DialogProps) {
+export function Dialog({
+    open,
+    onClose,
+    title,
+    subtitle,
+    icon,
+    children,
+    footer,
+    size = "md",
+}: DialogProps) {
     useEffect(() => {
         if (!open) return;
         const onKey = (e: KeyboardEvent) => {
@@ -42,7 +55,11 @@ export function Dialog({ open, onClose, title, children, footer, size = "md" }: 
                 onMouseDown={(e) => e.stopPropagation()}
             >
                 <header className={styles.header}>
-                    <h2 className={styles.title}>{title}</h2>
+                    {icon ? <span className={styles.headIcon}>{icon}</span> : null}
+                    <div className={styles.headText}>
+                        <h2 className={styles.title}>{title}</h2>
+                        {subtitle ? <p className={styles.subtitle}>{subtitle}</p> : null}
+                    </div>
                     <button
                         className={styles.close}
                         onClick={onClose}

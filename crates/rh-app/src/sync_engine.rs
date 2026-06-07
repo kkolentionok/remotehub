@@ -78,22 +78,26 @@ async fn publish(app: &AppHandle, state: &AppState, snap: SyncStatusSnapshot) {
     }
 }
 
-/// True when sync is fully configured (endpoint + token + cached vault key).
-/// Returned tuple is `(endpoint, token, master)` ready to drive a pass.
-fn ready() -> Option<(String, String, String)> {
+/// True when sync is fully configured (endpoint + token + a vault key, either
+/// persisted in the keychain or held in memory for this session). Returned
+/// tuple is `(endpoint, token, master)` ready to drive a pass.
+async fn ready(state: &AppState) -> Option<(String, String, String)> {
     let cfg = SyncConfig::load();
     if cfg.endpoint.is_empty() {
         return None;
     }
     let token = sync_remote::token_get()?;
-    let master = sync_remote::vault_key_get()?;
+    let master = {
+        let mem = state.sync_master_mem.lock().await;
+        mem.clone().or_else(sync_remote::vault_key_get)?
+    };
     Some((cfg.endpoint, token, master))
 }
 
 /// Run one sync pass if configured and not already running. Silent + cheap when
 /// not configured (no event, status untouched).
 async fn run_pass(app: &AppHandle, state: &AppState) {
-    let Some((endpoint, token, master)) = ready() else {
+    let Some((endpoint, token, master)) = ready(state).await else {
         return; // not signed in / no master yet — stay quiet
     };
 

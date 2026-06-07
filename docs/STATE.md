@@ -1,8 +1,54 @@
 # RemoteHub — Project State & Handoff
 
-**Last updated:** **Tray rebuild crash fix** — `tray::rebuild`/`update_tooltip` now defer their native menu/tooltip mutations to the main (UI) thread via `AppHandle::run_on_main_thread`. The `hosts:changed`/`groups:changed` listeners fire on the emitting Tokio worker; mutating the thread-affine Win32 tray menu off the UI thread hard-crashed the release build (`0xC0000409`, no Rust panic — bypasses the panic hook). Manifested on a 2nd PC as a crash on first SSH connect (connect stamps `last_connected_at`/detects OS → `hosts:changed` → tray rebuild) and on any favorite-toggle/host-edit. Startup `build()` was unaffected (already on the main thread). rh-app unverified (user compiles). **Next:** RDP keyboard / GFX backlog.
+**Last updated:** **Sync errors are now localized** — the backend's English strings (e.g. "invalid email or password") were leaking into the RU UI; added a frontend `localizeSyncError(t, err)` (`ui/src/lib/syncErrors.ts`) + `settings.sync.err.*` keys (en+ru), wired into `ProfileSection` (auth + status-card message) and `SyncMasterDialog`. No backend change. Frontend verified. *(Prior:* **logout now purges the local vault (critical cross-account data-loss fix).** The local SQLite + keychain are shared across accounts and deletions propagate via tombstones; logout used to leave both in place, so signing into another account pushed account A's hosts into B (and replayed B's *deletions* back onto A on the next switch — real data loss). `sync_logout` now clears token + vault key + in-mem master, then (under the `sync_inflight` lock, after clearing creds so no pass races) calls `vault::wipe_local` to drop all hosts/groups/credentials (incl. keychain secrets) **and all `sync_meta` tombstones**, emits the three `*:changed` events + a reset `sync:status`. Purging tombstones is what makes it safe: an empty local no longer carries deletions, so re-login *restores* the account from the server instead of wiping it. The UI adds an inline logout confirm (amber, "data returns on next sign-in"). Adding hosts while signed out still works — they're adopted into whichever account you next sign into. Frontend verified (`tsc -b` + `vite build`); rh-app backend unverified (user compiles). **Next:** RDP keyboard / GFX backlog; auto-updater; Pingie rebrand.
 
-## Latest — Tray rebuild crash fix (off-thread native menu mutation)
+## Latest — Localized sync/auth error messages
+
+The sync backend returns free-form **English** strings (`invalid email or password`, `request failed: …`, `unauthorized — log in again`, etc.) and the UI showed them raw — e.g. "sync: invalid email or password" under the login field. Added a frontend localizer instead of churning the backend (which the user compiles).
+
+- New **`ui/src/lib/syncErrors.ts`** → `localizeSyncError(t, err)`: pulls the meaningful string out of an `ApiError` (the `validation` *reason*, dropping the noisy `field:` prefix) or a raw status message, matches the known backend phrases to translated keys, and falls back to the raw reason for anything unrecognized.
+- New i18n keys **`settings.sync.err.*`** (en+ru): invalidCredentials, emailTaken, wrongMaster, noEndpoint, notLoggedIn, unauthorized, network, browser, oauth, server, generic.
+- Wired in `ProfileSection.tsx` (login/register/Yandex `setAuthError`, **and** the status-card error plate — `status.message` is localized too) and `SyncMasterDialog.tsx` (wrong-vault-password etc.). `TabBar` already mapped status by `state`, no raw message there.
+
+Backend phrasing unchanged, so no Rust rebuild needed for this. CRUD-form errors (host/group/credential dialogs) still use raw `formatApiError`; same treatment can extend there later if needed. Verified `tsc -b` + `vite build` green.
+
+## Latest — Logout purges the local vault (cross-account data-loss fix)
+
+**Bug (critical, user-reported):** hosts/creds bled between accounts. Logging out left the local data **and tombstones**; logging into another account then (1) pushed the previous account's hosts into the new one, and (2) on switching back replayed the new account's *deletions* against the original — destroying data. A re-import of an old export didn't resurrect the deleted hosts either, because the lingering tombstones (newer HLC) beat the imported records under LWW.
+
+**Fix:** `crates/rh-app/src/api/sync.rs::sync_logout` now account-scopes the local vault.
+- Clears token + keychain vault key + `sync_master_mem` **first** (so the background actor's `ready()` fails and won't start a pass), then takes the `sync_inflight` lock (any in-flight pass finishes and pushes the correct pre-wipe data; no new pass can run during the wipe).
+- Clears `cfg.email`, calls **`vault::wipe_local`** (made `pub(crate)`) — deletes all hosts/groups/credentials incl. keychain secrets **and `sync_meta.clear_all()`** (tombstones gone).
+- Emits `hosts/groups/credentials:changed` (new `events::emit_collections_reset`) so the sidebar + tray refetch to empty, and resets `sync_status` (+ emits `sync:status` idle).
+- `sync_logout` gained an `AppHandle` param (Tauri injects it; no `generate_handler!` change).
+
+**Why it's safe / why re-login restores:** deletion only propagates via a tombstone. After the wipe the local snapshot is empty *and tombstone-free*, so `sync_once`'s merge takes the server's records as-is (nothing local to beat them) — the account is pulled back intact on the next login + master entry. Locally-added (signed-out) hosts are still live records, so they're pushed/adopted into the next account.
+
+**Resurrect-via-import note:** Merge-mode import still won't revive a host whose tombstone is newer (correct LWW). To restore from an old export, use **Replace** mode (its `wipe_local` clears tombstones first). After this logout fix the contaminating tombstones won't be present in a freshly-signed-in account anyway.
+
+Frontend: `ProfileSection.tsx` — inline two-step logout confirm (amber `logoutPlate`, Cancel/Log-out, `btnDanger`/`btnSm`), `settings.sync.logoutWarn` (en+ru). Verified `tsc -b` + `vite build` green. Backend unverified (user compiles).
+
+## Latest — Account & Sync UI redesign (login/register/OAuth/master/status)
+
+Reworked the section to the uploaded mockups while keeping it grounded in the real backend. Scope (confirmed with user): **no manual "Синхронизировать сейчас"/"Повторить"**, **no device list**, **no Google** — email/password accounts + Yandex only.
+
+Frontend:
+- **`components/settings/sections/ProfileSection.tsx`** rewritten. Signed-out has a `authMode` toggle (login ↔ register). Server is a click-to-edit *chip* (`serverChip`, strips `https://` for display). Register adds a strength meter (`scorePw()` → 0–4, colored track + label) and shows match/no-match inline in the confirm label. Yandex button only. While `authBusy === "yandex"` the component renders a full-pane OAuth redirect screen (`oauth*` classes). Signed-in renders the identity card + `SyncStatusCard` (driven by `uiStore.syncStatus`): badge color by `state` (`badgeOk`/`badgeSyncing`/`badgeError`), title/sub, an `errPlate` with a "fix" link (reopens master modal) on error, and the counts via the existing `prev`/`prevRow` classes. **No manual sync buttons.**
+- **`components/dialog/SyncMasterDialog.tsx`** rewritten — lock icon + subtitle in the header, E2E plate, password field with eye, and a "remember on this device (keychain)" checkbox → passes `persist` to `setMaster`. New **`SyncMasterDialog.module.css`**.
+- **`components/ui/Dialog.tsx`** gained optional `icon?` + `subtitle?` props (rendered in the header via new `headIcon`/`headText`/`subtitle` styles). Backward-compatible.
+- **`ProfileSection.module.css`** — added redesign classes (server chip, strength meter, match indicators, login/register switch, E2E note, Yandex glyph, OAuth screen, badge state colors, error plate).
+- **`lib/ipc.ts`** — `setMaster(master_password, persist)`. **i18n** — new `settings.sync.*` keys in `en.ts` + `ru.ts` (login/register titles, server, password-repeat + placeholders, match/noMatch, pwStrength0–4, create/noAccount/haveAccount, e2eNote, oauthRedirect/oauthHint, lastSync/lastOk {time}, syncingSub, master.subtitle/remember).
+
+Backend (rh-app, **unverified — user compiles**):
+- **`state.rs`** — `AppState.sync_master_mem: Arc<Mutex<Option<String>>>` (vault password for this session when the user declined to persist).
+- **`api/sync.rs`** — `SyncMasterRequest` gains `persist: bool`. `sync_set_master` always stores the password in `sync_master_mem`, and to the keychain only when `persist` (else `vault_key_clear()`). `sync_logout(state)` now also clears `sync_master_mem` (added `State` arg — transparent to the frontend).
+- **`sync_engine.rs`** — `ready(&state).await` resolves the master from `sync_master_mem` first, then the keychain, so a non-persisted session still auto-syncs.
+
+Frontend verified: `npx tsc -b` clean, `npx vite build` green.
+
+---
+
+### (prior) Tray rebuild crash fix (off-thread native menu mutation)
 
 A 2nd PC running the release build crashed the moment an SSH session became `Ready` (and on any favorite-toggle / host edit): exit code `0xC0000409`, faulting module `rh-app.exe`, **no `panic.log`** (so not a Rust panic — a native fastfail that bypasses the panic hook). `app.log` showed the crash landed in the same second as `ssh session ready`.
 

@@ -342,8 +342,12 @@ pub async fn vault_import(
 
 /// Delete every local host, credential (incl. keychain secret) and group, in
 /// FK-safe order (hosts reference groups + credentials). Best-effort per row so
-/// one stuck delete can't abort the wipe.
-async fn wipe_local(state: &AppState) -> ApiResult<()> {
+/// one stuck delete can't abort the wipe. Also drops all `sync_meta` tombstones.
+///
+/// Used by import `Replace` mode and by **logout** (`api::sync::sync_logout`),
+/// which account-scopes the local vault so the next account can't inherit this
+/// one's data or its deletion tombstones.
+pub(crate) async fn wipe_local(state: &AppState) -> ApiResult<()> {
     for h in state.hosts.list(HostFilter::default()).await? {
         let _ = state.hosts.delete(&h.id).await;
     }

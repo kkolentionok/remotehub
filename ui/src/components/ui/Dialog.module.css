@@ -36,16 +36,40 @@
 
 .header {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
+    gap: var(--space-3);
     padding: var(--space-4) var(--space-5);
     border-bottom: 1px solid var(--color-border);
+}
+
+.headIcon {
+    flex: 0 0 auto;
+    width: 34px;
+    height: 34px;
+    border-radius: var(--radius-md);
+    background: var(--accent-soft);
+    color: var(--color-accent);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.headText {
+    flex: 1;
+    min-width: 0;
 }
 
 .title {
     font-size: var(--text-md);
     font-weight: 600;
     margin: 0;
+}
+
+.subtitle {
+    font-size: var(--text-xs);
+    color: var(--text-3);
+    margin: 3px 0 0;
 }
 
 .close {

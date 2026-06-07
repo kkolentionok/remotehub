@@ -297,3 +297,353 @@
     height: 1px;
     background: var(--color-border);
 }
+
+/* ===== redesign additions ===== */
+
+/* compact header: logo tile + title on one line */
+.authHead {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-1);
+    padding-top: 2px;
+}
+.authLogo {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    background: var(--color-accent);
+    color: var(--color-accent-fg, #fff);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* server chip */
+.serverRow {
+    margin-bottom: 13px;
+}
+.serverChip {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    height: 40px;
+    padding: 0 11px;
+    border: 1px dashed var(--color-border-strong);
+    border-radius: var(--radius-md);
+    background: var(--color-subtle);
+    transition: border-color 0.12s, background 0.12s;
+}
+.serverChip:hover {
+    border-color: var(--text-3);
+    background: var(--color-surface);
+}
+.serverChipIc {
+    color: var(--text-3);
+    flex: 0 0 auto;
+}
+.serverChipLbl {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-3);
+}
+.serverChipVal {
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-1);
+}
+.serverChipPen {
+    color: var(--text-4);
+    flex: 0 0 auto;
+}
+.serverChip:hover .serverChipPen {
+    color: var(--color-accent);
+}
+
+.idSub2 {
+    font-size: 11.5px;
+    color: var(--text-3);
+    margin-top: 3px;
+    line-height: 1.4;
+}
+
+/* password strength */
+.strength {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 9px;
+}
+.strengthTrack {
+    flex: 1;
+    height: 5px;
+    border-radius: 99px;
+    background: var(--color-subtle);
+    overflow: hidden;
+}
+.strengthFill {
+    height: 100%;
+    border-radius: 99px;
+    transition: width 0.2s ease, background 0.2s ease;
+}
+.strengthFill[data-score="0"],
+.strengthFill[data-score="1"] {
+    background: var(--color-danger);
+}
+.strengthFill[data-score="2"] {
+    background: var(--color-warn);
+}
+.strengthFill[data-score="3"] {
+    background: var(--color-accent);
+}
+.strengthFill[data-score="4"] {
+    background: var(--color-success);
+}
+.strengthLbl {
+    font-size: 11px;
+    font-weight: 600;
+    min-width: 64px;
+    text-align: right;
+}
+.strengthLbl[data-score="0"],
+.strengthLbl[data-score="1"] {
+    color: var(--color-danger);
+}
+.strengthLbl[data-score="2"] {
+    color: var(--color-warn);
+}
+.strengthLbl[data-score="3"] {
+    color: var(--color-accent);
+}
+.strengthLbl[data-score="4"] {
+    color: var(--color-success);
+}
+
+/* inline password-match indicator in the label */
+.matchOk,
+.matchBad {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: none;
+    letter-spacing: 0;
+}
+.matchOk {
+    color: var(--color-success);
+}
+.matchBad {
+    color: var(--color-danger);
+}
+
+/* login/register switch */
+.switchRow {
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--text-3);
+    margin-top: 16px;
+}
+.switchLink {
+    color: var(--color-accent);
+    font-weight: 600;
+}
+.switchLink:hover {
+    text-decoration: underline;
+}
+
+/* quiet E2E note under the form */
+.e2eNote {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    font-size: 11.5px;
+    color: var(--text-4);
+    line-height: 1.5;
+    margin-top: 16px;
+}
+.e2eNote svg {
+    color: var(--color-success);
+    flex: 0 0 auto;
+    margin-top: 1px;
+}
+
+/* Yandex glyph badge */
+.yIcon {
+    width: 20px;
+    height: 20px;
+    border-radius: 5px;
+    background: #fc3f1d;
+    color: #fff;
+    font-weight: 700;
+    font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* OAuth redirect screen */
+.oauth {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 56px 24px;
+    animation: syncFade 0.2s ease;
+}
+.oauthTile {
+    position: relative;
+    width: 76px;
+    height: 76px;
+    border-radius: 20px;
+    background: #fc3f1d;
+    color: #fff;
+    font-size: 38px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 22px;
+}
+.oauthRing {
+    position: absolute;
+    inset: -6px;
+    border-radius: 24px;
+    border: 2px solid transparent;
+    border-top-color: var(--color-accent);
+    animation: syncSpin 0.9s linear infinite;
+}
+.oauthTitle {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-1);
+}
+.oauthSub {
+    font-size: 12.5px;
+    color: var(--text-3);
+    line-height: 1.5;
+    margin-top: 6px;
+    max-width: 280px;
+}
+.dots {
+    display: flex;
+    gap: 6px;
+    margin-top: 18px;
+}
+.dots span {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--color-accent);
+    opacity: 0.3;
+    animation: dotPulse 1.2s ease-in-out infinite;
+}
+.dots span:nth-child(2) {
+    animation-delay: 0.2s;
+}
+.dots span:nth-child(3) {
+    animation-delay: 0.4s;
+}
+@keyframes dotPulse {
+    0%, 100% {
+        opacity: 0.3;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+
+/* status-card badge state colours (base .resultBadge handles layout) */
+.badgeOk {
+    background: var(--color-success-bg);
+    color: var(--color-success);
+}
+.badgeSyncing {
+    background: var(--accent-soft);
+    color: var(--color-accent);
+}
+.badgeError {
+    background: var(--color-danger-bg);
+    color: var(--color-danger);
+}
+
+/* error explanation plate inside the status card */
+.errPlate {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    background: var(--color-danger-bg);
+    border: 1px solid color-mix(in srgb, var(--color-danger) 26%, transparent);
+    border-radius: var(--radius-md);
+    padding: 10px 13px;
+    margin-top: 13px;
+    font-size: 12px;
+    color: var(--text-2);
+    line-height: 1.45;
+}
+.errPlate svg {
+    color: var(--color-danger);
+    flex: 0 0 auto;
+}
+.errPlate span {
+    flex: 1;
+}
+.fixBtn {
+    flex: 0 0 auto;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-accent);
+}
+.fixBtn:hover {
+    text-decoration: underline;
+}
+
+/* Logout confirmation — inline (Settings is itself a dialog; a separate
+   ConfirmDialog would close it). Amber, since data returns on next sign-in. */
+.logoutPlate {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 9px;
+    background: color-mix(in srgb, var(--color-warn) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-warn) 30%, transparent);
+    border-radius: var(--radius-md);
+    padding: 11px 13px;
+    font-size: 12px;
+    color: var(--text-2);
+    line-height: 1.45;
+}
+.logoutPlate > svg {
+    color: var(--color-warn);
+    flex: 0 0 auto;
+}
+.logoutPlate > span {
+    flex: 1 1 200px;
+}
+.logoutActions {
+    display: flex;
+    gap: 8px;
+    margin-left: auto;
+}
+.btnSm {
+    height: 34px;
+    padding: 0 14px;
+    font-size: 13px;
+}
+.btnDanger {
+    background: var(--color-danger);
+    color: #fff;
+    border: 1px solid transparent;
+}
+.btnDanger:hover {
+    filter: brightness(1.08);
+}
