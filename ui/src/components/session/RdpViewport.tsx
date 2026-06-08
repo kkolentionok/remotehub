@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Maximize2, Minimize2, PictureInPicture2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { Maximize2, Minimize2, Minus, PictureInPicture2, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { readText as clipboardReadText, readImage as clipboardReadImage } from "@tauri-apps/plugin-clipboard-manager";
@@ -38,6 +38,12 @@ interface Props {
     /** Detach this session into its own OS window (shown as a bar button).
      *  Omitted inside the pop-out window itself. */
     onPopOut?: () => void;
+    /** Minimise the host OS window (shown as a bar button). Passed only by the
+     *  pop-out window host. */
+    onMinimize?: () => void;
+    /** Return this session to a tab in the main app window (re-dock). Passed
+     *  only by the pop-out window host; rendered as a close affordance. */
+    onPopIn?: () => void;
     className?: string;
 }
 
@@ -93,7 +99,7 @@ function pointerToCss(ev: {
  * and key event via `getModifierState`). Fix for the classic "stuck
  * Ctrl/Alt/Shift after Alt-Tab" RDP bug. (Input wire lands in round 2b-2.)
  */
-export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, connected, onLocalClipboard, onLocalClipboardImage, onResize, enableDynamicResize, onKbdCapture, onPopOut, className }: Props) {
+export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, connected, onLocalClipboard, onLocalClipboardImage, onResize, enableDynamicResize, onKbdCapture, onPopOut, onMinimize, onPopIn, className }: Props) {
     const { t } = useT();
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
@@ -103,6 +109,70 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, con
     // mstsc-style auto-hide: the bar shows only when the pointer is near the
     // top edge of the viewport, and hides as soon as it leaves.
     const [barOn, setBarOn] = useState(false);
+    // Floating bar ("shield") placement: the user can drag it by the host name
+    // to any corner/edge. `barAnchor` is the snapped resting spot; `barDrag`
+    // holds live pixel coords (relative to the wrap) only while dragging.
+    const [barAnchor, setBarAnchor] = useState<"tl" | "tc" | "tr" | "bl" | "bc" | "br">("tc");
+    const [barDrag, setBarDrag] = useState<{ x: number; y: number } | null>(null);
+    const barRef = useRef<HTMLDivElement | null>(null);
+    const dragOff = useRef<{ dx: number; dy: number } | null>(null);
+
+    const onBarPointerMove = useCallback((e: PointerEvent) => {
+        const wrap = wrapRef.current;
+        const off = dragOff.current;
+        if (!wrap || !off) return;
+        const wr = wrap.getBoundingClientRect();
+        const bar = barRef.current;
+        const bw = bar?.offsetWidth ?? 0;
+        const bh = bar?.offsetHeight ?? 0;
+        const x = Math.max(0, Math.min(e.clientX - wr.left - off.dx, wr.width - bw));
+        const y = Math.max(0, Math.min(e.clientY - wr.top - off.dy, wr.height - bh));
+        setBarDrag({ x, y });
+    }, []);
+
+    const onBarPointerUp = useCallback(() => {
+        window.removeEventListener("pointermove", onBarPointerMove);
+        const wrap = wrapRef.current;
+        const bar = barRef.current;
+        if (wrap && bar) {
+            const wr = wrap.getBoundingClientRect();
+            const br = bar.getBoundingClientRect();
+            const cx = br.left - wr.left + br.width / 2;
+            const cy = br.top - wr.top + br.height / 2;
+            // Snap to the nearest perimeter anchor: 3 columns × 2 rows.
+            const h = cx < wr.width * 0.33 ? "l" : cx > wr.width * 0.67 ? "r" : "c";
+            const v = cy < wr.height * 0.5 ? "t" : "b";
+            setBarAnchor(`${v}${h}` as "tl" | "tc" | "tr" | "bl" | "bc" | "br");
+        }
+        dragOff.current = null;
+        setBarDrag(null);
+    }, [onBarPointerMove]);
+
+    const onBarPointerDown = useCallback(
+        (e: ReactPointerEvent<HTMLSpanElement>) => {
+            if (e.button !== 0) return;
+            const wrap = wrapRef.current;
+            const bar = barRef.current;
+            if (!wrap || !bar) return;
+            e.preventDefault();
+            const wr = wrap.getBoundingClientRect();
+            const br = bar.getBoundingClientRect();
+            dragOff.current = { dx: e.clientX - br.left, dy: e.clientY - br.top };
+            setBarDrag({ x: br.left - wr.left, y: br.top - wr.top });
+            window.addEventListener("pointermove", onBarPointerMove);
+            window.addEventListener("pointerup", onBarPointerUp, { once: true });
+        },
+        [onBarPointerMove, onBarPointerUp],
+    );
+
+    // Drop the window-level drag listeners if we unmount mid-drag.
+    useEffect(
+        () => () => {
+            window.removeEventListener("pointermove", onBarPointerMove);
+            window.removeEventListener("pointerup", onBarPointerUp);
+        },
+        [onBarPointerMove, onBarPointerUp],
+    );
     // Serializes region blits in arrival order. Regions decode in parallel,
     // but draw strictly in sequence so a slower-decoding region from an
     // older frame can't land on top of a newer one (the drag tearing).
@@ -227,12 +297,15 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, con
         window.setTimeout(() => canvasRef.current?.focus(), 0);
     }, []);
 
-    // Reveal the connection bar only when the pointer is within ~56px of the
-    // viewport's top edge; hide it everywhere else.
+    // Reveal the connection bar when the pointer nears the edge the bar is
+    // anchored to (~56px): top edge for top anchors, bottom edge for bottom
+    // anchors — so a bar dragged to the bottom reveals where it actually sits.
     const onPointerMove = useCallback((e: React.MouseEvent) => {
-        const top = wrapRef.current?.getBoundingClientRect().top ?? 0;
-        setBarOn(e.clientY - top < 56);
-    }, []);
+        const wr = wrapRef.current?.getBoundingClientRect();
+        if (!wr) return;
+        const near = barAnchor[0] === "b" ? wr.bottom - e.clientY : e.clientY - wr.top;
+        setBarOn(near < 56);
+    }, [barAnchor]);
 
     // Draw a decoded framebuffer region. Stable identity (reads refs only)
     // so the store registration runs once per session.
@@ -501,8 +574,33 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, con
                 onFocus={onFocus}
                 onBlur={onBlur}
             />
-            <div className={`${styles.bar}${barOn ? ` ${styles.barOn}` : ""}`} role="toolbar" aria-label={hostLabel}>
-                {hostLabel && <span className={styles.barTitle}>{hostLabel}</span>}
+            <div
+                ref={barRef}
+                className={`${styles.bar} ${barDrag ? styles.barDragging : styles[`pos_${barAnchor}`]}${barOn || barDrag ? ` ${styles.barOn}` : ""}`}
+                style={barDrag ? { left: barDrag.x, top: barDrag.y, right: "auto", bottom: "auto", transform: "none" } : undefined}
+                role="toolbar"
+                aria-label={hostLabel}
+            >
+                {hostLabel && (
+                    <span
+                        className={styles.barTitle}
+                        onPointerDown={onBarPointerDown}
+                        title={t("session.moveBar")}
+                    >
+                        {hostLabel}
+                    </span>
+                )}
+                {onMinimize && (
+                    <button
+                        type="button"
+                        className={styles.barBtn}
+                        title={t("session.minimize")}
+                        aria-label={t("session.minimize")}
+                        onClick={onMinimize}
+                    >
+                        <Minus size={15} />
+                    </button>
+                )}
                 <button
                     type="button"
                     className={styles.barBtn}
@@ -521,6 +619,17 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, con
                         onClick={onPopOut}
                     >
                         <PictureInPicture2 size={15} />
+                    </button>
+                )}
+                {onPopIn && (
+                    <button
+                        type="button"
+                        className={`${styles.barBtn} ${styles.barClose}`}
+                        title={t("session.redock")}
+                        aria-label={t("session.redock")}
+                        onClick={onPopIn}
+                    >
+                        <X size={15} />
                     </button>
                 )}
             </div>

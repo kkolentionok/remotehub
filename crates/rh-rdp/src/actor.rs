@@ -118,7 +118,34 @@ async fn run(
 
     let worker = match std::thread::Builder::new()
         .name("rdp-session".to_owned())
-        .spawn(move || blocking_session(params, &worker_shutdown, &worker_repaint, &worker_events, &input_rx, &clip_rx, &resize_rx))
+        .spawn(move || {
+            // A panic in the worker would otherwise abort the whole process
+            // (and did: a crash here used to take down the entire app). Catch
+            // it — requires panic="unwind" in release — and surface it as a
+            // clean session error. The panic message is already written to
+            // panic.log by the panic hook (which runs before unwinding). One
+            // bad/legacy RDP target must not kill the app.
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                blocking_session(
+                    params,
+                    &worker_shutdown,
+                    &worker_repaint,
+                    &worker_events,
+                    &input_rx,
+                    &clip_rx,
+                    &resize_rx,
+                )
+            }))
+            .is_err();
+            if panicked {
+                let _ = worker_events.send(RdpSessionEvent::Error {
+                    message: "RDP session crashed unexpectedly (see panic.log)".to_owned(),
+                });
+                let _ = worker_events.send(RdpSessionEvent::Closed {
+                    reason: RdpCloseReason::Error,
+                });
+            }
+        })
     {
         Ok(h) => h,
         Err(e) => {
@@ -1167,7 +1194,18 @@ fn build_config(
     connector::Config {
         credentials: Credentials::UsernamePassword { username, password },
         domain,
-        enable_tls: false, // we drive the TLS upgrade ourselves
+        // Advertise BOTH TLS (SSL) and CredSSP (HYBRID/NLA). We still drive the
+        // TLS upgrade ourselves (mark_as_upgraded below) regardless of this
+        // flag — `enable_tls` only controls which security protocols we offer
+        // in the X.224 negotiation. Offering SSL matters for targets with NLA
+        // *disabled* (common on Windows Home + RDP Wrapper, or "Negotiate"
+        // security layer): they can't do HYBRID, so if we advertised CredSSP
+        // ONLY they'd fall back to legacy "Standard RDP Security" — which
+        // IronRDP refuses by design ("standard RDP security is not supported"),
+        // even though mstsc happily uses it. Offering SSL lets such a target
+        // pick TLS-without-NLA (what mstsc does) instead. CredSSP is still
+        // preferred when the server supports it, so NLA targets are unaffected.
+        enable_tls: true,
         enable_credssp: true,
         keyboard_type: KeyboardType::IbmEnhanced,
         keyboard_subtype: 0,
@@ -1252,6 +1290,8 @@ fn connect(
     let client_addr = tcp_stream.local_addr().map_err(RdpError::Network)?;
 
     let mut framed = ironrdp_blocking::Framed::new(tcp_stream);
+    // Capture before `config` is moved into the connector — used in the log below.
+    let (adv_tls, adv_credssp) = (config.enable_tls, config.enable_credssp);
     let mut connector = connector::ClientConnector::new(config, client_addr)
         .with_static_channel(CliprdrClient::new(cliprdr_backend))
         // When the graphics pipeline is enabled we host the GFX DVC, which
@@ -1268,8 +1308,21 @@ fn connect(
             drdynvc
         });
 
+    // Diagnostic: confirm which security protocols we advertise in the X.224
+    // negotiation. "server only supports Standard RDP Security" means the
+    // server selected legacy PROTOCOL_RDP (which IronRDP refuses). If this logs
+    // enable_tls=true yet we still hit that error, the target offers neither
+    // SSL nor CredSSP; if it logs enable_tls=false, the binary predates the
+    // SSL-advertise fix (stale build).
+    tracing::info!(
+        enable_tls = adv_tls,
+        enable_credssp = adv_credssp,
+        "rdp: starting X.224 security negotiation"
+    );
+
     let should_upgrade = ironrdp_blocking::connect_begin(&mut framed, &mut connector)
         .map_err(|e| RdpError::Connector(e.to_string()))?;
+    tracing::info!("rdp: X.224 negotiation ok; upgrading to TLS");
 
     let initial_stream = framed.into_inner_no_leftover();
     let (upgraded_stream, server_public_key) = tls_upgrade(initial_stream, server_name.clone())?;
@@ -1312,7 +1365,17 @@ fn tls_upgrade(
     // TOFU at the RDP layer (RdpCertStore) is wired in a later pass; for now
     // we accept the cert at the TLS layer and rely on CredSSP for identity,
     // matching the validated spike.
-    let mut config = rustls::client::ClientConfig::builder()
+    // Use aws-lc-rs explicitly. rustls 0.23's `ClientConfig::builder()` relies
+    // on a *process-default* CryptoProvider and PANICS at runtime if none was
+    // installed (or if it can't choose because both aws-lc-rs and ring are in
+    // the dependency tree). We never installed one, and this TLS path only
+    // started executing once the target accepted TLS — which is exactly why the
+    // crash surfaced now. Selecting the provider here is unambiguous and needs
+    // no global install.
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let mut config = rustls::client::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| RdpError::Tls(e.to_string()))?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(danger::NoCertificateVerification))
         .with_no_client_auth();

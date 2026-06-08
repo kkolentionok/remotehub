@@ -84,7 +84,10 @@ rh-vault = { path = "crates/rh-vault" }
 codegen-units = 1
 lto = true
 opt-level = "s"
-panic = "abort"
+# unwind (not abort) so a panic in a session worker thread can be caught
+# (catch_unwind) and turned into a clean error instead of taking down the whole
+# app. Costs some binary size (unwind tables); worth it for resilience.
+panic = "unwind"
 strip = true
 
 [profile.dev]

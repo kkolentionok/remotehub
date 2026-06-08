@@ -32,12 +32,11 @@
 
 /* Fullscreen toggle — subtle, top-right, appears on hover. */
 /* mstsc-style connection bar: host name + minimize / fullscreen / close.
-   Auto-hides; reveals on hover so it never covers the remote during use. */
+   Auto-hides; reveals on hover so it never covers the remote during use.
+   Placement comes from a .pos_* class (draggable, snaps to a perimeter
+   anchor); while dragging, inline left/top take over. */
 .bar {
     position: absolute;
-    top: var(--space-2);
-    left: 50%;
-    transform: translateX(-50%);
     display: flex;
     align-items: center;
     gap: var(--space-1);
@@ -50,6 +49,40 @@
     opacity: 0;
     transition: opacity 0.12s ease;
     z-index: 2;
+}
+
+/* Snap anchors: 3 columns × 2 rows around the viewport perimeter. */
+.pos_tc {
+    top: var(--space-2);
+    left: 50%;
+    transform: translateX(-50%);
+}
+.pos_bc {
+    bottom: var(--space-2);
+    left: 50%;
+    transform: translateX(-50%);
+}
+.pos_tl {
+    top: var(--space-2);
+    left: var(--space-2);
+}
+.pos_tr {
+    top: var(--space-2);
+    right: var(--space-2);
+}
+.pos_bl {
+    bottom: var(--space-2);
+    left: var(--space-2);
+}
+.pos_br {
+    bottom: var(--space-2);
+    right: var(--space-2);
+}
+
+/* While dragging: position via inline left/top; stay fully visible. */
+.barDragging {
+    opacity: 1 !important;
+    transition: none;
 }
 
 .bar.barOn,
@@ -70,6 +103,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
+}
+
+.barTitle:active {
+    cursor: grabbing;
 }
 
 .barBtn {

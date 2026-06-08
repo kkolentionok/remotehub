@@ -564,11 +564,11 @@ export function registerSessionViewport(
     };
 }
 
-/** Session ids being re-docked: suppresses the "popout window closed → end the
- *  tab" handler for a close we triggered ourselves (re-dock, not the user). */
-const redockGuard = new Set<string>();
-/** One-time guard so the cross-window popout-closed listener is wired once. */
+/** One-time guard so the cross-window popout listeners are wired once. */
 let popoutListenerWired = false;
+/** Session ids we are re-docking: the pop-out window we close ourselves during
+ *  a redock must NOT be treated as a user "close → end session". */
+const redockGuard = new Set<string>();
 
 function rdpCloseText(reason: { kind: string }): string {
     switch (reason.kind) {
@@ -1223,14 +1223,29 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
             // owning tab (unless the close was our own re-dock).
             if (!popoutListenerWired) {
                 popoutListenerWired = true;
+                // Our "return to tab" button (X) → re-dock: reattach the stream
+                // to the main window FIRST, then close the pop-out. Doing the
+                // reattach before the close is what avoids (a) wedging the
+                // pop-out webview by closing it mid-frame-delivery and (b) the
+                // race where the dead channel removes the backend session
+                // before we can re-home it.
+                void listen<{ sid: string }>("rdp:request-redock", (e) => {
+                    const sid = e.payload?.sid;
+                    if (!sid) return;
+                    const owner = get().sessions.find((t) => t.sessionId === sid);
+                    if (owner) void get().redockRdp(owner.key);
+                });
+                // A pop-out window was closed via the native window X (or OS) →
+                // end the owning tab. If WE closed it during a redock the guard
+                // swallows this so the tab/session survives.
                 void listen<{ sid: string }>("rdp:popout-closed", (e) => {
-                    const closedSid = e.payload?.sid;
-                    if (!closedSid) return;
-                    if (redockGuard.has(closedSid)) {
-                        redockGuard.delete(closedSid);
-                        return; // our own re-dock close — keep the tab
+                    const sid = e.payload?.sid;
+                    if (!sid) return;
+                    if (redockGuard.has(sid)) {
+                        redockGuard.delete(sid);
+                        return;
                     }
-                    const owner = get().sessions.find((t) => t.sessionId === closedSid);
+                    const owner = get().sessions.find((t) => t.sessionId === sid);
                     if (owner) void get().close(owner.key);
                 });
             }
@@ -1243,6 +1258,15 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
             });
             const winW = Math.min(Math.max(Math.round((tab.rdpWidth ?? 1280) / 1.5), 800), 1920);
             const winH = Math.min(Math.max(Math.round((tab.rdpHeight ?? 800) / 1.5), 600), 1200);
+            // Defensive: a window with this label may still linger (e.g. a prior
+            // close that didn't take). Re-using the label would silently fail to
+            // create and just focus the stale window — tear it down first.
+            try {
+                const stale = await WebviewWindow.getByLabel(`rdp-${sid}`);
+                await stale?.destroy();
+            } catch {
+                /* none */
+            }
             try {
                 // eslint-disable-next-line no-new
                 new WebviewWindow(`rdp-${sid}`, {
@@ -1267,26 +1291,35 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
             const tab = get().sessions.find((t) => t.key === key);
             if (!tab || !tab.sessionId) return;
             const sid = tab.sessionId;
-            // Reattach the stream back to this (main) webview *first*, so closing
-            // the popout window below doesn't tear the session down.
+            // Mark this sid so the pop-out's close (which WE trigger below) is
+            // not mistaken for a user "close → end session".
             redockGuard.add(sid);
-            await rdpSessionApi.reattach(sid, (ev) => handleRdpEvent(key, ev));
+            // Re-home the frame stream to THIS (main) webview FIRST. This swaps
+            // the backend sink to us, so the backend stops streaming into the
+            // pop-out's Channel — making the subsequent window close clean (no
+            // close-during-delivery wedge) and keeping the session alive (no
+            // dead-channel removal race). The session lives in the backend.
+            try {
+                await rdpSessionApi.reattach(sid, (ev) => handleRdpEvent(key, ev));
+            } catch {
+                /* session may have ended; the tab will reflect it */
+            }
             set((s) => {
                 const p = { ...s.poppedOut };
                 delete p[key];
                 return { poppedOut: p };
             });
+            // Now tear down the pop-out window. `destroy()` force-closes without
+            // the CloseRequested round-trip (which is what could hang); since the
+            // stream is already re-homed, nothing is in flight to it.
             try {
                 const w = await WebviewWindow.getByLabel(`rdp-${sid}`);
-                await w?.close();
+                await w?.destroy();
             } catch {
-                /* window already gone */
-            } finally {
-                // Backstop: if the popout's close event never reaches the
-                // listener, don't leave a stale guard that would later swallow
-                // a genuine user close of the same session.
-                window.setTimeout(() => redockGuard.delete(sid), 1500);
+                /* already gone */
             }
+            // Clear the guard shortly after, in case the close path didn't emit.
+            setTimeout(() => redockGuard.delete(sid), 2000);
         },
 
         popOutSession: (sourceKey) =>

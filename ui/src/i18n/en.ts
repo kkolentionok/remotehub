@@ -279,6 +279,7 @@ export const messages = {
     "session.log.failGeneric": "Connection failed",
     "session.fullscreen": "Fullscreen (Ctrl+Alt+Enter)",
     "session.minimize": "Minimize",
+    "session.moveBar": "Drag to move",
     "session.fullscreenHint": "Ctrl+Alt+Enter or Esc to exit fullscreen",
     "session.popOut": "Open in a separate window",
     "session.poppedOutTitle": "This RDP session is open in a separate window",

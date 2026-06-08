@@ -35,8 +35,9 @@ export function RdpPopoutApp() {
         // gate (enableDynamicResize) reflects the user's choice here too.
         void useSettingsStore.getState().load();
         setKey(attachExternalRdp({ sessionId: sid, title, width: w, height: h }));
-        // Tell the main window when this window is closing so it can drop the
-        // tab (unless the close was a re-dock the main window initiated).
+        // Native window X (or OS close) → tell the main window to end the tab.
+        // The "return to tab" button does NOT go through here — it asks the main
+        // window to re-dock, which closes this window itself (guarded).
         const unlisten = getCurrentWindow().onCloseRequested(() => {
             void emit("rdp:popout-closed", { sid });
         });
@@ -91,6 +92,15 @@ export function RdpPopoutApp() {
                 enableDynamicResize={gfxOn}
                 onKbdCapture={(on) => {
                     if (sid) void rdpSessionApi.kbdCapture(sid, on);
+                }}
+                onMinimize={() => void getCurrentWindow().minimize()}
+                onPopIn={() => {
+                    // Do NOT close ourselves here. Ask the main window to
+                    // re-dock: it reattaches the stream to itself FIRST (so the
+                    // backend stops streaming into this window's Channel), then
+                    // closes this window. Closing ourselves while frames are
+                    // still being delivered here wedges the webview.
+                    void emit("rdp:request-redock", { sid });
                 }}
             />
         </div>

@@ -274,6 +274,7 @@ export const messages: Partial<Record<keyof typeof enMessages, string>> = {
     "session.log.failGeneric": "Не удалось подключиться",
     "session.fullscreen": "Во весь экран (Ctrl+Alt+Enter)",
     "session.minimize": "Свернуть",
+    "session.moveBar": "Перетащите, чтобы переместить",
     "session.fullscreenHint": "Ctrl+Alt+Enter или Esc — выйти из полноэкранного режима",
     "session.popOut": "Открыть в отдельном окне",
     "session.poppedOutTitle": "Сессия RDP открыта в отдельном окне",
