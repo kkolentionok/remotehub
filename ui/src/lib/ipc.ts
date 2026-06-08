@@ -61,6 +61,10 @@ import type {
     VaultFileResponse,
     SyncConfigResponse,
     SyncStatus,
+    ForwardEvent,
+    ForwardOpenRequest,
+    ForwardOpenResponse,
+    ForwardListResponse,
 } from "./types";
 import {
     EVENT_CREDENTIALS_CHANGED,
@@ -527,4 +531,25 @@ export const app = {
     quit: (): Promise<void> => invoke<void>("app_quit"),
     /** Open a URL in the system browser (terminal Ctrl/Cmd+click on links). */
     open: (url: string): Promise<void> => invoke<void>("open_external", { url }),
+};
+
+// =====================================================================
+// Port forwarding (Tools → Forwards, slice 1: local `-L`)
+// =====================================================================
+
+export const forwards = {
+    /** Open a local forward. Emits a `ForwardEvent` stream over a Channel. */
+    open: (
+        req: ForwardOpenRequest,
+        onEvent: (e: ForwardEvent) => void,
+    ): Promise<ForwardOpenResponse> => {
+        const channel = new Channel<ForwardEvent>();
+        channel.onmessage = onEvent;
+        return invoke<ForwardOpenResponse>("forward_open", { req, onEvent: channel });
+    },
+
+    close: (forwardId: string): Promise<void> =>
+        call("forward_close", { forward_id: forwardId }),
+
+    list: (): Promise<ForwardListResponse> => call("forward_list"),
 };

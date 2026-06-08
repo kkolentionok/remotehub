@@ -620,3 +620,52 @@ export interface FsListResponse {
     parent: string | null;
     entries: FsEntry[];
 }
+
+// =====================================================================
+// Port forwarding (Tools → Forwards): local `-L`, remote `-R`, dynamic `-D`
+// Mirrors crates/rh-ssh forward.rs + rh-app dto.rs.
+// =====================================================================
+
+export type ForwardKind = "local" | "remote" | "dynamic";
+export type ForwardState = "connecting" | "listening" | "error" | "closed";
+
+export interface ForwardSpec {
+    kind: ForwardKind;
+    bind_host: string;
+    bind_port: number;
+    target_host: string;
+    target_port: number;
+}
+
+export type ForwardEvent =
+    | { kind: "state_changed"; state: ForwardState }
+    | { kind: "active_changed"; active: number }
+    | { kind: "error"; message: string }
+    | { kind: "closed"; message: string | null };
+
+export interface ForwardSummary {
+    forward_id: string;
+    host_id: HostId;
+    host_label: string;
+    spec: ForwardSpec;
+    state: ForwardState;
+    active: number;
+}
+
+export interface ForwardOpenRequest {
+    host_id: HostId;
+    kind: ForwardKind;
+    bind_port: number;
+    /** Ignored for dynamic (-D); required for local/remote. */
+    target_host: string;
+    target_port: number;
+    bind_host?: string | null;
+}
+
+export interface ForwardOpenResponse {
+    forward_id: string;
+}
+
+export interface ForwardListResponse {
+    forwards: ForwardSummary[];
+}

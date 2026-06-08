@@ -111,6 +111,12 @@ ulid_newtype! {
     SessionId
 }
 
+ulid_newtype! {
+    /// Identifier for a persisted port-forward definition
+    /// (see [`SavedForward`](crate::SavedForward)).
+    ForwardId
+}
+
 /// Opaque reference to a secret stored in the OS keychain.
 ///
 /// This type **never** contains the secret itself, only the lookup key.

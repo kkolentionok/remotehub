@@ -38,7 +38,7 @@ enum HostKeyOutcome {
 /// russh client handler. Verifies the server key against the pinned
 /// `known_hosts` entry; unknown/changed keys raise an interactive TOFU
 /// prompt and block until the UI answers via [`SessionCommand::HostKeyDecision`].
-struct ClientHandler {
+pub(crate) struct ClientHandler {
     hostname: String,
     port: u16,
     strict: bool,
@@ -56,6 +56,10 @@ struct ClientHandler {
     agent_forward: bool,
     /// Live agent-forward relays, keyed by the server-opened channel id.
     agent_bridges: std::collections::HashMap<russh::ChannelId, AgentBridge>,
+    /// When set (remote `-R` forwards), server-opened `forwarded-tcpip`
+    /// channels are pushed here for the forward actor to bridge to a
+    /// local target. `None` for sessions and for `-L`/`-D` forwards.
+    forwarded_tx: Option<mpsc::UnboundedSender<russh::Channel<russh::client::Msg>>>,
 }
 
 impl ClientHandler {
@@ -121,6 +125,44 @@ impl ClientHandler {
             warn!(error = %e, "failed to pin host key");
         }
     }
+
+    /// A trusting handler for non-interactive transports (port forwards):
+    /// accept + pin the host key silently, never prompt — same posture as
+    /// the ProxyJump bastion. The `decisions` channel is unused because
+    /// `auto_accept` short-circuits in `decide`. Slice-2 may add a strict
+    /// TOFU prompt for forwards; for now a forward targets a host the user
+    /// has typically already pinned via a normal session.
+    pub(crate) fn trusting(
+        hostname: String,
+        port: u16,
+        known: Arc<dyn rh_core::KnownHostsStore>,
+        events: mpsc::UnboundedSender<SshSessionEvent>,
+    ) -> Self {
+        let (_dec_tx, dec_rx) = mpsc::channel::<bool>(1);
+        Self {
+            hostname,
+            port,
+            strict: false,
+            auto_accept: true,
+            known,
+            events,
+            decisions: dec_rx,
+            agent_forward: false,
+            agent_bridges: std::collections::HashMap::new(),
+            forwarded_tx: None,
+        }
+    }
+
+    /// Attach a sink for server-opened `forwarded-tcpip` channels (remote
+    /// `-R` forwarding). Consumed builder-style on the trusting handler
+    /// before it is moved into `russh::client::connect`.
+    pub(crate) fn with_forwarded_sink(
+        mut self,
+        tx: mpsc::UnboundedSender<russh::Channel<russh::client::Msg>>,
+    ) -> Self {
+        self.forwarded_tx = Some(tx);
+        self
+    }
 }
 
 #[async_trait]
@@ -177,6 +219,29 @@ impl russh::client::Handler for ClientHandler {
         #[cfg(not(any(unix, windows)))]
         {
             let _ = channel;
+        }
+        Ok(())
+    }
+
+    // ---- Remote forwarding (`-R`) ------------------------------------
+    // The server opens `forwarded-tcpip` channels for connections arriving
+    // on a port it is listening on (requested earlier via `tcpip_forward`).
+    // russh has already accepted the channel; we hand it to the forward
+    // actor (if any) which bridges it to a local target. If no sink is set
+    // (sessions, `-L`/`-D`), dropping the channel closes it.
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<russh::client::Msg>,
+        _connected_address: &str,
+        _connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        _session: &mut russh::client::Session,
+    ) -> Result<(), Self::Error> {
+        if let Some(tx) = &self.forwarded_tx {
+            // Unbounded: the forward actor drains promptly; a closed receiver
+            // just means the forward is shutting down → drop the channel.
+            let _ = tx.send(channel);
         }
         Ok(())
     }
@@ -591,7 +656,7 @@ enum ConnectOutcome {
 /// Hard ceiling on the connect+handshake phase. A dead host (no SYN-ACK)
 /// would otherwise hang on the OS-level TCP timeout (minutes on Windows);
 /// this surfaces a clean timeout error to the UI instead.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Drive a connect future to completion while forwarding the user's
 /// host-key trust decisions into the handler's channel. Used for the
@@ -670,7 +735,7 @@ async fn try_auth_bounded(
 /// Try each auth method in order; `Ok(true)` on the first success. Used
 /// for the bastion (the target keeps its own loop so it can report the
 /// last attempted method on failure).
-async fn try_all_auth(
+pub(crate) async fn try_all_auth(
     handle: &mut russh::client::Handle<ClientHandler>,
     creds: Vec<RevealedCredential>,
 ) -> Result<bool, SshError> {
@@ -719,6 +784,7 @@ async fn connect_and_pump(
         decisions: dec_rx,
         agent_forward: params.agent_forwarding,
         agent_bridges: std::collections::HashMap::new(),
+        forwarded_tx: None,
     };
 
     // Keep the bastion handle alive for the whole session (its channel
@@ -747,6 +813,7 @@ async fn connect_and_pump(
             decisions: bdec_rx,
             agent_forward: false,
             agent_bridges: std::collections::HashMap::new(),
+            forwarded_tx: None,
         };
         drop(bdec_tx); // auto_accept never awaits a decision
         // A dead/unreachable bastion would otherwise hang on the OS-level TCP

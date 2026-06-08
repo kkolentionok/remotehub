@@ -17,6 +17,7 @@ use tokio::sync::{Mutex, Notify};
 
 use crate::local_pty::LocalPtyManager;
 use crate::rdp_session::RdpSessionManager;
+use crate::forward_session::ForwardManager;
 use crate::sftp_session::SftpManager;
 use crate::session::SessionManager;
 use crate::sync_clock::SyncClock;
@@ -46,6 +47,8 @@ pub struct AppState {
     pub rdp_sessions: RdpSessionManager,
     pub local_sessions: LocalPtyManager,
     pub sftp: SftpManager,
+    /// Live SSH local port-forwards (Tools → Forwards). In-memory only.
+    pub forwards: ForwardManager,
     /// Live session count last reported by the UI (the session tabs the user
     /// can see). Read by the tray Quit handler to decide whether to ask for
     /// confirmation, and mirrored into the tray tooltip.
@@ -82,6 +85,7 @@ impl std::fmt::Debug for AppState {
             .field("rdp_sessions", &"<RdpSessionManager>")
             .field("local_sessions", &"<LocalPtyManager>")
             .field("sftp", &"<SftpManager>")
+            .field("forwards", &"<ForwardManager>")
             .field("session_count", &self.session_count)
             .finish()
     }
@@ -114,6 +118,7 @@ impl AppState {
             rdp_sessions: RdpSessionManager::new(),
             local_sessions: LocalPtyManager::new(),
             sftp: SftpManager::new(),
+            forwards: ForwardManager::new(),
             session_count: Arc::new(AtomicUsize::new(0)),
             sync_wake: Arc::new(Notify::new()),
             sync_inflight: Arc::new(Mutex::new(())),

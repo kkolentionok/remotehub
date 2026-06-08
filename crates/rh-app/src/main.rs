@@ -8,6 +8,7 @@ mod paths;
 mod local_pty;
 mod rdp_session;
 mod session;
+mod forward_session;
 mod sftp_session;
 mod state;
 mod sync_clock;
@@ -143,6 +144,9 @@ fn main() {
             api::sessions::session_accept_host_key,
             api::sessions::session_reject_host_key,
             api::sessions::session_list,
+            api::forwards::forward_open,
+            api::forwards::forward_close,
+            api::forwards::forward_list,
             api::sessions::session_reattach,
             api::rdp_sessions::rdp_session_open,
             api::rdp_sessions::rdp_session_close,

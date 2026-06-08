@@ -29,6 +29,7 @@ const SECTIONS: Section[] = [
     {
         title: "shortcuts.section.general",
         items: [
+            { keys: ["Ctrl/Cmd", "K"], label: "shortcuts.row.palette" },
             { keys: ["?"], label: "shortcuts.row.help" },
             { keys: ["Esc"], label: "shortcuts.row.close" },
             { keys: ["Ctrl", "Shift", "E"], label: "shortcuts.row.splitRight" },

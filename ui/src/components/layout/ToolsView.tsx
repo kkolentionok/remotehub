@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
     ArrowRightLeft,
     ArrowUpRight,
+    ChevronRight,
     Copy,
     Download,
     Eye,
@@ -10,17 +11,21 @@ import {
     HardDrive,
     KeyRound,
     Lock,
+    Play,
     Search,
     Server,
     Share2,
+    Square,
     Terminal,
     Trash2,
 } from "lucide-react";
 
 import { useT } from "../../i18n";
-import { credentials as credApi, hosts as hostsApi } from "../../lib/ipc";
-import type { CredentialDto, CredentialKind, HostDto } from "../../lib/types";
-import { useCredentialsStore, useHostsStore, useSessionsStore } from "../../store";
+import { credentials as credApi, forwards as forwardsApi, hosts as hostsApi } from "../../lib/ipc";
+import type { CredentialDto, CredentialKind, ForwardKind, ForwardSummary, HostDto } from "../../lib/types";
+import { formatApiError } from "../../lib/types";
+import { useCredentialsStore, useHostsStore, useSessionsStore, useUiStore } from "../../store";
+import { Combobox, type ComboboxOption } from "../ui/Combobox";
 import styles from "./ToolsView.module.css";
 
 type CredLink = { count: number; username: string };
@@ -69,7 +74,7 @@ type KeySeg = "all" | "keys" | "pwd";
 const NAV: { id: ManageKey; icon: typeof KeyRound; label: string; soon: boolean }[] = [
     { id: "keys", icon: KeyRound, label: "tools.section.creds", soon: false },
     { id: "import", icon: Download, label: "tools.nav.import", soon: false },
-    { id: "forwards", icon: ArrowRightLeft, label: "tools.section.forwards", soon: true },
+    { id: "forwards", icon: ArrowRightLeft, label: "tools.section.forwards", soon: false },
     { id: "mounts", icon: HardDrive, label: "tools.section.mounts", soon: true },
     { id: "share", icon: Share2, label: "tools.section.share", soon: true },
 ];
@@ -101,6 +106,18 @@ export function ToolsView() {
         [creds, links],
     );
     const [active, setActive] = useState<ManageKey>("keys");
+    const toolsSection = useUiStore((s) => s.toolsSection);
+    const setToolsSection = useUiStore((s) => s.setToolsSection);
+    // A tray click (or other external nav) requests a sub-section; apply it
+    // once, then clear the request so it doesn't re-fire.
+    useEffect(() => {
+        if (!toolsSection) return;
+        const valid: ManageKey[] = ["keys", "import", "forwards", "mounts", "share"];
+        if ((valid as string[]).includes(toolsSection)) {
+            setActive(toolsSection as ManageKey);
+        }
+        setToolsSection(null);
+    }, [toolsSection, setToolsSection]);
     const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
 
     const toast = (text: string) => {
@@ -172,6 +189,8 @@ export function ToolsView() {
             <div className={styles.pane}>
                 {active === "keys" ? (
                     <KeysPane creds={inUse} links={links} ready={ready} onToast={toast} />
+                ) : active === "forwards" ? (
+                    <ForwardsPane onToast={toast} />
                 ) : (
                     <EmptyPane cfg={EMPTY[active]} />
                 )}
@@ -464,6 +483,277 @@ function KeysPane({
 }
 
 // ── coming-soon / empty pane ──
+function ForwardsPane({ onToast }: { onToast: (s: string) => void }) {
+    const { t } = useT();
+    const hosts = useHostsStore((s) => s.items);
+    const sshHosts = useMemo(() => hosts.filter((h) => h.protocol === "ssh"), [hosts]);
+    const hostOptions = useMemo<ComboboxOption[]>(
+        () =>
+            sshHosts.map((h) => {
+                const name = h.display_name ?? h.name;
+                // Show the address alongside the name, e.g. "richard-tea.com
+                // [92.63.193.34]". Skip the brackets when the name *is* the
+                // address (host saved by IP) to avoid "IP [IP]".
+                const label =
+                    name && h.hostname && name !== h.hostname
+                        ? `${name} [${h.hostname}]`
+                        : name || h.hostname;
+                return { value: h.id, label };
+            }),
+        [sshHosts],
+    );
+
+    const [list, setList] = useState<ForwardSummary[]>([]);
+    const [hostId, setHostId] = useState("");
+    const [kind, setKind] = useState<ForwardKind>("local");
+    const [bindHost, setBindHost] = useState("127.0.0.1");
+    const [bindPort, setBindPort] = useState("");
+    const [targetHost, setTargetHost] = useState("");
+    const [targetPort, setTargetPort] = useState("");
+    const [busy, setBusy] = useState(false);
+
+    // Poll the live list (cheap; also recovers forwards that survived a
+    // webview reload, which have no live event channel anymore).
+    const refresh = () => {
+        void forwardsApi
+            .list()
+            .then((r) => setList(r.forwards))
+            .catch(() => {});
+    };
+    useEffect(() => {
+        refresh();
+        const iv = window.setInterval(refresh, 2000);
+        return () => window.clearInterval(iv);
+    }, []);
+
+    const bp = Number(bindPort);
+    const tp = Number(targetPort);
+    const isDyn = kind === "dynamic";
+    const portOk = (n: number) => Number.isInteger(n) && n >= 1 && n <= 65535;
+    const valid =
+        hostId !== "" &&
+        portOk(bp) &&
+        (isDyn || (targetHost.trim() !== "" && portOk(tp)));
+
+    const start = async () => {
+        if (!valid || busy) return;
+        setBusy(true);
+        try {
+            await forwardsApi.open(
+                {
+                    host_id: hostId,
+                    kind,
+                    bind_host: bindHost.trim() || undefined,
+                    bind_port: bp,
+                    target_host: isDyn ? "" : targetHost.trim(),
+                    target_port: isDyn ? 0 : tp,
+                },
+                (e) => {
+                    // The actor binds/connects asynchronously, so failures
+                    // (e.g. a privileged/blocked local port) arrive here as an
+                    // error event — surface them instead of the row just
+                    // vanishing on the next refresh.
+                    if (e.kind === "error") onToast(e.message);
+                    refresh();
+                },
+            );
+            setBindPort("");
+            setTargetPort("");
+            onToast(t("tools.forwards.started"));
+            refresh();
+        } catch (e: unknown) {
+            onToast(formatApiError(e));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const stop = async (fid: string) => {
+        try {
+            await forwardsApi.close(fid);
+            onToast(t("tools.forwards.stopped"));
+            refresh();
+        } catch (e: unknown) {
+            onToast(formatApiError(e));
+        }
+    };
+
+    const stateLabel = (s: ForwardSummary["state"]): string =>
+        t(
+            (s === "listening"
+                ? "tools.forwards.state.listening"
+                : s === "connecting"
+                  ? "tools.forwards.state.connecting"
+                  : s === "error"
+                    ? "tools.forwards.state.error"
+                    : "tools.forwards.state.closed") as Parameters<typeof t>[0],
+        );
+    const stateCls = (s: ForwardSummary["state"]): string => {
+        const c =
+            s === "listening"
+                ? styles.fwOk
+                : s === "error"
+                  ? styles.fwErr
+                  : s === "closed"
+                    ? styles.fwClosed
+                    : styles.fwConn;
+        return c ?? "";
+    };
+
+    return (
+        <>
+            <div className={styles.paneHead}>
+                <div className={styles.paneTitleRow}>
+                    <div className={styles.paneTitle}>
+                        <ArrowRightLeft size={18} className={styles.paneTitleIc} />
+                        {t("tools.section.forwards")}
+                    </div>
+                    <div className={styles.paneSp} />
+                </div>
+                <div className={styles.paneSub}>{t("tools.forwards.sub")}</div>
+
+                <div className={styles.fwForm}>
+                    <div className={styles.fwKind}>
+                        {(["local", "remote", "dynamic"] as ForwardKind[]).map((k) => (
+                            <button
+                                key={k}
+                                type="button"
+                                className={`${styles.fwKindBtn} ${kind === k ? styles.fwKindOn : ""}`}
+                                onClick={() => setKind(k)}
+                                title={t(`tools.forwards.kind.${k}.hint` as Parameters<typeof t>[0])}
+                            >
+                                {t(`tools.forwards.kind.${k}` as Parameters<typeof t>[0])}
+                            </button>
+                        ))}
+                    </div>
+                    <div className={styles.fwHost}>
+                        <Combobox
+                            options={hostOptions}
+                            value={hostId}
+                            onChange={setHostId}
+                            placeholder={t("tools.forwards.hostPlaceholder")}
+                            clearable
+                        />
+                    </div>
+                    <ChevronRight size={15} className={styles.fwSep} />
+                    {!isDyn && (
+                        <>
+                            <input
+                                className={styles.fwTarget}
+                                value={targetHost}
+                                onChange={(e) => setTargetHost(e.target.value)}
+                                placeholder={t(
+                                    kind === "remote"
+                                        ? "tools.forwards.localHost"
+                                        : "tools.forwards.remoteHost",
+                                )}
+                                spellCheck={false}
+                            />
+                            <span className={styles.fwColon}>:</span>
+                            <input
+                                className={styles.fwPort}
+                                value={targetPort}
+                                onChange={(e) => setTargetPort(e.target.value.replace(/[^0-9]/g, ""))}
+                                placeholder={t("tools.forwards.targetPort")}
+                                inputMode="numeric"
+                                spellCheck={false}
+                            />
+                            <ArrowRightLeft size={15} className={styles.fwArrow} />
+                        </>
+                    )}
+                    {isDyn && <span className={styles.fwDyn}>{t("tools.forwards.socksTag")}</span>}
+                    <input
+                        className={styles.fwTarget}
+                        value={bindHost}
+                        onChange={(e) => setBindHost(e.target.value)}
+                        placeholder={t(
+                            kind === "remote"
+                                ? "tools.forwards.serverHost"
+                                : "tools.forwards.localHost",
+                        )}
+                        spellCheck={false}
+                    />
+                    <span className={styles.fwColon}>:</span>
+                    <input
+                        className={styles.fwPort}
+                        value={bindPort}
+                        onChange={(e) => setBindPort(e.target.value.replace(/[^0-9]/g, ""))}
+                        placeholder={t(
+                            kind === "remote"
+                                ? "tools.forwards.remotePort"
+                                : "tools.forwards.localPort",
+                        )}
+                        inputMode="numeric"
+                        spellCheck={false}
+                    />
+                    <button
+                        type="button"
+                        className={styles.fwStart}
+                        disabled={!valid || busy}
+                        onClick={() => void start()}
+                    >
+                        <Play size={14} />
+                        {t("tools.forwards.start")}
+                    </button>
+                </div>
+            </div>
+
+            <div className={styles.paneBody}>
+                {list.length === 0 ? (
+                    <div className={styles.empty}>
+                        <ArrowRightLeft size={32} className={styles.emptyIc} />
+                        <div className={styles.emptyT}>{t("tools.forwards.emptyT")}</div>
+                        <div className={styles.emptyS}>{t("tools.forwards.emptyS")}</div>
+                    </div>
+                ) : (
+                    <div className={styles.klist}>
+                        {list.map((f) => (
+                            <div key={f.forward_id} className={`${styles.krow} ${styles.fwRow}`}>
+                                <ArrowRightLeft size={16} className={styles.krowIc} />
+                                <div className={styles.krowMain}>
+                                    <div className={styles.krowNm}>
+                                        {f.host_label}
+                                        <span className={styles.fwTag}>
+                                            {t(
+                                                `tools.forwards.kind.${f.spec.kind}` as Parameters<
+                                                    typeof t
+                                                >[0],
+                                            )}
+                                        </span>
+                                    </div>
+                                    <div className={styles.krowSub}>
+                                        {f.spec.kind === "dynamic"
+                                            ? `${t("tools.forwards.socksTag")} ${f.spec.bind_host}:${f.spec.bind_port}`
+                                            : `${f.spec.target_host}:${f.spec.target_port} ⇄ ${f.spec.bind_host}:${f.spec.bind_port}`}
+                                    </div>
+                                </div>
+                                <span className={`${styles.fwState} ${stateCls(f.state)}`}>
+                                    {stateLabel(f.state)}
+                                </span>
+                                <span className={styles.fwActive}>
+                                    {f.active > 0
+                                        ? t("tools.forwards.active", { n: String(f.active) })
+                                        : ""}
+                                </span>
+                                <div className={styles.krowAct}>
+                                    <button
+                                        type="button"
+                                        className={styles.actBtnDanger}
+                                        title={t("tools.forwards.stop")}
+                                        onClick={() => void stop(f.forward_id)}
+                                    >
+                                        <Square size={15} />
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </>
+    );
+}
+
 function EmptyPane({ cfg }: { cfg: { icon: typeof KeyRound; title: string; body: string; soon: boolean } }) {
     const { t } = useT();
     const Ico = cfg.icon;

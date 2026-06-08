@@ -59,6 +59,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
                 }
             } else if id == "show" {
                 show_main(app);
+            } else if id == "forwards" {
+                show_main(app);
+                let _ = app.emit("tray:open-forwards", ());
             } else if let Some(host_id) = id.strip_prefix("connect:") {
                 let _ = app.emit("tray:connect", host_id.to_string());
                 show_main(app);
@@ -163,6 +166,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 
     let mut b = MenuBuilder::new(app);
     b = b.item(&MenuItemBuilder::with_id("show", "Open RemoteHub").build(app)?);
+    b = b.item(&MenuItemBuilder::with_id("forwards", "Port forwarding").build(app)?);
 
     // Favorites — user-pinned hosts, by name.
     let mut favs: Vec<&Host> = hosts.iter().filter(|h| h.favorite).collect();

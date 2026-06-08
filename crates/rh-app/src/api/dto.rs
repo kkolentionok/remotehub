@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use rh_core::{
     Credential, CredentialId, CredentialKind, EnvVar, GroupId, Host, HostGroup, HostId, Protocol,
 };
+use rh_ssh::{ForwardKind, ForwardSpec, ForwardState};
 
 // =====================================================================
 // Hosts
@@ -959,4 +960,65 @@ mod tests {
             _ => panic!("wrong variant"),
         }
     }
+}
+
+// =====================================================================
+// Port forwarding (Tools → Forwards): local `-L`, remote `-R`, dynamic `-D`
+// =====================================================================
+
+/// Open a forward. `kind` selects the direction:
+/// * `local`  — listen on `bind_host:bind_port` locally, tunnel to
+///   `target_host:target_port` reachable from the remote side.
+/// * `remote` — server listens on `bind_host:bind_port`, tunnel back to
+///   `target_host:target_port` reachable from our side.
+/// * `dynamic`— local SOCKS5 proxy on `bind_host:bind_port`; target is
+///   chosen per-connection (so `target_*` are ignored).
+///
+/// `bind_host` defaults to `127.0.0.1`. For backward compatibility `kind`
+/// defaults to `local`, and `target_*` default to empty/0 (required for
+/// `local`/`remote`, unused for `dynamic`).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForwardOpenRequest {
+    pub host_id: HostId,
+    #[serde(default = "default_forward_kind")]
+    pub kind: ForwardKind,
+    pub bind_port: u16,
+    #[serde(default)]
+    pub target_host: String,
+    #[serde(default)]
+    pub target_port: u16,
+    #[serde(default)]
+    pub bind_host: Option<String>,
+}
+
+fn default_forward_kind() -> ForwardKind {
+    ForwardKind::Local
+}
+
+#[derive(Debug, Serialize)]
+pub struct ForwardOpenResponse {
+    pub forward_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForwardCloseRequest {
+    pub forward_id: String,
+}
+
+/// One live forward, for `forward_list`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ForwardSummaryDto {
+    pub forward_id: String,
+    pub host_id: HostId,
+    pub host_label: String,
+    pub spec: ForwardSpec,
+    pub state: ForwardState,
+    pub active: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ForwardListResponse {
+    pub forwards: Vec<ForwardSummaryDto>,
 }

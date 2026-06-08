@@ -14,6 +14,7 @@
 
 mod actor;
 mod error;
+mod forward;
 mod ppk;
 pub mod sftp;
 
@@ -26,6 +27,10 @@ use tokio::task::AbortHandle;
 use rh_core::{HostId, Protocol, RevealedSecret, SessionId};
 
 pub use error::SshError;
+pub use forward::{
+    spawn_forward, ForwardConnectParams, ForwardEvent, ForwardHandle, ForwardKind, ForwardSpawnParams,
+    ForwardSpec, ForwardState,
+};
 
 // =====================================================================
 // Public session types (wire-compatible with the UI contract in

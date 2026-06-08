@@ -228,6 +228,9 @@ interface UiStore {
     launcherOpen: boolean;
     /** Keyboard-shortcuts cheat sheet overlay (toggled by `?`). */
     shortcutsOpen: boolean;
+    /** Desired Tools sub-section to show (e.g. from a tray click). Consumed
+     *  by `ToolsView`; cleared after it applies. */
+    toolsSection: string | null;
     /** Active app section shown when no session tab is active. */
     section: "vault" | "tools";
     /** Latest background-sync status (from the `sync:status` event), or null
@@ -244,6 +247,7 @@ interface UiStore {
     toggleGroupCollapsed: (id: GroupId) => void;
     setLauncherOpen: (open: boolean) => void;
     setShortcutsOpen: (open: boolean) => void;
+    setToolsSection: (section: string | null) => void;
     setSection: (section: "vault" | "tools") => void;
     setSyncStatus: (status: SyncStatus) => void;
 }
@@ -277,6 +281,7 @@ export const useUiStore = create<UiStore>((set) => ({
     collapsedGroupIds: new Set(),
     launcherOpen: false,
     shortcutsOpen: false,
+    toolsSection: null,
     section: "vault",
     syncStatus: null,
 
@@ -291,6 +296,7 @@ export const useUiStore = create<UiStore>((set) => ({
     setSearchQuery: (searchQuery) => set({ searchQuery }),
     setLauncherOpen: (launcherOpen) => set({ launcherOpen }),
     setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
+    setToolsSection: (toolsSection) => set({ toolsSection }),
     setSection: (section) => set({ section }),
     setSyncStatus: (syncStatus) => set({ syncStatus }),
     toggleGroupCollapsed: (id) =>

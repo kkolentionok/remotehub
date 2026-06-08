@@ -582,3 +582,168 @@
     color: var(--color-accent);
     background: var(--color-subtle);
 }
+
+/* ── Port forwarding (Forwards pane) ─────────────────────────────── */
+.fwForm {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 14px;
+}
+/* segmented Local / Remote / Dynamic selector */
+.fwKind {
+    display: inline-flex;
+    flex: 0 0 auto;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+.fwKindBtn {
+    height: 36px;
+    padding: 0 12px;
+    background: var(--color-surface);
+    color: var(--text-3);
+    font-size: 13px;
+    font-family: inherit;
+    border-right: 1px solid var(--color-border);
+    transition: color 0.12s, background 0.12s;
+}
+.fwKindBtn:last-child {
+    border-right: none;
+}
+.fwKindBtn:hover {
+    color: var(--text-1);
+    background: var(--color-subtle);
+}
+.fwKindOn {
+    background: var(--color-accent);
+    color: var(--color-accent-fg);
+}
+.fwKindOn:hover {
+    background: var(--color-accent-hover);
+    color: var(--color-accent-fg);
+}
+/* "SOCKS5" tag shown in place of the target inputs for dynamic forwards */
+.fwDyn {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-3);
+    padding: 0 4px;
+}
+/* small kind tag next to the host label in a live row */
+.fwTag {
+    margin-left: 8px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-4);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 1px 5px;
+    vertical-align: middle;
+}
+.fwHost {
+    flex: 1 1 200px;
+    min-width: 180px;
+}
+.fwSep {
+    color: var(--text-4);
+    flex: 0 0 auto;
+}
+.fwColon {
+    color: var(--text-4);
+}
+.fwPort,
+.fwTarget {
+    height: 36px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 0 10px;
+    color: var(--text-1);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.12s;
+}
+.fwPort {
+    width: 76px;
+    font-family: var(--font-mono);
+}
+.fwTarget {
+    width: 150px;
+}
+.fwPort:focus,
+.fwTarget:focus {
+    border-color: var(--color-accent);
+}
+.fwPort::placeholder,
+.fwTarget::placeholder {
+    color: var(--text-4);
+    font-family: inherit;
+}
+.fwArrow {
+    color: var(--text-4);
+    flex: 0 0 auto;
+}
+.fwStart {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 36px;
+    padding: 0 14px;
+    border-radius: var(--radius-md);
+    background: var(--color-accent);
+    color: var(--color-accent-fg);
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: opacity 0.12s;
+}
+.fwStart:hover {
+    background: var(--color-accent-hover);
+}
+.fwStart:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+/* keep the Stop control visible — it's the primary action on a live row */
+.fwRow .krowAct {
+    opacity: 1;
+}
+
+.fwState {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    justify-self: start;
+}
+.fwOk {
+    background: var(--color-success-bg);
+    color: var(--color-success);
+}
+.fwConn {
+    background: rgba(230, 192, 123, 0.12);
+    color: var(--color-warn);
+}
+.fwErr {
+    background: var(--color-danger-bg);
+    color: var(--color-danger);
+}
+.fwClosed {
+    background: var(--color-elevated);
+    color: var(--text-4);
+}
+.fwActive {
+    font-size: 12px;
+    color: var(--text-3);
+    white-space: nowrap;
+    justify-self: start;
+}

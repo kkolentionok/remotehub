@@ -122,6 +122,20 @@ export function AppShell() {
         return () => unlisten?.();
     }, []);
 
+    // Tray "Port forwarding" → show Tools with the Forwards sub-section.
+    useEffect(() => {
+        let unlisten: (() => void) | undefined;
+        void (async () => {
+            const { listen } = await import("@tauri-apps/api/event");
+            unlisten = await listen("tray:open-forwards", () => {
+                const ui = useUiStore.getState();
+                ui.setSection("tools");
+                ui.setToolsSection("forwards");
+            });
+        })();
+        return () => unlisten?.();
+    }, []);
+
     // Tray Quit with live sessions bounces here: show a confirm before the
     // real exit (which the dialog triggers via the app_quit command).
     useEffect(() => {
@@ -206,6 +220,26 @@ export function AppShell() {
         };
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
+    }, []);
+
+    // Ctrl/Cmd+K opens the command palette (the Launcher in command mode),
+    // globally — including while the terminal is focused. We listen in the
+    // CAPTURE phase and stopImmediatePropagation so xterm never sees the key
+    // and doesn't also fire the shell's kill-line (\x0b). Trade-off: Ctrl+K
+    // kill-line in the shell is overridden by the palette; Ctrl+U (kill line)
+    // and Ctrl+W (kill word) still reach the shell unaffected.
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+            if (e.code !== "KeyK") return; // physical key — layout-independent (RU/EN)
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            // Force command mode (no pending split) and open.
+            useSessionsStore.setState({ splitTarget: null });
+            useUiStore.getState().setLauncherOpen(true);
+        };
+        window.addEventListener("keydown", onKey, { capture: true });
+        return () => window.removeEventListener("keydown", onKey, { capture: true });
     }, []);
 
     // `?` toggles the keyboard-shortcuts cheat sheet — but never while

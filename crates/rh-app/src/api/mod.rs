@@ -10,6 +10,7 @@ pub mod meta;
 pub mod local_fs;
 pub mod local_sessions;
 pub mod rdp_sessions;
+pub mod forwards;
 pub mod sessions;
 pub mod sftp_sessions;
 pub mod settings;
