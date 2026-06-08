@@ -226,6 +226,8 @@ interface UiStore {
     collapsedGroupIds: Set<GroupId>;
     /** Quick-connect launcher overlay (opened by the tab-bar "+"). */
     launcherOpen: boolean;
+    /** Keyboard-shortcuts cheat sheet overlay (toggled by `?`). */
+    shortcutsOpen: boolean;
     /** Active app section shown when no session tab is active. */
     section: "vault" | "tools";
     /** Latest background-sync status (from the `sync:status` event), or null
@@ -241,6 +243,7 @@ interface UiStore {
     setSearchQuery: (q: string) => void;
     toggleGroupCollapsed: (id: GroupId) => void;
     setLauncherOpen: (open: boolean) => void;
+    setShortcutsOpen: (open: boolean) => void;
     setSection: (section: "vault" | "tools") => void;
     setSyncStatus: (status: SyncStatus) => void;
 }
@@ -273,6 +276,7 @@ export const useUiStore = create<UiStore>((set) => ({
     searchQuery: "",
     collapsedGroupIds: new Set(),
     launcherOpen: false,
+    shortcutsOpen: false,
     section: "vault",
     syncStatus: null,
 
@@ -286,6 +290,7 @@ export const useUiStore = create<UiStore>((set) => ({
     closeDialog: () => set({ dialog: { kind: "none" } }),
     setSearchQuery: (searchQuery) => set({ searchQuery }),
     setLauncherOpen: (launcherOpen) => set({ launcherOpen }),
+    setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
     setSection: (section) => set({ section }),
     setSyncStatus: (syncStatus) => set({ syncStatus }),
     toggleGroupCollapsed: (id) =>

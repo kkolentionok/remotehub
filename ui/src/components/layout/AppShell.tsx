@@ -19,6 +19,7 @@ import { FocusRail } from "../session/FocusRail";
 import { HomeView } from "./HomeView";
 import { Launcher } from "./Launcher";
 import { PaneGroup } from "./PaneGroup";
+import { ShortcutsSheet } from "./ShortcutsSheet";
 import { TabBar } from "./TabBar";
 import { ToolsView } from "./ToolsView";
 import styles from "./AppShell.module.css";
@@ -43,6 +44,7 @@ export function AppShell() {
     const dragTabId = useSessionsStore((s) => s.dragTabId);
     const setDragPreviewTabId = useSessionsStore((s) => s.setDragPreviewTabId);
     const launcherOpen = useUiStore((s) => s.launcherOpen);
+    const shortcutsOpen = useUiStore((s) => s.shortcutsOpen);
     const section = useUiStore((s) => s.section);
 
     // Borderless window (decorations:false): when maximized on Windows the
@@ -206,6 +208,29 @@ export function AppShell() {
         return () => window.removeEventListener("keydown", onKey);
     }, []);
 
+    // `?` toggles the keyboard-shortcuts cheat sheet — but never while
+    // typing in an input/textarea/contenteditable (incl. xterm's helper
+    // textarea) or with a modifier held, so it can't hijack a real "?".
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key !== "?" || e.ctrlKey || e.metaKey || e.altKey) return;
+            const el = document.activeElement as HTMLElement | null;
+            if (
+                el &&
+                (el.tagName === "INPUT" ||
+                    el.tagName === "TEXTAREA" ||
+                    el.isContentEditable)
+            ) {
+                return;
+            }
+            e.preventDefault();
+            const ui = useUiStore.getState();
+            ui.setShortcutsOpen(!ui.shortcutsOpen);
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+    }, []);
+
     return (
         <div className={styles.shell} data-maximized={maximized || undefined}>
             <TabBar />
@@ -268,6 +293,7 @@ export function AppShell() {
             </div>
             <DialogHost />
             {launcherOpen && <Launcher />}
+            {shortcutsOpen && <ShortcutsSheet />}
         </div>
     );
 }
