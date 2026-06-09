@@ -23,7 +23,7 @@ use tracing::{error, info};
 
 use rh_core::{CredentialStore, GroupStore, HostStore, KnownHostsStore, RdpCertStore, SettingsStore};
 use rh_storage::{
-    Db, OsKeychain, SqliteCredentialStore, SqliteGroupStore, SqliteHostStore,
+    Db, OsKeychain, SqliteCredentialStore, SqliteForwardStore, SqliteGroupStore, SqliteHostStore,
     SqliteKnownHostsStore, SqliteRdpCertStore, SqliteSettingsStore, SqliteSyncMetaStore,
 };
 
@@ -73,8 +73,13 @@ fn main() {
                     // the original. The actor idles until sync is configured.
                     let sync_state = s.clone();
                     let sync_app = app.handle().clone();
+                    let autostart_state = s.clone();
                     app.manage(s);
                     tauri::async_runtime::spawn(crate::sync_engine::run_loop(sync_app, sync_state));
+                    // Bring up any forwards marked auto-start (best-effort).
+                    tauri::async_runtime::spawn(async move {
+                        crate::api::forwards::autostart_all(autostart_state).await;
+                    });
                     info!("storage initialized; app ready");
                     if let Err(e) = tray::build(&app.handle().clone()) {
                         error!(error = %e, "failed to build system tray");
@@ -144,9 +149,12 @@ fn main() {
             api::sessions::session_accept_host_key,
             api::sessions::session_reject_host_key,
             api::sessions::session_list,
-            api::forwards::forward_open,
-            api::forwards::forward_close,
+            api::forwards::forward_save,
+            api::forwards::forward_start,
+            api::forwards::forward_stop,
+            api::forwards::forward_delete,
             api::forwards::forward_list,
+            api::forwards::forward_set_auto_start,
             api::sessions::session_reattach,
             api::rdp_sessions::rdp_session_open,
             api::rdp_sessions::rdp_session_close,
@@ -231,10 +239,12 @@ async fn build_state(_app: &tauri::AppHandle) -> Result<AppState, String> {
     let settings: Arc<dyn SettingsStore> = Arc::new(SqliteSettingsStore::new(db.clone()));
     let known_hosts: Arc<dyn KnownHostsStore> = Arc::new(SqliteKnownHostsStore::new(db.clone()));
     let rdp_certs: Arc<dyn RdpCertStore> = Arc::new(SqliteRdpCertStore::new(db.clone()));
-    let sync_meta: Arc<dyn rh_core::SyncMetaStore> = Arc::new(SqliteSyncMetaStore::new(db));
+    let sync_meta: Arc<dyn rh_core::SyncMetaStore> = Arc::new(SqliteSyncMetaStore::new(db.clone()));
+    let forward_defs: Arc<dyn rh_core::ForwardStore> = Arc::new(SqliteForwardStore::new(db));
     let sync = Arc::new(crate::sync_clock::SyncClock::load_or_init(&data_dir));
 
     Ok(AppState::new(
         hosts, groups, credentials, settings, known_hosts, rdp_certs, sync_meta, sync,
+        forward_defs,
     ))
 }

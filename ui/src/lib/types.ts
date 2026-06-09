@@ -643,16 +643,19 @@ export type ForwardEvent =
     | { kind: "error"; message: string }
     | { kind: "closed"; message: string | null };
 
-export interface ForwardSummary {
+/** A saved forward definition annotated with its current live state.
+ *  `state` is `null` when the forward isn't running. */
+export interface ForwardSaved {
     forward_id: string;
     host_id: HostId;
     host_label: string;
     spec: ForwardSpec;
-    state: ForwardState;
+    auto_start: boolean;
+    state: ForwardState | null;
     active: number;
 }
 
-export interface ForwardOpenRequest {
+export interface ForwardSaveRequest {
     host_id: HostId;
     kind: ForwardKind;
     bind_port: number;
@@ -660,12 +663,13 @@ export interface ForwardOpenRequest {
     target_host: string;
     target_port: number;
     bind_host?: string | null;
+    auto_start?: boolean;
 }
 
-export interface ForwardOpenResponse {
+export interface ForwardSaveResponse {
     forward_id: string;
 }
 
 export interface ForwardListResponse {
-    forwards: ForwardSummary[];
+    forwards: ForwardSaved[];
 }

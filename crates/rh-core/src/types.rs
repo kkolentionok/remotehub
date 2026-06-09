@@ -12,7 +12,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::id::{CredentialId, GroupId, HostId};
+use crate::id::{CredentialId, ForwardId, GroupId, HostId};
 
 /// Network protocol used for a connection.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -39,6 +39,45 @@ impl Protocol {
         match self {
             Protocol::Ssh => "ssh",
             Protocol::Rdp => "rdp",
+        }
+    }
+}
+
+/// Direction of an SSH port forward (`ssh -L` / `-R` / `-D`). Lives here
+/// (not in `rh-ssh`) so both the session layer and storage can share it;
+/// `rh-ssh` re-exports it as `rh_ssh::ForwardKind`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ForwardKind {
+    /// `-L`: listen locally, tunnel to a host reachable from the remote side.
+    Local,
+    /// `-R`: the server listens, tunnel back to a host reachable from us.
+    Remote,
+    /// `-D`: local SOCKS5 proxy; per-connection target chosen by the client.
+    Dynamic,
+}
+
+impl ForwardKind {
+    /// Stable lowercase tag used in storage (`forwards.kind` column) and
+    /// matching the serde representation.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ForwardKind::Local => "local",
+            ForwardKind::Remote => "remote",
+            ForwardKind::Dynamic => "dynamic",
+        }
+    }
+
+    /// Parse the storage tag back into a kind. `None` for an unknown
+    /// string (treated as malformed at the storage boundary).
+    #[must_use]
+    pub fn from_tag(s: &str) -> Option<Self> {
+        match s {
+            "local" => Some(ForwardKind::Local),
+            "remote" => Some(ForwardKind::Remote),
+            "dynamic" => Some(ForwardKind::Dynamic),
+            _ => None,
         }
     }
 }
@@ -319,6 +358,26 @@ impl Credential {
     pub fn touch(&mut self) {
         self.updated_at = Utc::now();
     }
+}
+
+/// A persisted port-forward definition (Tools → Forwards). Bound to a
+/// saved SSH host (whose credentials + one-level ProxyJump the forward
+/// reuses). Field meaning depends on [`kind`](ForwardKind):
+/// * `Local`  — `bind_*` = local listen, `target_*` = host reachable from the remote.
+/// * `Remote` — `bind_*` = server listen, `target_*` = host reachable from us.
+/// * `Dynamic`— `bind_*` = local SOCKS5; `target_*` unused (per-connection).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedForward {
+    pub id: ForwardId,
+    pub host_id: HostId,
+    pub kind: ForwardKind,
+    pub bind_host: String,
+    pub bind_port: u16,
+    pub target_host: String,
+    pub target_port: u16,
+    /// Start this forward automatically when the app launches.
+    pub auto_start: bool,
+    pub created_at: DateTime<Utc>,
 }
 
 #[cfg(test)]

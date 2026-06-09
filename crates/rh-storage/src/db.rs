@@ -20,7 +20,7 @@ use rh_core::StorageError;
 /// Schema version this binary expects. Bumping this triggers either an
 /// incremental migration (when a path exists, e.g. v2 → v3) or, for any
 /// other mismatch, a drop-recreate in alpha mode.
-pub const CURRENT_SCHEMA_VERSION: u32 = 10;
+pub const CURRENT_SCHEMA_VERSION: u32 = 11;
 
 /// Embedded migration script for the current version.
 const V1_SQL: &str = include_str!("migrations/v1.sql");
@@ -86,6 +86,23 @@ CREATE TABLE sync_meta (\
     PRIMARY KEY (kind, id)\
 );";
 
+/// Incremental, data-preserving migration v10 → v11: `forwards` table —
+/// persisted port-forward definitions (Tools → Forwards). New table, no
+/// existing rows touched. `host_id` cascades on host delete.
+const MIGRATE_V10_TO_V11: &str = "\
+CREATE TABLE forwards (\
+    id           TEXT PRIMARY KEY NOT NULL,\
+    host_id      TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,\
+    kind         TEXT NOT NULL CHECK (kind IN ('local','remote','dynamic')),\
+    bind_host    TEXT NOT NULL,\
+    bind_port    INTEGER NOT NULL,\
+    target_host  TEXT NOT NULL DEFAULT '',\
+    target_port  INTEGER NOT NULL DEFAULT 0,\
+    auto_start   INTEGER NOT NULL DEFAULT 0,\
+    created_at   TEXT NOT NULL\
+);\
+CREATE INDEX idx_forwards_host ON forwards(host_id);";
+
 /// Ordered forward migrations `(from_version, sql)`. The runner applies
 /// every step whose `from_version >= existing` in sequence, so a DB any
 /// number of versions behind (as long as the chain is contiguous from
@@ -100,6 +117,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (7, MIGRATE_V7_TO_V8),
     (8, MIGRATE_V8_TO_V9),
     (9, MIGRATE_V9_TO_V10),
+    (10, MIGRATE_V10_TO_V11),
 ];
 
 /// What [`Db::open`] decided to do with the schema.

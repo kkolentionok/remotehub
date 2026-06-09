@@ -384,6 +384,55 @@
     background: var(--color-danger-bg);
     color: var(--color-danger);
 }
+/* auto-start toggle, lit when enabled */
+.fwAutoOn {
+    color: var(--color-accent);
+}
+.fwAutoOn:hover {
+    color: var(--color-accent);
+}
+/* read-only target host (the selected SSH host, for local forwards) */
+.fwTargetStatic {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 180px;
+    padding: 0 var(--space-2);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* tiny side hint in the forward form / row ("local", "server") */
+.fwSideLbl {
+    flex: 0 0 auto;
+    padding: 0 var(--space-1);
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-3);
+    white-space: nowrap;
+}
+/* cancel-edit button in the form */
+.fwCancel {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: var(--radius-sm);
+    color: var(--text-3);
+}
+.fwCancel:hover {
+    background: var(--color-subtle);
+    color: var(--text-1);
+}
+/* highlight the row currently being edited */
+.fwRowEditing {
+    box-shadow: inset 2px 0 0 0 var(--color-accent);
+}
 
 .placeholder {
     padding: 28px 14px;

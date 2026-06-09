@@ -1,10 +1,12 @@
 //! Registry + event bridge for live port forwards (Tools → Forwards).
 //!
-//! Mirrors the `SessionManager` shape but lighter: each forward is keyed
-//! by a generated string id, its `rh_ssh` event stream is pumped into the
-//! UI `Channel`, and the entry is evicted when the actor task exits. There
-//! is no output ring / reattach (a forward has no scrollback) — on a
-//! webview reload the UI simply re-`list()`s the live forwards.
+//! Holds only *running* forwards; the saved definitions live in the
+//! `ForwardStore`. Each running forward is keyed by its `ForwardId`
+//! (string), its `rh_ssh` event stream is pumped into the entry's live
+//! state and (when started from the UI) into a `Channel`, and the entry
+//! is evicted when the actor task exits. There is no scrollback — on a
+//! webview reload the UI simply re-`list()`s, reading live state via
+//! `state_of`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,17 +15,11 @@ use tauri::ipc::Channel;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-use rh_core::HostId;
-use rh_ssh::{ForwardEvent, ForwardHandle, ForwardSpec, ForwardState};
+use rh_ssh::{ForwardEvent, ForwardHandle, ForwardState};
 
-use crate::api::dto::ForwardSummaryDto;
-
-/// Live state of one forward held by the manager.
+/// Live state of one running forward held by the manager.
 struct Entry {
     handle: ForwardHandle,
-    host_id: HostId,
-    host_label: String,
-    spec: ForwardSpec,
     state: ForwardState,
     active: u32,
 }
@@ -39,24 +35,19 @@ impl ForwardManager {
     }
 
     /// Register a freshly spawned forward: start the event pump (actor →
-    /// entry state + UI channel) and the exit supervisor.
-    #[allow(clippy::too_many_arguments)]
+    /// entry state + optional UI channel) and the exit supervisor. The
+    /// channel is `None` for auto-started forwards (no UI listener yet);
+    /// the UI reads their state via `forward_list` polling instead.
     pub async fn register(
         &self,
         forward_id: String,
-        host_id: HostId,
-        host_label: String,
-        spec: ForwardSpec,
         handle: ForwardHandle,
         join: JoinHandle<()>,
         mut rx_events: tokio::sync::mpsc::UnboundedReceiver<ForwardEvent>,
-        channel: Channel<ForwardEvent>,
+        channel: Option<Channel<ForwardEvent>>,
     ) {
         let entry = Arc::new(Mutex::new(Entry {
             handle,
-            host_id,
-            host_label,
-            spec,
             state: ForwardState::Connecting,
             active: 0,
         }));
@@ -65,7 +56,8 @@ impl ForwardManager {
             .await
             .insert(forward_id.clone(), entry.clone());
 
-        // Event pump: mirror state into the entry, forward to the UI.
+        // Event pump: mirror state into the entry, forward to the UI if
+        // a channel was supplied.
         let pump = entry.clone();
         tokio::spawn(async move {
             while let Some(ev) = rx_events.recv().await {
@@ -78,7 +70,9 @@ impl ForwardManager {
                         ForwardEvent::Error { .. } => e.state = ForwardState::Error,
                     }
                 }
-                let _ = channel.send(ev);
+                if let Some(ch) = &channel {
+                    let _ = ch.send(ev);
+                }
             }
         });
 
@@ -103,21 +97,21 @@ impl ForwardManager {
         }
     }
 
-    /// Snapshot every live forward for `forward_list`.
-    pub async fn list(&self) -> Vec<ForwardSummaryDto> {
-        let reg = self.registry.lock().await;
-        let mut out = Vec::with_capacity(reg.len());
-        for (id, entry) in reg.iter() {
-            let e = entry.lock().await;
-            out.push(ForwardSummaryDto {
-                forward_id: id.clone(),
-                host_id: e.host_id.clone(),
-                host_label: e.host_label.clone(),
-                spec: e.spec.clone(),
-                state: e.state,
-                active: e.active,
-            });
+    /// Current `(state, active)` of a running forward, or `None` if it
+    /// isn't running.
+    pub async fn state_of(&self, forward_id: &str) -> Option<(ForwardState, u32)> {
+        let entry = self.registry.lock().await.get(forward_id).cloned();
+        match entry {
+            Some(e) => {
+                let e = e.lock().await;
+                Some((e.state, e.active))
+            }
+            None => None,
         }
-        out
+    }
+
+    /// Whether a forward is currently registered (running or starting).
+    pub async fn is_live(&self, forward_id: &str) -> bool {
+        self.registry.lock().await.contains_key(forward_id)
     }
 }

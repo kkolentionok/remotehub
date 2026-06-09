@@ -32,6 +32,7 @@
 
 pub mod credential_store;
 pub mod db;
+pub mod forward_store;
 pub mod group_store;
 pub mod host_store;
 pub mod keychain;
@@ -42,6 +43,7 @@ pub mod sync_meta_store;
 
 pub use credential_store::SqliteCredentialStore;
 pub use db::{Db, InitOutcome, CURRENT_SCHEMA_VERSION};
+pub use forward_store::SqliteForwardStore;
 pub use group_store::SqliteGroupStore;
 pub use host_store::SqliteHostStore;
 pub use keychain::{Keychain, MemoryKeychain, OsKeychain};

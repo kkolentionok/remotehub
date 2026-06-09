@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+    ArrowRight,
     ArrowRightLeft,
     ArrowUpRight,
     ChevronRight,
@@ -11,6 +12,7 @@ import {
     HardDrive,
     KeyRound,
     Lock,
+    Pencil,
     Play,
     Search,
     Server,
@@ -18,11 +20,13 @@ import {
     Square,
     Terminal,
     Trash2,
+    X,
+    Zap,
 } from "lucide-react";
 
 import { useT } from "../../i18n";
 import { credentials as credApi, forwards as forwardsApi, hosts as hostsApi } from "../../lib/ipc";
-import type { CredentialDto, CredentialKind, ForwardKind, ForwardSummary, HostDto } from "../../lib/types";
+import type { CredentialDto, CredentialKind, ForwardKind, ForwardSaved, HostDto } from "../../lib/types";
 import { formatApiError } from "../../lib/types";
 import { useCredentialsStore, useHostsStore, useSessionsStore, useUiStore } from "../../store";
 import { Combobox, type ComboboxOption } from "../ui/Combobox";
@@ -503,17 +507,21 @@ function ForwardsPane({ onToast }: { onToast: (s: string) => void }) {
         [sshHosts],
     );
 
-    const [list, setList] = useState<ForwardSummary[]>([]);
+    const [list, setList] = useState<ForwardSaved[]>([]);
     const [hostId, setHostId] = useState("");
     const [kind, setKind] = useState<ForwardKind>("local");
     const [bindHost, setBindHost] = useState("127.0.0.1");
     const [bindPort, setBindPort] = useState("");
-    const [targetHost, setTargetHost] = useState("");
+    const [targetHost, setTargetHost] = useState("127.0.0.1");
     const [targetPort, setTargetPort] = useState("");
     const [busy, setBusy] = useState(false);
+    // Edit mode: the id we're editing + the bits we must carry across the
+    // delete+recreate (auto-start flag, whether it was running so we can
+    // restart it). Editing = re-create with a fresh id; ids are opaque.
+    const [editId, setEditId] = useState<string | null>(null);
+    const [editAuto, setEditAuto] = useState(false);
+    const [editWasRunning, setEditWasRunning] = useState(false);
 
-    // Poll the live list (cheap; also recovers forwards that survived a
-    // webview reload, which have no live event channel anymore).
     const refresh = () => {
         void forwardsApi
             .list()
@@ -526,41 +534,78 @@ function ForwardsPane({ onToast }: { onToast: (s: string) => void }) {
         return () => window.clearInterval(iv);
     }, []);
 
+    const selHost = useMemo(() => sshHosts.find((h) => h.id === hostId), [sshHosts, hostId]);
+    const selHostName = selHost?.hostname ?? "";
+
     const bp = Number(bindPort);
     const tp = Number(targetPort);
     const isDyn = kind === "dynamic";
+    const isRemote = kind === "remote";
     const portOk = (n: number) => Number.isInteger(n) && n >= 1 && n <= 65535;
+    // Local: target is the selected host itself (non-empty once a host is
+    // picked). Remote: target is a local-side address the user types.
     const valid =
         hostId !== "" &&
         portOk(bp) &&
-        (isDyn || (targetHost.trim() !== "" && portOk(tp)));
+        (isDyn || (portOk(tp) && (!isRemote || targetHost.trim() !== "")));
 
-    const start = async () => {
+    // The effective target host sent to the backend:
+    //  - local  → the selected SSH host (reach the host / its network)
+    //  - remote → a local-side address (default 127.0.0.1), user-typed
+    //  - dynamic→ none
+    const effTargetHost = isDyn ? "" : isRemote ? targetHost.trim() : selHostName;
+
+    const resetForm = () => {
+        setEditId(null);
+        setEditAuto(false);
+        setEditWasRunning(false);
+        setBindHost("127.0.0.1");
+        setBindPort("");
+        setTargetHost("127.0.0.1");
+        setTargetPort("");
+    };
+
+    // Start a saved forward live, surfacing async bind/connect errors.
+    const run = async (fid: string) => {
+        try {
+            await forwardsApi.start(fid, (e) => {
+                if (e.kind === "error") onToast(e.message);
+                refresh();
+            });
+            refresh();
+        } catch (e: unknown) {
+            onToast(formatApiError(e));
+        }
+    };
+
+    // Save (create, or update via delete+recreate) then start as needed.
+    const submit = async () => {
         if (!valid || busy) return;
         setBusy(true);
         try {
-            await forwardsApi.open(
-                {
-                    host_id: hostId,
-                    kind,
-                    bind_host: bindHost.trim() || undefined,
-                    bind_port: bp,
-                    target_host: isDyn ? "" : targetHost.trim(),
-                    target_port: isDyn ? 0 : tp,
-                },
-                (e) => {
-                    // The actor binds/connects asynchronously, so failures
-                    // (e.g. a privileged/blocked local port) arrive here as an
-                    // error event — surface them instead of the row just
-                    // vanishing on the next refresh.
-                    if (e.kind === "error") onToast(e.message);
-                    refresh();
-                },
-            );
-            setBindPort("");
-            setTargetPort("");
-            onToast(t("tools.forwards.started"));
-            refresh();
+            const editing = editId !== null;
+            if (editing) {
+                // Drop the old definition (also stops it if running).
+                await forwardsApi.delete(editId);
+            }
+            const { forward_id } = await forwardsApi.save({
+                host_id: hostId,
+                kind,
+                bind_host: bindHost.trim() || undefined,
+                bind_port: bp,
+                target_host: effTargetHost,
+                target_port: isDyn ? 0 : tp,
+                auto_start: editing ? editAuto : false,
+            });
+            onToast(t(editing ? "tools.forwards.updated" : "tools.forwards.saved"));
+            // New forward: start it. Edited forward: only restart if it had
+            // been running before.
+            if (!editing || editWasRunning) {
+                await run(forward_id);
+            } else {
+                refresh();
+            }
+            resetForm();
         } catch (e: unknown) {
             onToast(formatApiError(e));
         } finally {
@@ -568,9 +613,26 @@ function ForwardsPane({ onToast }: { onToast: (s: string) => void }) {
         }
     };
 
+    // Load a saved forward into the form for editing.
+    const startEdit = (f: ForwardSaved) => {
+        setEditId(f.forward_id);
+        setEditAuto(f.auto_start);
+        setEditWasRunning(f.state === "listening" || f.state === "connecting");
+        setHostId(f.host_id);
+        setKind(f.spec.kind);
+        setBindHost(f.spec.bind_host || "127.0.0.1");
+        setBindPort(String(f.spec.bind_port));
+        if (f.spec.kind === "remote") {
+            setTargetHost(f.spec.target_host || "127.0.0.1");
+        } else {
+            setTargetHost("127.0.0.1");
+        }
+        setTargetPort(f.spec.kind === "dynamic" ? "" : String(f.spec.target_port));
+    };
+
     const stop = async (fid: string) => {
         try {
-            await forwardsApi.close(fid);
+            await forwardsApi.stop(fid);
             onToast(t("tools.forwards.stopped"));
             refresh();
         } catch (e: unknown) {
@@ -578,7 +640,28 @@ function ForwardsPane({ onToast }: { onToast: (s: string) => void }) {
         }
     };
 
-    const stateLabel = (s: ForwardSummary["state"]): string =>
+    const del = async (fid: string) => {
+        try {
+            await forwardsApi.delete(fid);
+            if (editId === fid) resetForm();
+            onToast(t("tools.forwards.deleted"));
+            refresh();
+        } catch (e: unknown) {
+            onToast(formatApiError(e));
+        }
+    };
+
+    const toggleAuto = async (fid: string, on: boolean) => {
+        try {
+            await forwardsApi.setAutoStart(fid, on);
+            refresh();
+        } catch (e: unknown) {
+            onToast(formatApiError(e));
+        }
+    };
+
+    // `null` state = saved but not running.
+    const stateLabel = (s: ForwardSaved["state"]): string =>
         t(
             (s === "listening"
                 ? "tools.forwards.state.listening"
@@ -586,18 +669,32 @@ function ForwardsPane({ onToast }: { onToast: (s: string) => void }) {
                   ? "tools.forwards.state.connecting"
                   : s === "error"
                     ? "tools.forwards.state.error"
-                    : "tools.forwards.state.closed") as Parameters<typeof t>[0],
+                    : s === "closed"
+                      ? "tools.forwards.state.closed"
+                      : "tools.forwards.state.stopped") as Parameters<typeof t>[0],
         );
-    const stateCls = (s: ForwardSummary["state"]): string => {
+    const stateCls = (s: ForwardSaved["state"]): string => {
         const c =
             s === "listening"
                 ? styles.fwOk
                 : s === "error"
                   ? styles.fwErr
-                  : s === "closed"
-                    ? styles.fwClosed
-                    : styles.fwConn;
+                  : s === "connecting"
+                    ? styles.fwConn
+                    : styles.fwClosed;
         return c ?? "";
+    };
+
+    // Human-readable "A → B" for a saved row, with side hints.
+    const rowFlow = (f: ForwardSaved): string => {
+        const s = f.spec;
+        if (s.kind === "dynamic") {
+            return `${t("tools.forwards.socksTag")} ${s.bind_host}:${s.bind_port}`;
+        }
+        if (s.kind === "remote") {
+            return `${t("tools.forwards.side.server")} ${s.bind_host}:${s.bind_port} → ${t("tools.forwards.side.local")} ${s.target_host}:${s.target_port}`;
+        }
+        return `${t("tools.forwards.side.local")} ${s.bind_host}:${s.bind_port} → ${s.target_host}:${s.target_port}`;
     };
 
     return (
@@ -636,17 +733,70 @@ function ForwardsPane({ onToast }: { onToast: (s: string) => void }) {
                         />
                     </div>
                     <ChevronRight size={15} className={styles.fwSep} />
-                    {!isDyn && (
+
+                    {/* LOCAL: listen locally → reach the selected host. */}
+                    {kind === "local" && (
                         <>
+                            <span className={styles.fwSideLbl}>{t("tools.forwards.side.local")}</span>
+                            <input
+                                className={styles.fwTarget}
+                                value={bindHost}
+                                onChange={(e) => setBindHost(e.target.value)}
+                                placeholder="127.0.0.1"
+                                spellCheck={false}
+                            />
+                            <span className={styles.fwColon}>:</span>
+                            <input
+                                className={styles.fwPort}
+                                value={bindPort}
+                                onChange={(e) => setBindPort(e.target.value.replace(/[^0-9]/g, ""))}
+                                placeholder={t("tools.forwards.localPort")}
+                                inputMode="numeric"
+                                spellCheck={false}
+                            />
+                            <ArrowRight size={15} className={styles.fwArrow} />
+                            <span className={styles.fwTargetStatic} title={selHostName}>
+                                {selHostName || t("tools.forwards.hostPlaceholder")}
+                            </span>
+                            <span className={styles.fwColon}>:</span>
+                            <input
+                                className={styles.fwPort}
+                                value={targetPort}
+                                onChange={(e) => setTargetPort(e.target.value.replace(/[^0-9]/g, ""))}
+                                placeholder={t("tools.forwards.targetPort")}
+                                inputMode="numeric"
+                                spellCheck={false}
+                            />
+                        </>
+                    )}
+
+                    {/* REMOTE: server listens → reach a local-side address. */}
+                    {kind === "remote" && (
+                        <>
+                            <span className={styles.fwSideLbl}>{t("tools.forwards.side.server")}</span>
+                            <input
+                                className={styles.fwTarget}
+                                value={bindHost}
+                                onChange={(e) => setBindHost(e.target.value)}
+                                placeholder="127.0.0.1"
+                                spellCheck={false}
+                            />
+                            <span className={styles.fwColon}>:</span>
+                            <input
+                                className={styles.fwPort}
+                                value={bindPort}
+                                onChange={(e) => setBindPort(e.target.value.replace(/[^0-9]/g, ""))}
+                                placeholder={t("tools.forwards.remotePort")}
+                                inputMode="numeric"
+                                spellCheck={false}
+                            />
+                            <ArrowRight size={15} className={styles.fwArrow} />
+                            <span className={styles.fwSideLbl}>{t("tools.forwards.side.local")}</span>
                             <input
                                 className={styles.fwTarget}
                                 value={targetHost}
                                 onChange={(e) => setTargetHost(e.target.value)}
-                                placeholder={t(
-                                    kind === "remote"
-                                        ? "tools.forwards.localHost"
-                                        : "tools.forwards.remoteHost",
-                                )}
+                                placeholder="127.0.0.1"
                                 spellCheck={false}
                             />
                             <span className={styles.fwColon}>:</span>
@@ -658,42 +808,50 @@ function ForwardsPane({ onToast }: { onToast: (s: string) => void }) {
                                 inputMode="numeric"
                                 spellCheck={false}
                             />
-                            <ArrowRightLeft size={15} className={styles.fwArrow} />
                         </>
                     )}
-                    {isDyn && <span className={styles.fwDyn}>{t("tools.forwards.socksTag")}</span>}
-                    <input
-                        className={styles.fwTarget}
-                        value={bindHost}
-                        onChange={(e) => setBindHost(e.target.value)}
-                        placeholder={t(
-                            kind === "remote"
-                                ? "tools.forwards.serverHost"
-                                : "tools.forwards.localHost",
-                        )}
-                        spellCheck={false}
-                    />
-                    <span className={styles.fwColon}>:</span>
-                    <input
-                        className={styles.fwPort}
-                        value={bindPort}
-                        onChange={(e) => setBindPort(e.target.value.replace(/[^0-9]/g, ""))}
-                        placeholder={t(
-                            kind === "remote"
-                                ? "tools.forwards.remotePort"
-                                : "tools.forwards.localPort",
-                        )}
-                        inputMode="numeric"
-                        spellCheck={false}
-                    />
+
+                    {/* DYNAMIC: local SOCKS5 proxy, no fixed target. */}
+                    {kind === "dynamic" && (
+                        <>
+                            <span className={styles.fwDyn}>{t("tools.forwards.socksTag")}</span>
+                            <input
+                                className={styles.fwTarget}
+                                value={bindHost}
+                                onChange={(e) => setBindHost(e.target.value)}
+                                placeholder="127.0.0.1"
+                                spellCheck={false}
+                            />
+                            <span className={styles.fwColon}>:</span>
+                            <input
+                                className={styles.fwPort}
+                                value={bindPort}
+                                onChange={(e) => setBindPort(e.target.value.replace(/[^0-9]/g, ""))}
+                                placeholder={t("tools.forwards.localPort")}
+                                inputMode="numeric"
+                                spellCheck={false}
+                            />
+                        </>
+                    )}
+
+                    {editId !== null && (
+                        <button
+                            type="button"
+                            className={styles.fwCancel}
+                            title={t("tools.forwards.cancel")}
+                            onClick={resetForm}
+                        >
+                            <X size={14} />
+                        </button>
+                    )}
                     <button
                         type="button"
                         className={styles.fwStart}
                         disabled={!valid || busy}
-                        onClick={() => void start()}
+                        onClick={() => void submit()}
                     >
                         <Play size={14} />
-                        {t("tools.forwards.start")}
+                        {t(editId !== null ? "tools.forwards.save" : "tools.forwards.add")}
                     </button>
                 </div>
             </div>
@@ -708,7 +866,10 @@ function ForwardsPane({ onToast }: { onToast: (s: string) => void }) {
                 ) : (
                     <div className={styles.klist}>
                         {list.map((f) => (
-                            <div key={f.forward_id} className={`${styles.krow} ${styles.fwRow}`}>
+                            <div
+                                key={f.forward_id}
+                                className={`${styles.krow} ${styles.fwRow} ${editId === f.forward_id ? styles.fwRowEditing : ""}`}
+                            >
                                 <ArrowRightLeft size={16} className={styles.krowIc} />
                                 <div className={styles.krowMain}>
                                     <div className={styles.krowNm}>
@@ -721,11 +882,7 @@ function ForwardsPane({ onToast }: { onToast: (s: string) => void }) {
                                             )}
                                         </span>
                                     </div>
-                                    <div className={styles.krowSub}>
-                                        {f.spec.kind === "dynamic"
-                                            ? `${t("tools.forwards.socksTag")} ${f.spec.bind_host}:${f.spec.bind_port}`
-                                            : `${f.spec.target_host}:${f.spec.target_port} ⇄ ${f.spec.bind_host}:${f.spec.bind_port}`}
-                                    </div>
+                                    <div className={styles.krowSub}>{rowFlow(f)}</div>
                                 </div>
                                 <span className={`${styles.fwState} ${stateCls(f.state)}`}>
                                     {stateLabel(f.state)}
@@ -738,11 +895,46 @@ function ForwardsPane({ onToast }: { onToast: (s: string) => void }) {
                                 <div className={styles.krowAct}>
                                     <button
                                         type="button"
-                                        className={styles.actBtnDanger}
-                                        title={t("tools.forwards.stop")}
-                                        onClick={() => void stop(f.forward_id)}
+                                        className={styles.actBtn}
+                                        title={t("tools.forwards.edit")}
+                                        onClick={() => startEdit(f)}
                                     >
-                                        <Square size={15} />
+                                        <Pencil size={15} />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className={`${styles.actBtn} ${f.auto_start ? styles.fwAutoOn : ""}`}
+                                        title={t("tools.forwards.autoStart")}
+                                        onClick={() => void toggleAuto(f.forward_id, !f.auto_start)}
+                                    >
+                                        <Zap size={15} />
+                                    </button>
+                                    {f.state === "listening" || f.state === "connecting" ? (
+                                        <button
+                                            type="button"
+                                            className={styles.actBtn}
+                                            title={t("tools.forwards.stop")}
+                                            onClick={() => void stop(f.forward_id)}
+                                        >
+                                            <Square size={15} />
+                                        </button>
+                                    ) : (
+                                        <button
+                                            type="button"
+                                            className={styles.actBtn}
+                                            title={t("tools.forwards.run")}
+                                            onClick={() => void run(f.forward_id)}
+                                        >
+                                            <Play size={15} />
+                                        </button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        className={styles.actBtnDanger}
+                                        title={t("tools.forwards.delete")}
+                                        onClick={() => void del(f.forward_id)}
+                                    >
+                                        <Trash2 size={15} />
                                     </button>
                                 </div>
                             </div>

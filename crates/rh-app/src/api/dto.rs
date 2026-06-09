@@ -14,7 +14,8 @@
 use serde::{Deserialize, Serialize};
 
 use rh_core::{
-    Credential, CredentialId, CredentialKind, EnvVar, GroupId, Host, HostGroup, HostId, Protocol,
+    Credential, CredentialId, CredentialKind, EnvVar, ForwardId, GroupId, Host, HostGroup, HostId,
+    Protocol,
 };
 use rh_ssh::{ForwardKind, ForwardSpec, ForwardState};
 
@@ -974,12 +975,12 @@ mod tests {
 /// * `dynamic`— local SOCKS5 proxy on `bind_host:bind_port`; target is
 ///   chosen per-connection (so `target_*` are ignored).
 ///
-/// `bind_host` defaults to `127.0.0.1`. For backward compatibility `kind`
-/// defaults to `local`, and `target_*` default to empty/0 (required for
-/// `local`/`remote`, unused for `dynamic`).
+/// Persist a forward definition (does not start it). `bind_host` defaults
+/// to `127.0.0.1`; `kind` defaults to `local`; `target_*` are required for
+/// `local`/`remote`, unused for `dynamic`.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ForwardOpenRequest {
+pub struct ForwardSaveRequest {
     pub host_id: HostId,
     #[serde(default = "default_forward_kind")]
     pub kind: ForwardKind,
@@ -990,6 +991,8 @@ pub struct ForwardOpenRequest {
     pub target_port: u16,
     #[serde(default)]
     pub bind_host: Option<String>,
+    #[serde(default)]
+    pub auto_start: bool,
 }
 
 fn default_forward_kind() -> ForwardKind {
@@ -997,28 +1000,38 @@ fn default_forward_kind() -> ForwardKind {
 }
 
 #[derive(Debug, Serialize)]
-pub struct ForwardOpenResponse {
-    pub forward_id: String,
+pub struct ForwardSaveResponse {
+    pub forward_id: ForwardId,
+}
+
+/// Reference a saved forward by id (start / stop / delete).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForwardRefRequest {
+    pub forward_id: ForwardId,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ForwardCloseRequest {
-    pub forward_id: String,
+pub struct ForwardAutoStartRequest {
+    pub forward_id: ForwardId,
+    pub auto_start: bool,
 }
 
-/// One live forward, for `forward_list`.
+/// One saved forward annotated with its current live state, for
+/// `forward_list`. `state` is `None` when the forward isn't running.
 #[derive(Debug, Clone, Serialize)]
-pub struct ForwardSummaryDto {
-    pub forward_id: String,
+pub struct ForwardSavedDto {
+    pub forward_id: ForwardId,
     pub host_id: HostId,
     pub host_label: String,
     pub spec: ForwardSpec,
-    pub state: ForwardState,
+    pub auto_start: bool,
+    pub state: Option<ForwardState>,
     pub active: u32,
 }
 
 #[derive(Debug, Serialize)]
 pub struct ForwardListResponse {
-    pub forwards: Vec<ForwardSummaryDto>,
+    pub forwards: Vec<ForwardSavedDto>,
 }

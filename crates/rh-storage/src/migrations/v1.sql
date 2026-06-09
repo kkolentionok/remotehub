@@ -24,7 +24,7 @@ CREATE TABLE schema_meta (
     value   TEXT NOT NULL
 );
 
-INSERT INTO schema_meta (key, value) VALUES ('version', '10');
+INSERT INTO schema_meta (key, value) VALUES ('version', '11');
 
 -- ---------------------------------------------------------------------
 -- Host groups (hierarchical folders).
@@ -150,3 +150,22 @@ CREATE TABLE sync_meta (
     deleted     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (kind, id)
 );
+
+-- ---------------------------------------------------------------------
+-- Saved port-forward definitions (Tools → Forwards). Definition only —
+-- credentials are resolved from the host at start time. Running
+-- instances are in-memory in the app layer. host_id cascades on delete.
+-- ---------------------------------------------------------------------
+CREATE TABLE forwards (
+    id           TEXT PRIMARY KEY NOT NULL,
+    host_id      TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    kind         TEXT NOT NULL CHECK (kind IN ('local','remote','dynamic')),
+    bind_host    TEXT NOT NULL,
+    bind_port    INTEGER NOT NULL,
+    target_host  TEXT NOT NULL DEFAULT '',
+    target_port  INTEGER NOT NULL DEFAULT 0,
+    auto_start   INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL
+);
+
+CREATE INDEX idx_forwards_host ON forwards(host_id);

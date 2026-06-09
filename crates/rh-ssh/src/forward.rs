@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Notify};
@@ -39,17 +39,9 @@ use crate::{JumpParams, RevealedCredential, SshSessionEvent};
 
 type FwdChannel = russh::Channel<russh::client::Msg>;
 
-/// Which direction a forward runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ForwardKind {
-    /// `ssh -L`: listen locally, tunnel to `target` reachable from the remote.
-    Local,
-    /// `ssh -R`: server listens, tunnel back to `target` reachable from us.
-    Remote,
-    /// `ssh -D`: local SOCKS5 proxy; per-connection target chosen by the client.
-    Dynamic,
-}
+/// Direction of a forward. Defined in `rh-core` (shared with storage);
+/// re-exported here so existing `rh_ssh::ForwardKind` paths keep working.
+pub use rh_core::ForwardKind;
 
 /// A forward's binding + target description (serialized to the UI).
 #[derive(Debug, Clone, Serialize)]

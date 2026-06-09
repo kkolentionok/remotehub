@@ -62,8 +62,8 @@ import type {
     SyncConfigResponse,
     SyncStatus,
     ForwardEvent,
-    ForwardOpenRequest,
-    ForwardOpenResponse,
+    ForwardSaveRequest,
+    ForwardSaveResponse,
     ForwardListResponse,
 } from "./types";
 import {
@@ -534,22 +534,37 @@ export const app = {
 };
 
 // =====================================================================
-// Port forwarding (Tools → Forwards, slice 1: local `-L`)
+// Port forwarding (Tools → Forwards): persisted -L / -R / -D
 // =====================================================================
+// NOTE: `call(name, x)` sends `invoke(name, { req: x })`. So pass the
+// payload object itself — NOT `{ req }` (that would double-wrap).
 
 export const forwards = {
-    /** Open a local forward. Emits a `ForwardEvent` stream over a Channel. */
-    open: (
-        req: ForwardOpenRequest,
-        onEvent: (e: ForwardEvent) => void,
-    ): Promise<ForwardOpenResponse> => {
+    /** Persist a forward definition (does not start it). */
+    save: (req: ForwardSaveRequest): Promise<ForwardSaveResponse> =>
+        call("forward_save", req),
+
+    /** Start a saved forward; emits a `ForwardEvent` stream over a Channel. */
+    start: (forwardId: string, onEvent: (e: ForwardEvent) => void): Promise<void> => {
         const channel = new Channel<ForwardEvent>();
         channel.onmessage = onEvent;
-        return invoke<ForwardOpenResponse>("forward_open", { req, onEvent: channel });
+        return invoke<void>("forward_start", {
+            req: { forward_id: forwardId },
+            onEvent: channel,
+        });
     },
 
-    close: (forwardId: string): Promise<void> =>
-        call("forward_close", { forward_id: forwardId }),
+    /** Stop a running forward (keeps the saved definition). */
+    stop: (forwardId: string): Promise<void> =>
+        call("forward_stop", { forward_id: forwardId }),
+
+    /** Stop (if running) and delete the saved definition. */
+    delete: (forwardId: string): Promise<void> =>
+        call("forward_delete", { forward_id: forwardId }),
+
+    /** Toggle auto-start-on-launch. */
+    setAutoStart: (forwardId: string, autoStart: boolean): Promise<void> =>
+        call("forward_set_auto_start", { forward_id: forwardId, auto_start: autoStart }),
 
     list: (): Promise<ForwardListResponse> => call("forward_list"),
 };

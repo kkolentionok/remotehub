@@ -15,10 +15,10 @@
 use async_trait::async_trait;
 
 use crate::error::{SecretError, StorageError};
-use crate::id::{CredentialId, GroupId, HostId};
+use crate::id::{CredentialId, ForwardId, GroupId, HostId};
 use crate::secret::{RevealedSecret, SecretValue};
 use crate::settings::Settings;
-use crate::types::{Credential, Host, HostGroup, Protocol};
+use crate::types::{Credential, Host, HostGroup, Protocol, SavedForward};
 
 /// Filter passed to [`HostStore::list`]. All fields are optional; `None`
 /// means "don't filter on this dimension". Combining multiple fields
@@ -309,4 +309,28 @@ pub trait SyncMetaStore: Send + Sync {
     /// replace-import wipe so stale stamps for now-deleted entities can't
     /// resurface in the next snapshot.
     async fn clear_all(&self) -> Result<(), StorageError>;
+}
+
+/// Persistence for saved port-forward definitions (Tools → Forwards).
+///
+/// Stores only the *definition* (which host to tunnel through + bind /
+/// target / kind + auto-start). Running instances live in memory in the
+/// app layer's forward manager; starting a saved forward resolves the
+/// host's credentials at start time (secrets are never stored here).
+#[async_trait]
+pub trait ForwardStore: Send + Sync {
+    /// Insert a new saved forward.
+    async fn create(&self, f: &SavedForward) -> Result<(), StorageError>;
+
+    /// One saved forward by id.
+    async fn get(&self, id: &ForwardId) -> Result<SavedForward, StorageError>;
+
+    /// All saved forwards, newest first.
+    async fn list(&self) -> Result<Vec<SavedForward>, StorageError>;
+
+    /// Delete a saved forward.
+    async fn delete(&self, id: &ForwardId) -> Result<(), StorageError>;
+
+    /// Toggle the auto-start flag.
+    async fn set_auto_start(&self, id: &ForwardId, auto_start: bool) -> Result<(), StorageError>;
 }

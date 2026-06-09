@@ -9,8 +9,8 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use rh_core::{
-    CredentialStore, GroupStore, HostStore, KnownHostsStore, RdpCertStore, SettingsStore,
-    StorageError, SyncMetaStore,
+    CredentialStore, ForwardStore, GroupStore, HostStore, KnownHostsStore, RdpCertStore,
+    SettingsStore, StorageError, SyncMetaStore,
 };
 
 use tokio::sync::{Mutex, Notify};
@@ -49,6 +49,9 @@ pub struct AppState {
     pub sftp: SftpManager,
     /// Live SSH local port-forwards (Tools → Forwards). In-memory only.
     pub forwards: ForwardManager,
+    /// Persisted port-forward definitions (saved forwards survive restart;
+    /// running instances live in `forwards`).
+    pub forward_defs: Arc<dyn ForwardStore>,
     /// Live session count last reported by the UI (the session tabs the user
     /// can see). Read by the tray Quit handler to decide whether to ask for
     /// confirmation, and mirrored into the tray tooltip.
@@ -86,6 +89,7 @@ impl std::fmt::Debug for AppState {
             .field("local_sessions", &"<LocalPtyManager>")
             .field("sftp", &"<SftpManager>")
             .field("forwards", &"<ForwardManager>")
+            .field("forward_defs", &"<dyn ForwardStore>")
             .field("session_count", &self.session_count)
             .finish()
     }
@@ -104,6 +108,7 @@ impl AppState {
         rdp_certs: Arc<dyn RdpCertStore>,
         sync_meta: Arc<dyn SyncMetaStore>,
         sync: Arc<SyncClock>,
+        forward_defs: Arc<dyn ForwardStore>,
     ) -> Self {
         Self {
             hosts,
@@ -119,6 +124,7 @@ impl AppState {
             local_sessions: LocalPtyManager::new(),
             sftp: SftpManager::new(),
             forwards: ForwardManager::new(),
+            forward_defs,
             session_count: Arc::new(AtomicUsize::new(0)),
             sync_wake: Arc::new(Notify::new()),
             sync_inflight: Arc::new(Mutex::new(())),
