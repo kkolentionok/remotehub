@@ -1,0 +1,88 @@
+.root {
+    position: fixed;
+    z-index: 1000;
+}
+
+.menu {
+    min-width: 184px;
+    padding: var(--space-1);
+    background: var(--color-elevated);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-pop);
+    font-size: var(--text-sm);
+    color: var(--text-1);
+}
+
+.submenu {
+    position: absolute;
+    top: calc(var(--space-1) * -1);
+    left: 100%;
+    margin-left: 2px;
+    /* Nested flyout can be wider for long group names. */
+    max-width: 280px;
+}
+
+.item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+}
+
+.item:hover {
+    background: var(--color-subtle);
+}
+
+.danger {
+    color: var(--color-danger);
+}
+.danger:hover {
+    background: var(--color-danger-bg);
+}
+
+.disabled {
+    color: var(--text-3);
+    cursor: default;
+    pointer-events: none;
+}
+
+.icon {
+    flex: none;
+    width: 14px;
+    height: 14px;
+    color: var(--text-2);
+}
+.danger .icon {
+    color: var(--color-danger);
+}
+
+.label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.shortcut {
+    margin-left: var(--space-4);
+    color: var(--text-3);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+}
+
+.chev {
+    flex: none;
+    margin-left: var(--space-2);
+    color: var(--text-3);
+}
+
+.sep {
+    height: 1px;
+    margin: var(--space-1) 0;
+    background: var(--color-border);
+}

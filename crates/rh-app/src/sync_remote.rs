@@ -27,10 +27,27 @@ const CONFIG_FILE: &str = "sync-config.json";
 
 /// The managed sync service, used by default on a fresh install. Self-hosters
 /// override the endpoint in Settings → Account & Sync (or via this file).
-pub const DEFAULT_ENDPOINT: &str = "https://pingie.ru";
+///
+/// NOTE: this is the *direct* origin subdomain (Cloudflare grey-cloud / DNS-only),
+/// NOT the CDN-proxied apex `pingie.ru`. Cloudflare mangles/throttles the larger
+/// `GET /v1/vault` response body (intermittent `error decoding response body`) and
+/// large downloads, so all sync + update traffic must bypass the proxy.
+pub const DEFAULT_ENDPOINT: &str = "https://dl.pingie.ru";
 
 fn default_endpoint() -> String {
     DEFAULT_ENDPOINT.to_string()
+}
+
+/// Shared HTTP client with bounded timeouts. Without these, a stalled
+/// connection (e.g. a CDN swallowing the response body) leaves sync spinning
+/// forever; with them, the request fails and the engine reports a real error
+/// the UI can show and retry from.
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
 }
 
 /// Persisted, non-secret sync config (the bearer token lives in the keychain,
@@ -118,7 +135,7 @@ pub fn vault_key_clear() {
 
 /// `POST /v1/register`. Returns a human-readable error string on failure.
 pub async fn server_register(endpoint: &str, email: &str, password: &str) -> Result<(), String> {
-    let resp = reqwest::Client::new()
+    let resp = http_client()
         .post(format!("{endpoint}/v1/register"))
         .json(&serde_json::json!({ "email": email, "password": password }))
         .send()
@@ -135,7 +152,7 @@ pub async fn server_register(endpoint: &str, email: &str, password: &str) -> Res
 
 /// `POST /v1/login` → bearer token.
 pub async fn server_login(endpoint: &str, email: &str, password: &str) -> Result<String, String> {
-    let resp = reqwest::Client::new()
+    let resp = http_client()
         .post(format!("{endpoint}/v1/login"))
         .json(&serde_json::json!({ "email": email, "password": password }))
         .send()
@@ -156,7 +173,7 @@ pub async fn server_login(endpoint: &str, email: &str, password: &str) -> Result
 
 /// `GET /v1/me` → the account's email (for "signed in as …" after OAuth).
 pub async fn server_me(endpoint: &str, token: &str) -> Result<String, String> {
-    let resp = reqwest::Client::new()
+    let resp = http_client()
         .get(format!("{endpoint}/v1/me"))
         .bearer_auth(token)
         .send()
@@ -267,7 +284,7 @@ pub struct ServerRemote {
 impl ServerRemote {
     pub fn new(base_url: String, token: String) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: http_client(),
             base_url,
             token,
         }

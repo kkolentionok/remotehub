@@ -1,10 +1,15 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
     ChevronDown,
     ChevronRight,
+    Copy,
+    Folder,
+    FolderInput,
     FolderPlus,
+    FolderX,
     KeyRound,
     Pencil,
+    Plug,
     Plus,
     Settings,
 } from "lucide-react";
@@ -18,9 +23,11 @@ import {
     useSessionsStore,
     useUiStore,
 } from "../../store";
+import { credentials as credentialsApi, hosts as hostsApi } from "../../lib/ipc";
 import type { GroupId, HostDto, HostGroupDto } from "../../lib/types";
 import { HostIcon } from "../host/HostIcon";
 import { Button } from "../ui/Button";
+import { ContextMenu, type MenuItem } from "../ui/ContextMenu";
 import { ProtocolBadge } from "../ui/ProtocolBadge";
 import styles from "./Sidebar.module.css";
 
@@ -261,6 +268,45 @@ function UngroupedNode({
     );
 }
 
+/**
+ * Create a copy of `host` (same name, all fields pre-filled) as a real host,
+ * then open it selected so the user can tweak it. Mirrors the normal create
+ * path (default credential passed to host_create); extra linked credentials
+ * are re-linked explicitly.
+ */
+async function duplicateHost(host: HostDto) {
+    try {
+        const full = await hostsApi.get(host.id);
+        const { id: newId } = await hostsApi.create({
+            name: full.name,
+            display_name: full.display_name,
+            group_id: full.group_id,
+            protocol: full.protocol,
+            hostname: full.hostname,
+            port: full.port,
+            username: full.username,
+            tags: full.tags,
+            color: full.color,
+            notes: full.notes,
+            startup_command: full.startup_command,
+            env_vars: full.env_vars,
+            default_credential_id: full.default_credential_id,
+            jump_host_id: full.jump_host_id,
+            agent_forwarding: full.agent_forwarding,
+            favorite: false,
+        });
+        for (const cid of full.credential_ids) {
+            if (cid !== full.default_credential_id) {
+                await credentialsApi.linkHost({ host_id: newId, credential_id: cid });
+            }
+        }
+        await useHostsStore.getState().load();
+        useUiStore.getState().selectHost(newId);
+    } catch (e) {
+        console.error("duplicate host failed:", e);
+    }
+}
+
 function HostRow({
     host,
     guardNavigation,
@@ -270,8 +316,74 @@ function HostRow({
 }) {
     const selectedId = useUiStore((s) => s.selectedHostId);
     const selectHost = useUiStore((s) => s.selectHost);
+    const groups = useGroupsStore((s) => s.items);
     const { t } = useT();
     const isSelected = selectedId === host.id;
+    const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+
+    const moveHost = useCallback(
+        (groupId: GroupId | null) => {
+            void hostsApi
+                .update({ id: host.id, group_id: groupId })
+                .then(() => useHostsStore.getState().load())
+                .catch((e) => console.error("move host failed:", e));
+        },
+        [host.id],
+    );
+
+    // Move-to-folder submenu: top-level groups (the ones shown in the tree)
+    // plus "No group". The host's current location is disabled.
+    const topGroups = groups.filter((g) => !g.parent_id);
+    const moveChildren: MenuItem[] = [
+        {
+            id: "grp-none",
+            label: t("host.menu.noGroup"),
+            icon: FolderX,
+            disabled: host.group_id === null,
+            onSelect: () => moveHost(null),
+        },
+        ...(topGroups.length > 0
+            ? ([{ id: "grp-sep", separator: true }] as MenuItem[])
+            : []),
+        ...topGroups.map(
+            (g): MenuItem => ({
+                id: `grp-${g.id}`,
+                label: g.name,
+                icon: Folder,
+                disabled: host.group_id === g.id,
+                onSelect: () => moveHost(g.id),
+            }),
+        ),
+    ];
+
+    const items: MenuItem[] = [
+        {
+            id: "connect",
+            label: t("host.menu.connect"),
+            icon: Plug,
+            onSelect: () => void useSessionsStore.getState().open(host),
+        },
+        {
+            id: "edit",
+            label: t("host.menu.edit"),
+            icon: Pencil,
+            onSelect: () => guardNavigation(() => selectHost(host.id)),
+        },
+        {
+            id: "duplicate",
+            label: t("host.menu.duplicate"),
+            icon: Copy,
+            onSelect: () => guardNavigation(() => void duplicateHost(host)),
+        },
+        { id: "sep", separator: true },
+        {
+            id: "move",
+            label: t("host.menu.move"),
+            icon: FolderInput,
+            children: moveChildren,
+        },
+    ];
+
     return (
         <li>
             <button
@@ -282,6 +394,11 @@ function HostRow({
                         void useSessionsStore.getState().open(host);
                     }
                 }}
+                onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setMenu({ x: e.clientX, y: e.clientY });
+                }}
                 title={host.protocol === "ssh" ? t("host.doubleClickConnect") : undefined}
                 type="button"
             >
@@ -289,6 +406,14 @@ function HostRow({
                 <span className={styles.hostName}>{host.name}</span>
                 <ProtocolBadge protocol={host.protocol} size="sm" />
             </button>
+            {menu && (
+                <ContextMenu
+                    x={menu.x}
+                    y={menu.y}
+                    items={items}
+                    onClose={() => setMenu(null)}
+                />
+            )}
         </li>
     );
 }

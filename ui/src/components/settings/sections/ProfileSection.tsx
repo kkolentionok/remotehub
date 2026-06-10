@@ -49,6 +49,8 @@ export function ProfileSection() {
     const [authBusy, setAuthBusy] = useState<"login" | "register" | "yandex" | null>(null);
     const [authError, setAuthError] = useState<string | null>(null);
     const [confirmLogout, setConfirmLogout] = useState(false);
+    const [logoutBusy, setLogoutBusy] = useState(false);
+    const [logoutError, setLogoutError] = useState<string | null>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -123,9 +125,19 @@ export function ProfileSection() {
     }
 
     async function doLogout() {
-        await sync.logout();
-        setConfirmLogout(false);
-        await refresh();
+        setLogoutError(null);
+        setLogoutBusy(true);
+        try {
+            await sync.logout();
+            setConfirmLogout(false);
+            await refresh();
+        } catch {
+            // The backend refuses to wipe until local data is confirmed on the
+            // server; surface that instead of leaving the user in limbo.
+            setLogoutError(t("settings.sync.logoutBlocked"));
+        } finally {
+            setLogoutBusy(false);
+        }
     }
 
     if (loading) {
@@ -181,19 +193,27 @@ export function ProfileSection() {
                     {confirmLogout && (
                         <div className={s.logoutPlate}>
                             <AlertCircle size={14} />
-                            <span>{t("settings.sync.logoutWarn")}</span>
+                            <span>{logoutError ?? t("settings.sync.logoutWarn")}</span>
                             <div className={s.logoutActions}>
                                 <button
                                     className={`${s.btn} ${s.btnGhost} ${s.btnSm}`}
-                                    onClick={() => setConfirmLogout(false)}
+                                    disabled={logoutBusy}
+                                    onClick={() => {
+                                        setConfirmLogout(false);
+                                        setLogoutError(null);
+                                    }}
                                 >
                                     {t("common.cancel")}
                                 </button>
                                 <button
                                     className={`${s.btn} ${s.btnDanger} ${s.btnSm}`}
+                                    disabled={logoutBusy}
                                     onClick={() => void doLogout()}
                                 >
-                                    <LogOut size={15} /> {t("settings.sync.logout")}
+                                    <LogOut size={15} />{" "}
+                                    {logoutBusy
+                                        ? t("settings.sync.loggingOut")
+                                        : t("settings.sync.logout")}
                                 </button>
                             </div>
                         </div>

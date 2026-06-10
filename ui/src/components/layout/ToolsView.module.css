@@ -384,55 +384,7 @@
     background: var(--color-danger-bg);
     color: var(--color-danger);
 }
-/* auto-start toggle, lit when enabled */
-.fwAutoOn {
-    color: var(--color-accent);
-}
-.fwAutoOn:hover {
-    color: var(--color-accent);
-}
-/* read-only target host (the selected SSH host, for local forwards) */
-.fwTargetStatic {
-    display: inline-flex;
-    align-items: center;
-    min-width: 0;
-    max-width: 180px;
-    padding: 0 var(--space-2);
-    font-family: var(--font-mono);
-    font-size: var(--text-sm);
-    color: var(--text-2);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-/* tiny side hint in the forward form / row ("local", "server") */
-.fwSideLbl {
-    flex: 0 0 auto;
-    padding: 0 var(--space-1);
-    font-size: var(--text-xs);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-3);
-    white-space: nowrap;
-}
-/* cancel-edit button in the form */
-.fwCancel {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 30px;
-    border-radius: var(--radius-sm);
-    color: var(--text-3);
-}
-.fwCancel:hover {
-    background: var(--color-subtle);
-    color: var(--text-1);
-}
-/* highlight the row currently being edited */
-.fwRowEditing {
-    box-shadow: inset 2px 0 0 0 var(--color-accent);
-}
+
 
 .placeholder {
     padding: 28px 14px;
@@ -633,166 +585,504 @@
 }
 
 /* ── Port forwarding (Forwards pane) ─────────────────────────────── */
-.fwForm {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    margin-top: 14px;
-}
-/* segmented Local / Remote / Dynamic selector */
-.fwKind {
-    display: inline-flex;
-    flex: 0 0 auto;
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-md);
-    overflow: hidden;
-}
-.fwKindBtn {
-    height: 36px;
-    padding: 0 12px;
-    background: var(--color-surface);
+/* small "N active · M total" badge next to the title */
+.pfCount {
+    font-size: var(--text-xs);
     color: var(--text-3);
-    font-size: 13px;
-    font-family: inherit;
-    border-right: 1px solid var(--color-border);
-    transition: color 0.12s, background 0.12s;
-}
-.fwKindBtn:last-child {
-    border-right: none;
-}
-.fwKindBtn:hover {
-    color: var(--text-1);
     background: var(--color-subtle);
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    padding: 2px 10px;
+    white-space: nowrap;
 }
-.fwKindOn {
-    background: var(--color-accent);
-    color: var(--color-accent-fg);
+
+/* create block */
+.pfCard {
+    margin-top: var(--space-3);
+    padding: var(--space-4);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    overflow-x: auto;
 }
-.fwKindOn:hover {
-    background: var(--color-accent-hover);
-    color: var(--color-accent-fg);
+
+/* segment control + one-line description */
+.pfSegRow {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    flex-wrap: wrap;
 }
-/* "SOCKS5" tag shown in place of the target inputs for dynamic forwards */
-.fwDyn {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    color: var(--text-3);
-    padding: 0 4px;
+.pfSeg {
+    display: inline-flex;
+    gap: 2px;
+    padding: 3px;
+    background: var(--color-canvas);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
 }
-/* small kind tag next to the host label in a live row */
-.fwTag {
-    margin-left: 8px;
+.pfSegBtn {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    min-width: 96px;
+    padding: 5px 12px;
+    border-radius: var(--radius-md);
+    color: var(--text-2);
+    transition: background 0.12s, color 0.12s, box-shadow 0.12s;
+}
+.pfSegBtn:hover {
+    background: var(--color-subtle);
+    color: var(--text-1);
+}
+.pfSegOn,
+.pfSegOn:hover {
+    background: var(--color-accent-faint);
+    color: var(--text-1);
+    box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+.pfSegMain {
+    font-size: var(--text-sm);
+    font-weight: 500;
+}
+.pfSegSub {
     font-family: var(--font-mono);
     font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text-4);
-    border: 1px solid var(--color-border);
-    border-radius: var(--radius-sm);
-    padding: 1px 5px;
-    vertical-align: middle;
+    color: var(--text-3);
 }
-.fwHost {
-    flex: 1 1 200px;
-    min-width: 180px;
+.pfSegOn .pfSegSub {
+    color: var(--color-accent);
 }
-.fwSep {
-    color: var(--text-4);
-    flex: 0 0 auto;
+.pfDesc {
+    flex: 1 1 220px;
+    min-width: 200px;
+    font-size: var(--text-sm);
+    color: var(--text-2);
+    line-height: 1.4;
 }
-.fwColon {
-    color: var(--text-4);
+
+/* form row: numbered fields + animated connectors */
+.pfForm {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-4);
+    flex-wrap: nowrap;
 }
-.fwPort,
-.fwTarget {
-    height: 36px;
-    background: var(--color-surface);
+.pfField {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    flex: none;
+}
+.pfHostField {
+    flex: 1 1 0;
+    min-width: 140px;
+}
+.pfFieldLbl {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--text-xs);
+    color: var(--text-2);
+    white-space: nowrap;
+}
+.pfNum {
+    display: inline-grid;
+    place-items: center;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    border: 1px solid var(--color-border-strong);
+    font-size: 9px;
+    color: var(--text-3);
+    flex: none;
+}
+.pfPortBox {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    width: 100%;
+    min-width: 96px;
+    height: 38px;
+    padding: 0 10px;
+    background: var(--color-canvas);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
-    padding: 0 10px;
-    color: var(--text-1);
-    font-size: 13px;
-    font-family: inherit;
-    outline: none;
+    cursor: text;
     transition: border-color 0.12s;
 }
-.fwPort {
-    width: 76px;
-    font-family: var(--font-mono);
-}
-.fwTarget {
-    width: 150px;
-}
-.fwPort:focus,
-.fwTarget:focus {
+.pfPortBox:focus-within {
     border-color: var(--color-accent);
 }
-.fwPort::placeholder,
-.fwTarget::placeholder {
-    color: var(--text-4);
-    font-family: inherit;
+.pfColon {
+    font-family: var(--font-mono);
+    font-size: var(--text-md);
+    color: var(--text-3);
+    flex: none;
 }
-.fwArrow {
-    color: var(--text-4);
-    flex: 0 0 auto;
+.pfPortInput {
+    flex: 1 1 auto;
+    min-width: 0;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-family: var(--font-mono);
+    font-size: var(--text-md);
+    color: var(--color-accent);
 }
-.fwStart {
+/* the box already shows focus via its accent border (:focus-within) — drop
+   the global input focus-visible ring so there's no double outline. */
+.pfPortInput:focus,
+.pfPortInput:focus-visible {
+    outline: none;
+}
+.pfPortInput::placeholder {
+    color: var(--text-3);
+}
+.pfHostWrap {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 38px;
+}
+.pfHostWrap > .pfHostCombo {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.pfHostIcon {
+    color: var(--text-3);
+    flex: none;
+}
+
+/* connector: dashed line with running dots (direction = traffic) */
+.pfConn {
+    position: relative;
+    flex: 0 0 46px;
+    height: 38px;
+}
+.pfConnLine {
+    position: absolute;
+    left: 2px;
+    right: 2px;
+    top: 50%;
+    border-top: 1px dashed var(--color-border-strong);
+}
+.pfDot {
+    position: absolute;
+    top: 50%;
+    width: 5px;
+    height: 5px;
+    margin-top: -2.5px;
+    border-radius: 50%;
+    background: var(--color-accent);
+    animation: pfRun 1.6s linear infinite;
+}
+.pfDot:nth-child(3) {
+    animation-delay: 0.53s;
+}
+.pfDot:nth-child(4) {
+    animation-delay: 1.06s;
+}
+@keyframes pfRun {
+    0% {
+        left: 2px;
+        opacity: 0;
+    }
+    15% {
+        opacity: 1;
+    }
+    85% {
+        opacity: 1;
+    }
+    100% {
+        left: calc(100% - 7px);
+        opacity: 0;
+    }
+}
+/* reverse (green) for -R: traffic returns to you */
+.pfConnRev .pfDot {
+    background: var(--color-success);
+    animation-name: pfRunRev;
+}
+@keyframes pfRunRev {
+    0% {
+        left: calc(100% - 7px);
+        opacity: 0;
+    }
+    15% {
+        opacity: 1;
+    }
+    85% {
+        opacity: 1;
+    }
+    100% {
+        left: 2px;
+        opacity: 0;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .pfDot {
+        animation: none;
+        opacity: 0.7;
+    }
+    .pfDot:nth-child(2) {
+        left: 18%;
+    }
+    .pfDot:nth-child(3) {
+        left: 50%;
+    }
+    .pfDot:nth-child(4) {
+        left: 82%;
+    }
+}
+
+.pfActions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: none;
+}
+.pfCreate {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    height: 36px;
-    padding: 0 14px;
+    height: 38px;
+    padding: 0 16px;
     border-radius: var(--radius-md);
     background: var(--color-accent);
     color: var(--color-accent-fg);
-    font-size: 13px;
+    font-size: var(--text-sm);
     font-weight: 500;
     white-space: nowrap;
-    transition: opacity 0.12s;
+    transition: background 0.12s, opacity 0.12s;
 }
-.fwStart:hover {
+.pfCreate:hover {
     background: var(--color-accent-hover);
 }
-.fwStart:disabled {
-    opacity: 0.45;
+.pfCreate:disabled {
+    opacity: 0.4;
     cursor: default;
 }
-
-/* keep the Stop control visible — it's the primary action on a live row */
-.fwRow .krowAct {
-    opacity: 1;
+.pfCancel {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    border-radius: var(--radius-md);
+    color: var(--text-3);
+    border: 1px solid var(--color-border);
+}
+.pfCancel:hover {
+    background: var(--color-subtle);
+    color: var(--text-1);
+}
+/* auto-start-on-launch toggle in the form (icon-only, square) */
+.pfAuto {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    flex: none;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border);
+    background: var(--color-canvas);
+    color: var(--text-3);
+    transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+.pfAuto:hover {
+    color: var(--text-1);
+}
+.pfAutoOn,
+.pfAutoOn:hover {
+    color: var(--color-accent);
+    border-color: var(--color-accent);
+    background: var(--color-accent-faint);
+}
+/* read-only "this forward auto-starts" indicator in a list row */
+.pfAutoIcon {
+    display: inline-flex;
+    align-items: center;
+    color: var(--color-accent);
+    flex: none;
 }
 
-.fwState {
+/* saved forwards list */
+.pfList {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+.pfRow {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+}
+.pfRowEditing {
+    box-shadow: inset 2px 0 0 0 var(--color-accent);
+}
+.pfRowIcon {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    flex: none;
+    border-radius: var(--radius-md);
+    background: var(--color-subtle);
+    color: var(--text-3);
+}
+.pfMain {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.pfRoute {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+.pfChip {
     font-family: var(--font-mono);
-    font-size: 10.5px;
-    font-weight: 500;
-    padding: 3px 8px;
+    font-size: var(--text-sm);
+    color: var(--color-accent);
+    background: var(--color-accent-faint);
+    border: 1px solid rgba(76, 142, 255, 0.22);
     border-radius: var(--radius-sm);
-    letter-spacing: 0.02em;
+    padding: 2px 8px;
     white-space: nowrap;
-    justify-self: start;
 }
-.fwOk {
-    background: var(--color-success-bg);
-    color: var(--color-success);
+.pfChipMuted {
+    color: var(--text-2);
+    background: var(--color-subtle);
+    border-color: var(--color-border);
 }
-.fwConn {
-    background: rgba(230, 192, 123, 0.12);
-    color: var(--color-warn);
-}
-.fwErr {
-    background: var(--color-danger-bg);
-    color: var(--color-danger);
-}
-.fwClosed {
-    background: var(--color-elevated);
-    color: var(--text-4);
-}
-.fwActive {
-    font-size: 12px;
+.pfVia {
+    font-size: var(--text-xs);
     color: var(--text-3);
     white-space: nowrap;
-    justify-self: start;
+}
+.pfArrow {
+    color: var(--text-3);
+    flex: none;
+}
+.pfMeta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+}
+.pfTag {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 1px 5px;
+    white-space: nowrap;
+}
+.pfName {
+    font-size: var(--text-xs);
+    color: var(--text-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pfCopy {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--text-xs);
+    color: var(--text-3);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+    transition: color 0.12s, background 0.12s;
+}
+.pfCopy:hover {
+    color: var(--color-accent);
+    background: var(--color-subtle);
+}
+.pfStatus {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--text-xs);
+    color: var(--text-2);
+    white-space: nowrap;
+    flex: none;
+}
+.pfStatusDot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-3);
+    flex: none;
+}
+.pfOn {
+    color: var(--color-success);
+}
+.pfOn .pfStatusDot {
+    background: var(--color-success);
+    box-shadow: 0 0 6px rgba(74, 222, 128, 0.7);
+}
+.pfErr {
+    color: var(--color-danger);
+}
+.pfErr .pfStatusDot {
+    background: var(--color-danger);
+}
+.pfMetric {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--text-3);
+    text-align: right;
+    min-width: 60px;
+    flex: none;
+}
+.pfActs {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex: none;
+}
+/* on/off switch (start = on) */
+.pfSwitch {
+    position: relative;
+    width: 34px;
+    height: 19px;
+    flex: none;
+    border-radius: 999px;
+    background: var(--color-elevated);
+    border: 1px solid var(--color-border-strong);
+    transition: background 0.15s, border-color 0.15s;
+}
+.pfSwitch::after {
+    content: "";
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 0.15s;
+}
+.pfSwitchOn {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+}
+.pfSwitchOn::after {
+    transform: translateX(15px);
 }

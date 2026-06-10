@@ -34,7 +34,7 @@ export function PaneGroup({
     path?: ("a" | "b")[];
 }) {
     if (node.t === "leaf") {
-        return <PaneLeaf sessionKey={node.key} ctx={ctx} />;
+        return <PaneLeaf key={node.key} sessionKey={node.key} ctx={ctx} />;
     }
     return <Split node={node} ctx={ctx} path={path} />;
 }

@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { useT } from "../../i18n";
 import {
+    openSessionSearch,
     subscribeToBackendEvents,
     useCredentialsStore,
     useGroupsStore,
@@ -13,6 +14,7 @@ import {
 } from "../../store";
 import { leafKeys } from "../../lib/paneTree";
 import { app as appApi, sync as syncApi } from "../../lib/ipc";
+import { runUpdateCheck } from "../../lib/updater";
 import type { SyncStatus } from "../../lib/types";
 import { DialogHost } from "./DialogHost";
 import { FocusRail } from "../session/FocusRail";
@@ -22,6 +24,7 @@ import { PaneGroup } from "./PaneGroup";
 import { ShortcutsSheet } from "./ShortcutsSheet";
 import { TabBar } from "./TabBar";
 import { ToolsView } from "./ToolsView";
+import { UpdateBanner } from "./UpdateBanner";
 import styles from "./AppShell.module.css";
 
 /**
@@ -242,6 +245,49 @@ export function AppShell() {
         return () => window.removeEventListener("keydown", onKey, { capture: true });
     }, []);
 
+    // Ctrl/Cmd+F opens find-in-output for the active tab's focused terminal.
+    // Captured (like Ctrl+K) so it beats xterm's own key handling and the
+    // WebView's native find, and works while the terminal is focused. No-op
+    // unless a terminal (SSH / local, not RDP / SFTP) pane is focused.
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+            if (e.code !== "KeyF") return; // physical key — layout-independent
+            const st = useSessionsStore.getState();
+            const tab = st.tabs.find((tb) => tb.id === st.activeTabId);
+            if (!tab) return;
+            const key = tab.focusKey ?? tab.activePaneKey;
+            const sess = st.sessions.find((s) => s.key === key);
+            if (!sess || sess.protocol === "rdp" || sess.sftp) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            openSessionSearch(key);
+        };
+        window.addEventListener("keydown", onKey, { capture: true });
+        return () => window.removeEventListener("keydown", onKey, { capture: true });
+    }, []);
+
+    // Suppress the WebView's native right-click menu (Back / Reload / Inspect…)
+    // everywhere — it's meaningless in a desktop app. Components that want a
+    // real menu render their own <ContextMenu> from an onContextMenu handler;
+    // the terminal keeps its right-click-to-paste (its own listener still runs).
+    useEffect(() => {
+        const onCtx = (e: MouseEvent) => e.preventDefault();
+        document.addEventListener("contextmenu", onCtx);
+        // Middle-button (button 1) autoscroll puck is never wanted here, and
+        // it swallows the auxclick we use for "close tab" / "open in
+        // background". Cancel it app-wide in the capture phase (a React
+        // onMouseDown on the element is too late inside a scroll container).
+        const onMidDown = (e: MouseEvent) => {
+            if (e.button === 1) e.preventDefault();
+        };
+        document.addEventListener("mousedown", onMidDown, true);
+        return () => {
+            document.removeEventListener("contextmenu", onCtx);
+            document.removeEventListener("mousedown", onMidDown, true);
+        };
+    }, []);
+
     // `?` toggles the keyboard-shortcuts cheat sheet — but never while
     // typing in an input/textarea/contenteditable (incl. xterm's helper
     // textarea) or with a modifier held, so it can't hijack a real "?".
@@ -265,9 +311,17 @@ export function AppShell() {
         return () => window.removeEventListener("keydown", onKey);
     }, []);
 
+    // Silent update check on launch: if a newer version is published it
+    // downloads in the background and surfaces the restart banner. Quiet on
+    // failure (endpoint may be unreachable / not configured).
+    useEffect(() => {
+        void runUpdateCheck({ silent: true });
+    }, []);
+
     return (
         <div className={styles.shell} data-maximized={maximized || undefined}>
             <TabBar />
+            <UpdateBanner />
             <div className={styles.stage} onDragOver={onStageDragOver}>
                 <div
                     className={styles.pane}

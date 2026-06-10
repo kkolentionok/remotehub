@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Columns2, FolderOpen, HardDrive, Lock, Monitor, Plus, Server, Settings, Terminal, Users, Wrench, X } from "lucide-react";
+import { Check, ChevronDown, Columns2, Copy, FolderOpen, HardDrive, Lock, Monitor, PictureInPicture2, Plus, RefreshCw, Search, Server, Settings, Terminal, Users, Wrench, X } from "lucide-react";
 
 import { useT } from "../../i18n";
 import { sync } from "../../lib/ipc";
 import { leafKeys } from "../../lib/paneTree";
-import { useSessionsStore, useTransferBadgeStore, useUiStore } from "../../store";
+import { toggleSessionSearch, useSessionsStore, useTransferBadgeStore, useUiStore } from "../../store";
+import { ContextMenu, type MenuItem } from "../ui/ContextMenu";
 import { WindowControls } from "./WindowControls";
 import styles from "./TabBar.module.css";
 
@@ -28,6 +29,10 @@ export function TabBar() {
     const activeTabId = useSessionsStore((s) => s.activeTabId);
     const setActiveTab = useSessionsStore((s) => s.setActiveTab);
     const closeTab = useSessionsStore((s) => s.closeTab);
+    const closeOtherTabs = useSessionsStore((s) => s.closeOtherTabs);
+    const duplicateTab = useSessionsStore((s) => s.duplicateTab);
+    const reconnectTab = useSessionsStore((s) => s.reconnectTab);
+    const detachTermToWindow = useSessionsStore((s) => s.detachTermToWindow);
     const reorder = useSessionsStore((s) => s.reorder);
     const popOutSession = useSessionsStore((s) => s.popOutSession);
     const setDraggingSession = useSessionsStore((s) => s.setDraggingSession);
@@ -56,6 +61,10 @@ export function TabBar() {
     const paneDrag = dragging !== null && dragTabId === null;
 
     const [dragId, setDragId] = useState<string | null>(null);
+    // Right-click menu on a session tab.
+    const [tabMenu, setTabMenu] = useState<{ x: number; y: number; tabId: string } | null>(
+        null,
+    );
 
     // Horizontal-scrolling strip for session tabs (overflow when many).
     const scrollerRef = useRef<HTMLDivElement>(null);
@@ -105,6 +114,19 @@ export function TabBar() {
         setDragId(null);
         endDragStore();
     };
+
+    // The focused pane of the active tab — the magnifier searches it. Only a
+    // terminal (SSH / local shell, not RDP and not the SFTP browser) has a
+    // find-in-output box.
+    const activeTab = tabs.find((tb) => tb.id === activeTabId);
+    const focusedKey = activeTab ? (activeTab.focusKey ?? activeTab.activePaneKey) : null;
+    const focusedSession = focusedKey
+        ? sessions.find((s) => s.key === focusedKey)
+        : undefined;
+    const canSearch =
+        !!focusedSession &&
+        focusedSession.protocol !== "rdp" &&
+        !focusedSession.sftp;
 
     return (
         <div
@@ -265,6 +287,21 @@ export function TabBar() {
                         draggable
                         className={`${styles.sessionTab} ${shownTabId === tab.id ? styles.active : ""} ${dragging && shownTabId === tab.id ? styles.shown : ""} ${dragging && shownTabId !== tab.id ? styles.dimmed : ""} ${dragId === tab.id ? styles.dragging : ""}`}
                         onClick={() => setActiveTab(tab.id)}
+                        onAuxClick={(e) => {
+                            if (e.button === 1) {
+                                e.preventDefault();
+                                void closeTab(tab.id);
+                            }
+                        }}
+                        onMouseDown={(e) => {
+                            // Suppress the middle-click autoscroll puck.
+                            if (e.button === 1) e.preventDefault();
+                        }}
+                        onContextMenu={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setTabMenu({ x: e.clientX, y: e.clientY, tabId: tab.id });
+                        }}
                         onDragStart={(e) => {
                             setDragId(tab.id);
                             setDragTabId(tab.id);
@@ -349,8 +386,19 @@ export function TabBar() {
                 <Plus size={15} />
             </button>
 
-            {/* Draggable empty area, then settings + window controls. */}
+            {/* Draggable empty area, then search + settings + window controls. */}
             <div className={styles.drag} data-tauri-drag-region />
+            {canSearch && (
+                <button
+                    type="button"
+                    className={styles.gear}
+                    onClick={() => toggleSessionSearch(focusedKey)}
+                    title={t("terminal.search.title")}
+                    aria-label={t("terminal.search.title")}
+                >
+                    <Search size={15} />
+                </button>
+            )}
             <button
                 type="button"
                 className={styles.gear}
@@ -366,6 +414,66 @@ export function TabBar() {
                 <Settings size={16} />
             </button>
             <WindowControls />
+            {tabMenu && (
+                <ContextMenu
+                    x={tabMenu.x}
+                    y={tabMenu.y}
+                    onClose={() => setTabMenu(null)}
+                    items={
+                        ((): MenuItem[] => {
+                            const mt = tabs.find((tb) => tb.id === tabMenu.tabId);
+                            const ps = mt
+                                ? sessions.find((s) => s.key === mt.activePaneKey)
+                                : undefined;
+                            const canPopOut =
+                                !!ps &&
+                                ps.protocol !== "rdp" &&
+                                ps.state !== "closed" &&
+                                ps.state !== "failed";
+                            return [
+                                ...(canPopOut
+                                    ? ([
+                                          {
+                                              id: "popout",
+                                              label: t("session.popOut"),
+                                              icon: PictureInPicture2,
+                                              onSelect: () =>
+                                                  void detachTermToWindow(ps!.key),
+                                          },
+                                          { id: "sep0", separator: true },
+                                      ] as MenuItem[])
+                                    : []),
+                                {
+                                    id: "reconnect",
+                                    label: t("tab.menu.reconnect"),
+                                    icon: RefreshCw,
+                                    onSelect: () => void reconnectTab(tabMenu.tabId),
+                                },
+                                {
+                                    id: "dup",
+                                    label: t("tab.menu.duplicate"),
+                                    icon: Copy,
+                                    onSelect: () => duplicateTab(tabMenu.tabId),
+                                },
+                                { id: "sep", separator: true },
+                                {
+                                    id: "close-others",
+                                    label: t("tab.menu.closeOthers"),
+                                    icon: Columns2,
+                                    disabled: tabs.length < 2,
+                                    onSelect: () => void closeOtherTabs(tabMenu.tabId),
+                                },
+                                {
+                                    id: "close",
+                                    label: t("tab.menu.close"),
+                                    icon: X,
+                                    onSelect: () => void closeTab(tabMenu.tabId),
+                                },
+                            ];
+                        })()
+                    }
+                />
+            )}
         </div>
     );
 }

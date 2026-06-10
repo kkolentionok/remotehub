@@ -46,6 +46,8 @@ export function SessionView({
     const rejectHostKey = useSessionsStore((s) => s.rejectHostKey);
     const detachRdpToWindow = useSessionsStore((s) => s.detachRdpToWindow);
     const redockRdp = useSessionsStore((s) => s.redockRdp);
+    const detachTermToWindow = useSessionsStore((s) => s.detachTermToWindow);
+    const redockTerm = useSessionsStore((s) => s.redockTerm);
     const isPoppedOut = useSessionsStore((s) => !!s.poppedOut[session.key]);
     const hosts = useHostsStore((s) => s.items);
 
@@ -115,6 +117,16 @@ export function SessionView({
                     <span className={styles.headerTitle}>{session.title}</span>
                     <span className={styles.headerProto}>{session.protocol}</span>
                     <span className={styles.headerSpacer} />
+                    {session.protocol !== "rdp" && !isDead && !isPoppedOut && (
+                        <button
+                            type="button"
+                            className={styles.headerBtn}
+                            title={t("session.popOut")}
+                            onClick={() => void detachTermToWindow(session.key)}
+                        >
+                            <PictureInPicture2 size={13} />
+                        </button>
+                    )}
                     <button
                         type="button"
                         className={styles.headerBtn}
@@ -237,6 +249,17 @@ export function SessionView({
                                     }}
                                 />
                             )
+                        ) : isPoppedOut ? (
+                            <div className={styles.poppedOut}>
+                                <PictureInPicture2 size={30} strokeWidth={1.5} />
+                                <p>{t("session.poppedOutTitle")}</p>
+                                <Button
+                                    variant="secondary"
+                                    onClick={() => void redockTerm(session.key)}
+                                >
+                                    {t("session.redock")}
+                                </Button>
+                            </div>
                         ) : (
                             <Terminal
                                 sessionKey={session.key}
@@ -244,7 +267,7 @@ export function SessionView({
                                 focused={focused}
                             />
                         )}
-                        {isConnecting && (
+                        {isConnecting && !isPoppedOut && (
                             <div className={styles.connecting}>
                                 <ConnState
                                     category="connecting"

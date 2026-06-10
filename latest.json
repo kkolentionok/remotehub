@@ -1,0 +1,11 @@
+{
+    "version":  "0.2.3",
+    "notes":  "что нового",
+    "pub_date":  "2026-06-10T14:16:29Z",
+    "platforms":  {
+                      "windows-x86_64":  {
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdklEbWtlKzdiNXlLMW9tY1dYNW5QL3Axck00OURoSktrdlBZNWp5c2Vkd1dEOVlHbllQalh2WXFHelRpb3RSdHNtY0lCMmN1b1FQOXhEaWJQTG81QVlBbVQxMFc1K0FJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgxMTAwOTg1CWZpbGU6UmVtb3RlSHViXzAuMi4zX3g2NC1zZXR1cC5leGUKSFhhMnZndTFDTXdqNFI4UUtQWVFVQlRuS2FRM3cwN3l1bTR4WG9wUXdEWlJyUFNrUXJxU29zS0YweXpnS3lsaXRpaFNqdkJEcTA3aTJabnUrMGljQXc9PQo=",
+                                             "url":  "https://dl.pingie.ru/updates/RemoteHub_0.2.3_x64-setup.exe"
+                                         }
+                  }
+}

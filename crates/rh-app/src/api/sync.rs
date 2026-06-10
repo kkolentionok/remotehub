@@ -131,16 +131,43 @@ pub async fn sync_login(req: SyncAuthRequest) -> ApiResult<()> {
 #[tauri::command]
 #[instrument(level = "debug", skip(state, app))]
 pub async fn sync_logout(app: AppHandle, state: State<'_, AppState>) -> ApiResult<()> {
-    // Forget credentials FIRST so the background actor's next `ready()` check
-    // fails and it won't start a pass mid-teardown.
+    let cfg = SyncConfig::load();
+    let token = sync_remote::token_get();
+    let master = {
+        let mem = state.sync_master_mem.lock().await.clone();
+        mem.or_else(sync_remote::vault_key_get)
+    };
+
+    // Hold the inflight lock for the whole logout so no background pass races
+    // the final flush or the wipe.
+    let _guard = state.sync_inflight.lock().await;
+
+    // SAFETY GATE: logout purges the local vault, trusting the server holds a
+    // copy. Flush local changes to the server with one final pass FIRST; if we
+    // can't confirm that push (offline, server/CDN error, or no vault password
+    // set), abort and leave every local host/group/credential untouched. This
+    // is the difference between "switch device cleanly" and "silently lose
+    // un-synced data" — the latter was the bug.
+    match (token.as_deref(), master.as_deref()) {
+        (Some(token), Some(master)) if !cfg.endpoint.is_empty() => {
+            run_sync_core(&state, &cfg.endpoint, token, master)
+                .await
+                .map_err(|e| {
+                    ApiError::validation("sync", format!("logout flush failed: {e}"))
+                })?;
+        }
+        _ => {
+            return Err(ApiError::validation(
+                "sync",
+                "logout aborted: local data is not confirmed backed up (no vault password / not signed in)",
+            ));
+        }
+    }
+
+    // Confirmed on the server — now safe to forget credentials and wipe.
     sync_remote::token_clear();
     sync_remote::vault_key_clear();
     *state.sync_master_mem.lock().await = None;
-
-    // Take the inflight lock so no in-progress/just-started pass can push the
-    // (about-to-be-empty) snapshot to the server while we wipe. Any pass that
-    // was already running finishes first (it pushes the correct pre-wipe data).
-    let _guard = state.sync_inflight.lock().await;
 
     // Forget the account email so the UI returns cleanly to signed-out.
     let mut cfg = SyncConfig::load();

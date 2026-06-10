@@ -542,6 +542,36 @@ export function registerSessionTerminal(
     };
 }
 
+// --- Terminal search toggle --------------------------------------------
+// The find-in-output box lives inside each Terminal (it owns the xterm +
+// SearchAddon), but the triggers (magnifier in the tab bar, Ctrl+F handled
+// globally in AppShell) live elsewhere. Same indirection as the output
+// registry: a Terminal registers a callback keyed by its session, and any UI
+// can drive it without prop drilling or a store re-render. "toggle" flips the
+// box (magnifier); "open" force-opens + focuses it (Ctrl+F).
+type SearchToggle = (mode: "toggle" | "open") => void;
+const sessionSearchToggles = new Map<string, SearchToggle>();
+
+/** Terminal registers its search toggle on mount; unregisters on unmount. */
+export function registerSessionSearch(key: string, toggle: SearchToggle): () => void {
+    sessionSearchToggles.set(key, toggle);
+    return () => {
+        if (sessionSearchToggles.get(key) === toggle) sessionSearchToggles.delete(key);
+    };
+}
+
+/** Flip the find box of a given terminal session (no-op if not mounted). */
+export function toggleSessionSearch(key: string | undefined | null) {
+    if (!key) return;
+    sessionSearchToggles.get(key)?.("toggle");
+}
+
+/** Open + focus the find box of a given terminal session (no-op if absent). */
+export function openSessionSearch(key: string | undefined | null) {
+    if (!key) return;
+    sessionSearchToggles.get(key)?.("open");
+}
+
 // --- RDP frame routing -------------------------------------------------
 // RDP frames are a live raster (latest wins), not a replayable byte
 // stream — so no ring buffer. The viewport registers a sink; events that
@@ -580,6 +610,9 @@ let popoutListenerWired = false;
 /** Session ids we are re-docking: the pop-out window we close ourselves during
  *  a redock must NOT be treated as a user "close → end session". */
 const redockGuard = new Set<string>();
+/** Same pair as above, for terminal (SSH/local) pop-outs. */
+let termPopoutListenerWired = false;
+const termRedockGuard = new Set<string>();
 
 function rdpCloseText(reason: { kind: string }): string {
     switch (reason.kind) {
@@ -632,7 +665,7 @@ interface SessionsStore {
     dragTabId: string | null;
 
     /** Open a host in a brand-new tab. */
-    open: (host: HostDto) => Promise<void>;
+    open: (host: HostDto, background?: boolean) => Promise<void>;
     /** Open a local shell PTY in a new tab. `title` is i18n'd by the caller. */
     openLocalTerminal: (title: string) => void;
     /** Open an SFTP file-browser tab. `title` is i18n'd by the caller. */
@@ -645,6 +678,12 @@ interface SessionsStore {
     close: (key: string) => Promise<void>;
     /** Close an entire tab and all its sessions. */
     closeTab: (tabId: string) => Promise<void>;
+    /** Close every tab except `tabId`. */
+    closeOtherTabs: (tabId: string) => Promise<void>;
+    /** Open a fresh copy of a tab's focused session in a new tab. */
+    duplicateTab: (tabId: string) => void;
+    /** Drop and re-open a tab's focused session (same host) in a new tab. */
+    reconnectTab: (tabId: string) => Promise<void>;
     setActiveTab: (tabId: string | null) => void;
     setActivePane: (tabId: string, key: string) => void;
     /** Enter focus mode on `key` (maximize + rail), or exit when `null`. */
@@ -683,6 +722,19 @@ interface SessionsStore {
         title: string;
         width: number;
         height: number;
+    }) => string;
+    /** Detach a live SSH/local terminal session into its own OS window; the
+     *  tab shows the same "opened in a separate window" placeholder. */
+    detachTermToWindow: (key: string) => Promise<void>;
+    /** Re-dock a popped-out terminal back into its tab (reattach the byte
+     *  stream here, replay scrollback, then close the separate window). */
+    redockTerm: (key: string) => Promise<void>;
+    /** Pop-out-window side: bind to an already-live backend terminal session
+     *  (reattach + scrollback replay) and return the local key to render. */
+    attachExternalTerm: (p: {
+        sessionId: string;
+        title: string;
+        local: boolean;
     }) => string;
     /**
      * Split the tab that holds `targetKey` with its neighbour tab (the one
@@ -991,7 +1043,7 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
         dragPreviewTabId: null,
         dragTabId: null,
 
-        open: async (host) => {
+        open: async (host, background) => {
             const key = createSession(host);
             const id = genId();
             set((s) => ({
@@ -999,7 +1051,8 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
                     ...s.tabs,
                     { id, root: { t: "leaf", key }, activePaneKey: key },
                 ],
-                activeTabId: id,
+                // Background open (middle-click) leaves the current tab active.
+                activeTabId: background ? s.activeTabId : id,
             }));
         },
 
@@ -1128,6 +1181,50 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
                         : s.activeTabId;
                 return { sessions, tabs, activeTabId };
             });
+        },
+
+        closeOtherTabs: async (tabId) => {
+            const others = get()
+                .tabs.filter((tb) => tb.id !== tabId)
+                .map((tb) => tb.id);
+            for (const id of others) await get().closeTab(id);
+            set({ activeTabId: tabId });
+        },
+
+        duplicateTab: (tabId) => {
+            const s = get();
+            const tab = s.tabs.find((tb) => tb.id === tabId);
+            if (!tab) return;
+            const key = tab.focusKey ?? tab.activePaneKey;
+            const sess = s.sessions.find((x) => x.key === key);
+            if (!sess) return;
+            if (sess.local) {
+                get().openLocalTerminal(sess.title);
+                return;
+            }
+            if (sess.sftp) {
+                get().openSftp(sess.title);
+                return;
+            }
+            // SSH/RDP: reopen the same host (open() routes by host.protocol).
+            const host = useHostsStore.getState().items.find((h) => h.id === sess.hostId);
+            if (host) void get().open(host);
+        },
+
+        reconnectTab: async (tabId) => {
+            const s = get();
+            const tab = s.tabs.find((tb) => tb.id === tabId);
+            if (!tab) return;
+            const key = tab.focusKey ?? tab.activePaneKey;
+            const sess = s.sessions.find((x) => x.key === key);
+            if (!sess || sess.sftp) return; // SFTP manages its own connection
+            const title = sess.title;
+            const host = sess.local
+                ? null
+                : useHostsStore.getState().items.find((h) => h.id === sess.hostId);
+            await get().close(key);
+            if (sess.local) get().openLocalTerminal(title);
+            else if (host) void get().open(host);
         },
 
         setActiveTab: (tabId) => set({ activeTabId: tabId }),
@@ -1331,6 +1428,135 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
             }
             // Clear the guard shortly after, in case the close path didn't emit.
             setTimeout(() => redockGuard.delete(sid), 2000);
+        },
+
+        attachExternalTerm: ({ sessionId, title, local }) => {
+            const key = genId();
+            const tab: SessionTab = {
+                key,
+                sessionId,
+                hostId: local ? "__local__" : ("" as HostId),
+                title,
+                protocol: "ssh" as Protocol,
+                state: "ready",
+                message: null,
+                hostKey: null,
+                local,
+            };
+            sessionOutput.set(key, { buffer: [], writer: null });
+            set((s) => ({ sessions: [...s.sessions, tab] }));
+            // Bind this fresh webview to the still-live backend session; the
+            // backend replays its scrollback so the terminal repaints.
+            const reattach = local
+                ? localSessionApi.reattach
+                : sessionsApi.reattach;
+            void reattach(sessionId, (ev) => handleEvent(key, ev))
+                .then((ok) => {
+                    if (!ok) patch(key, { state: "closed", message: "session ended" });
+                })
+                .catch(() => patch(key, { state: "failed", message: "reattach failed" }));
+            return key;
+        },
+
+        detachTermToWindow: async (key) => {
+            const tab = get().sessions.find((t) => t.key === key);
+            if (!tab || !tab.sessionId || tab.protocol === "rdp") return;
+            const sid = tab.sessionId;
+            if (!termPopoutListenerWired) {
+                termPopoutListenerWired = true;
+                // "Return to tab" button → re-dock: reattach the stream to the
+                // main window FIRST, then close the pop-out (same ordering as
+                // RDP — avoids the dead-channel removal race).
+                void listen<{ sid: string }>("term:request-redock", (e) => {
+                    const s = e.payload?.sid;
+                    if (!s) return;
+                    const owner = get().sessions.find((t) => t.sessionId === s);
+                    if (owner) void get().redockTerm(owner.key);
+                });
+                // Pop-out closed via the native window X → end the owning tab,
+                // unless WE closed it during a re-dock (guard swallows it).
+                void listen<{ sid: string }>("term:popout-closed", (e) => {
+                    const s = e.payload?.sid;
+                    if (!s) return;
+                    if (termRedockGuard.has(s)) {
+                        termRedockGuard.delete(s);
+                        return;
+                    }
+                    const owner = get().sessions.find((t) => t.sessionId === s);
+                    if (owner) void get().close(owner.key);
+                });
+            }
+            set((s) => ({ poppedOut: { ...s.poppedOut, [key]: true } }));
+            const params = new URLSearchParams({
+                sid,
+                t: tab.title,
+                local: tab.local ? "1" : "0",
+            });
+            try {
+                const stale = await WebviewWindow.getByLabel(`term-${sid}`);
+                await stale?.destroy();
+            } catch {
+                /* none */
+            }
+            try {
+                // eslint-disable-next-line no-new
+                new WebviewWindow(`term-${sid}`, {
+                    url: `index.html#popout-term?${params.toString()}`,
+                    title: tab.title,
+                    width: 900,
+                    height: 600,
+                    decorations: true,
+                    // Start hidden with a dark surface: the pop-out shows itself
+                    // (with a fade-in) only after its terminal has painted, so
+                    // there is no white flash / abrupt frame on open.
+                    visible: false,
+                    backgroundColor: [10, 10, 13, 255],
+                });
+            } catch {
+                set((s) => {
+                    const p = { ...s.poppedOut };
+                    delete p[key];
+                    return { poppedOut: p };
+                });
+            }
+        },
+
+        redockTerm: async (key) => {
+            const tab = get().sessions.find((t) => t.key === key);
+            if (!tab || !tab.sessionId) return;
+            const sid = tab.sessionId;
+            termRedockGuard.add(sid);
+            // Re-home the byte stream to THIS (main) webview first (swaps the
+            // backend sink to us + replays scrollback), so closing the pop-out
+            // is clean and the session survives.
+            try {
+                const reattach = tab.local
+                    ? localSessionApi.reattach
+                    : sessionsApi.reattach;
+                const ok = await reattach(sid, (ev) => handleEvent(key, ev));
+                // While popped out, state-change events went to the pop-out, so
+                // this session's state may be stale (e.g. stuck on
+                // "authenticating"). A live reattach means it's connected —
+                // clear any stale connecting state so the terminal shows.
+                if (ok) {
+                    const cur = get().sessions.find((t) => t.key === key);
+                    if (cur && cur.state !== "ready") patch(key, { state: "ready" });
+                }
+            } catch {
+                /* session may have ended; the tab will reflect it */
+            }
+            set((s) => {
+                const p = { ...s.poppedOut };
+                delete p[key];
+                return { poppedOut: p };
+            });
+            try {
+                const w = await WebviewWindow.getByLabel(`term-${sid}`);
+                await w?.destroy();
+            } catch {
+                /* already gone */
+            }
+            setTimeout(() => termRedockGuard.delete(sid), 2000);
         },
 
         popOutSession: (sourceKey) =>

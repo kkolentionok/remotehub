@@ -1,7 +1,7 @@
 {
     "$schema": "https://schema.tauri.app/config/2",
     "productName": "RemoteHub",
-    "version": "0.1.0",
+    "version": "0.2.3",
     "identifier": "app.remotehub.desktop",
     "build": {
         "beforeDevCommand": {
@@ -36,6 +36,7 @@
     },
     "bundle": {
         "active": true,
+        "createUpdaterArtifacts": true,
         "targets": "all",
         "icon": [
             "icons/32x32.png",
@@ -47,5 +48,14 @@
         "category": "DeveloperTool",
         "shortDescription": "Cross-platform SSH and RDP client",
         "longDescription": "RemoteHub is a unified SSH and RDP client with a modern UI and OS-native credential storage."
+    },
+    "plugins": {
+        "updater": {
+            "endpoints": ["https://pingie.ru/updates/latest.json"],
+            "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU3REJFRTdCQTQzOTIwRUYKUldUdklEbWtlKzdiNTFpQnFlM1NwbTVpM2lrVW5Manh6cUF3WDlhV3l1eDZIRFRvb3hqckNCRjkK",
+            "windows": {
+                "installMode": "passive"
+            }
+        }
     }
 }
