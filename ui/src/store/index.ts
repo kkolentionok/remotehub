@@ -898,23 +898,32 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
         const key = genId();
         // Match the *pane* aspect ratio (not the monitor's) so the remote
         // desktop fills the viewport with `object-fit: contain` and no
-        // letterbox bars in the common windowed case. Vertical resolution is
-        // kept near the monitor's so it stays crisp; a window resize after
-        // connect just re-letterboxes cleanly (live reflow is the separate,
-        // gated DisplayControl feature). Even dims; capped to 2560×1600.
+        // letterbox bars in the common windowed case. Sized in PHYSICAL pixels
+        // (CSS px × devicePixelRatio): on a 125–150% scaled display a
+        // logical-px framebuffer gets upscaled by the DPR onto the canvas and
+        // text goes soft — mstsc renders at native DPI, so must we. A window
+        // resize after connect just re-letterboxes cleanly (live reflow is the
+        // separate, gated DisplayControl feature). Even dims; capped to 3840×2160.
         const even = (n: number) => Math.max(2, Math.floor(n / 2) * 2);
         let rdpW: number | undefined;
         let rdpH: number | undefined;
         if (host.protocol === "rdp") {
             const TAB_BAR = 44; // approx tab strip height (logical px)
-            const availW = Math.max(640, Math.round(window.innerWidth));
-            const availH = Math.max(480, Math.round(window.innerHeight - TAB_BAR));
-            const aspect = availW / availH;
-            const h0 = Math.min(1440, Math.max(720, Math.round(window.screen.height)));
-            const w0 = Math.round(h0 * aspect);
-            const cap = Math.min(1, 2560 / w0, 1600 / h0);
-            rdpW = even(Math.round(w0 * cap));
-            rdpH = even(Math.round(h0 * cap));
+            const dpr = Math.min(window.devicePixelRatio || 1, 3);
+            // Render at the *window's* physical pixel size (CSS px × DPR), NOT
+            // the monitor's. The canvas then maps 1:1 to what's on screen and
+            // the browser never downscales a monitor-sized frame into a smaller
+            // window — that downscale aliased detailed content (e.g. a photo
+            // wallpaper) into shimmering "noise" that mstsc, which renders at
+            // its window size, never shows. Native DPI (× DPR) keeps text crisp
+            // on scaled displays. Fullscreen is handled by the one-shot
+            // DisplayControl resize on enter/exit; GFX sessions additionally
+            // reflow continuously on window resize. Even dims; capped 3840×2160.
+            const availW = Math.max(640, Math.round(window.innerWidth * dpr));
+            const availH = Math.max(480, Math.round((window.innerHeight - TAB_BAR) * dpr));
+            const cap = Math.min(1, 3840 / availW, 2160 / availH);
+            rdpW = even(Math.round(availW * cap));
+            rdpH = even(Math.round(availH * cap));
         }
         const tab: SessionTab = {
             key,

@@ -71,20 +71,23 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 /// and frames coalesce, so aiming higher than the old 15 fps is safe: when the
 /// encoder can't keep up, frames are simply skipped rather than queued.
 const FRAME_INTERVAL: Duration = Duration::from_millis(33);
-/// JPEG quality for frame transport (0-100). Desktop content is mostly
-/// text/UI; 72 blurred small text noticeably, so we run a bit higher.
-/// Region-diff keeps payloads small enough that this is affordable.
-const JPEG_QUALITY: u8 = 85;
+/// JPEG quality for the rare large-region fallback (0-100). With per-band PNG
+/// (below) this almost never fires now; keep it high so the few regions that
+/// do exceed `PNG_MAX_AREA` (ultra-wide single bands) don't ring on text.
+const JPEG_QUALITY: u8 = 92;
 /// Height of each diff/encode band. The screen is sliced into bands so that
 /// two far-apart changes don't merge into one near-fullscreen rectangle
 /// (which caused periodic lag spikes). 64px ≈ a toolbar/row height.
 const BAND_H: usize = 64;
 /// Regions up to this pixel area are sent as PNG (lossless → crisp text);
-/// larger regions fall back to JPEG (compact + fast). Kept small on purpose:
-/// PNG is lossless but its encode cost grows with area and would block the
-/// worker on big regions. Small popups, carets, icons, short text runs go
-/// PNG; toolbars / big repaints / wallpaper go JPEG.
-const PNG_MAX_AREA: usize = 40_000;
+/// larger fall back to JPEG. A full-width diff band (`width × BAND_H`) stays
+/// lossless up to ~3125 px wide. NB: pushing this higher (so wider bands also
+/// go PNG) actually looked *worse* on a detailed photo wallpaper — when the
+/// RDP resolution doesn't match the window 1:1 the browser downscales the
+/// canvas, and crisp PNG aliases harder than softer JPEG. The real fix for
+/// that is matching resolution to the window (dynamic resize / DisplayControl
+/// DVC — backlog), not the encode threshold.
+const PNG_MAX_AREA: usize = 200_000;
 
 /// Spawn an RDP session actor. Returns the command sender and the task
 /// handle (mirrors `rh_ssh::spawn_session`).
@@ -314,10 +317,42 @@ fn blocking_session(
         .checked_sub(FRAME_INTERVAL)
         .unwrap_or_else(Instant::now);
     let mut last_frame: Vec<u8> = Vec::new();
+    // Last GFX framebuffer size we told the UI about. A server-driven
+    // `ResetGraphics` (e.g. after our DisplayControl resize) changes
+    // `GfxState::{w,h}` and reallocates `fb` inside the GFX channel, but unlike
+    // the legacy `DeactivateAll` path nobody emits `Resized` for it. Without
+    // that, the UI canvas stays at the previous size while we ship frames at the
+    // new one → the rows wrap (the "stacked taskbar" shear). Track it here and
+    // emit `Resized` whenever the GFX surface size changes.
+    let mut last_gfx_size: Option<(u16, u16)> = None;
     // Latest viewport size the UI asked for. `encode_resize` returns None
     // until the DisplayControl DVC has received caps, so we keep retrying
     // each tick until it lands (then clear it).
     let mut pending_resize: Option<(u16, u16)> = None;
+
+    // Client-driven Refresh Rect (MS-RDPBCGR 2.2.11.2.1): periodically ask the
+    // server to redraw the whole screen. The server only sends "dirty" deltas,
+    // and a region revealed by a closed/moved/resized window (disocclusion) is
+    // frequently NOT re-sent — it sticks as a stale "ghost". This bites legacy
+    // and GFX-without-the-AVC444-policy alike; only the AVC video path is immune
+    // because it re-encodes the whole desktop every frame, so stale pixels
+    // self-heal. mstsc hides the same gap by asking the server to refresh.
+    //
+    // ON BY DEFAULT (verified to clear the ghosts on every path) at an
+    // aggressive cadence — on a LAN a few full re-sends/sec is free. Override
+    // with `RDP_REFRESH=<ms>` (e.g. higher for a slow WAN link); `RDP_REFRESH=0`
+    // disables it.
+    const DEFAULT_REFRESH_MS: u64 = 250;
+    let refresh_interval: Option<Duration> =
+        match std::env::var("RDP_REFRESH").ok().and_then(|s| s.parse::<u64>().ok()) {
+            Some(0) => None,
+            Some(ms) => Some(Duration::from_millis(ms)),
+            None => Some(Duration::from_millis(DEFAULT_REFRESH_MS)),
+        };
+    if let Some(iv) = refresh_interval {
+        info!("RDP: periodic Refresh Rect every {} ms", iv.as_millis());
+    }
+    let mut last_refresh = Instant::now();
 
     loop {
         if shutdown.load(Ordering::SeqCst) {
@@ -325,6 +360,36 @@ fn blocking_session(
                 reason: RdpCloseReason::UserRequested,
             });
             return;
+        }
+
+        // Periodic full-screen Refresh Rect (opt-in — see `refresh_interval`).
+        // Sent before the (non-blocking) read so it fires on a steady cadence
+        // even when the server is otherwise idle (exactly when a ghost sits
+        // static). Best-effort: a write error is picked up by the next read.
+        if let Some(iv) = refresh_interval {
+            if last_refresh.elapsed() >= iv {
+                last_refresh = Instant::now();
+                let (rw, rh) = (image.width(), image.height());
+                if rw > 0 && rh > 0 {
+                    let pdu = ironrdp::pdu::rdp::headers::ShareDataPdu::RefreshRectangle(
+                        ironrdp::pdu::rdp::refresh_rectangle::RefreshRectanglePdu {
+                            areas_to_refresh: vec![ironrdp::pdu::geometry::InclusiveRectangle {
+                                left: 0,
+                                top: 0,
+                                right: rw - 1,
+                                bottom: rh - 1,
+                            }],
+                        },
+                    );
+                    let mut buf = ironrdp::core::WriteBuf::new();
+                    match active_stage.encode_static(&mut buf, pdu) {
+                        Ok(_) => {
+                            let _ = framed.write_all(buf.filled());
+                        }
+                        Err(e) => warn!("refresh rect encode failed: {e}"),
+                    }
+                }
+            }
         }
 
         // Drain all pending UI input (non-blocking). Coalesce consecutive
@@ -580,6 +645,20 @@ fn blocking_session(
                 let mut st = state.lock().unwrap();
                 if st.ready() {
                     let (w, h) = (st.w as usize, st.h as usize);
+                    // GFX surface resized (server ResetGraphics, typically after
+                    // our DisplayControl resize): tell the UI so its canvas
+                    // backing matches the new frame coordinate space, and force a
+                    // full repaint at the new size. Emitting before the frame
+                    // (which goes through the async encoder) guarantees the
+                    // canvas is resized by the time the FrameBatch lands.
+                    if last_gfx_size != Some((st.w, st.h)) {
+                        last_gfx_size = Some((st.w, st.h));
+                        last_frame.clear();
+                        emit(RdpSessionEvent::Resized {
+                            width: st.w,
+                            height: st.h,
+                        });
+                    }
                     match compute_regions_raw(&st.fb, w, h, &last_frame) {
                         Some(regions) => match tx_enc.try_send(regions) {
                             Ok(()) => {
@@ -712,9 +791,17 @@ fn compute_regions(image: &DecodedImage, last_frame: &[u8]) -> Option<Vec<Region
     let h = image.height() as usize;
     let data = image.data();
 
-    // First frame / resize: whole screen in one rect.
+    // First frame / resize: banded full-width regions (see compute_regions_raw)
+    // so the repaint ships lossless PNG per band instead of one full-screen JPEG.
     if last_frame.len() != data.len() {
-        return Some(vec![make_region(data, w, 0, 0, w, h)]);
+        let mut jobs = Vec::new();
+        let mut by = 0usize;
+        while by < h {
+            let bh = BAND_H.min(h - by);
+            jobs.push(make_region(data, w, 0, by, w, bh));
+            by += bh;
+        }
+        return if jobs.is_empty() { None } else { Some(jobs) };
     }
 
     let mut jobs = Vec::new();
@@ -749,10 +836,22 @@ fn compute_regions_raw(
     if w == 0 || h == 0 || data.is_empty() {
         return None;
     }
-    // First frame / resize: whole screen in one rect.
+    // First frame / resize: repaint the whole screen, but split into per-band
+    // full-width regions (not one giant rect). Each band then stays within
+    // PNG_MAX_AREA and ships lossless. A single full-screen rect would exceed
+    // the threshold → one JPEG for the entire screen, leaving every static area
+    // muddy until it later happens to be repainted. Banded PNG is crisp at once.
     if last_frame.len() != data.len() {
-        return Some(vec![make_region(data, w, 0, 0, w, h)]);
+        let mut jobs = Vec::new();
+        let mut by = 0usize;
+        while by < h {
+            let bh = BAND_H.min(h - by);
+            jobs.push(make_region(data, w, 0, by, w, bh));
+            by += bh;
+        }
+        return if jobs.is_empty() { None } else { Some(jobs) };
     }
+
     let mut jobs = Vec::new();
     let mut by = 0usize;
     while by < h {

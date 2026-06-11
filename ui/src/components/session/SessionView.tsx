@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Maximize2, Minimize2, Pencil, PictureInPicture2, RefreshCw, X } from "lucide-react";
 
 import { useT } from "../../i18n";
@@ -6,7 +7,6 @@ import type { SessionTab } from "../../store";
 import {
     useHostsStore,
     useSessionsStore,
-    useSettingsStore,
     useUiStore,
 } from "../../store";
 import { rdpSession as rdpSessionApi } from "../../lib/ipc";
@@ -37,7 +37,6 @@ export function SessionView({
     inFocusMode: boolean;
 }) {
     const { t } = useT();
-    const gfxOn = useSettingsStore((s) => s.settings?.rdp_gfx ?? false);
     const close = useSessionsStore((s) => s.close);
     const open = useSessionsStore((s) => s.open);
     const setFocusPane = useSessionsStore((s) => s.setFocusPane);
@@ -230,6 +229,7 @@ export function SessionView({
                                     hostLabel={session.title}
                                     connected={session.state === "ready"}
                                     onPopOut={() => void detachRdpToWindow(session.key)}
+                                    onMinimize={() => void getCurrentWindow().minimize()}
                                     onLocalClipboard={(text) => {
                                         const sid = session.sessionId;
                                         if (sid) void rdpSessionApi.setClipboard(sid, text);
@@ -242,7 +242,20 @@ export function SessionView({
                                         const sid = session.sessionId;
                                         if (sid) void rdpSessionApi.resize(sid, w, h);
                                     }}
-                                    enableDynamicResize={gfxOn}
+                                    // Continuous DisplayControl reflow on every
+                                    // window resize corrupts the surface: rapid
+                                    // resizes (and esp. dragging across DPI
+                                    // boundaries) leave stale/half-repainted tiles
+                                    // and a desynced geometry that even a full
+                                    // Refresh Rect doesn't always recover (IronRDP
+                                    // #447). Disabled for now — we connect at the
+                                    // window's size (sharp 1:1), and a later resize
+                                    // just CSS-scales the frame (mildly soft but
+                                    // readable, never corrupt). The fullscreen
+                                    // one-shot resize is independent and kept.
+                                    // TODO: re-enable once reflow does a clean
+                                    // clear-and-full-repaint at the new size.
+                                    enableDynamicResize={false}
                                     onKbdCapture={(on) => {
                                         const sid = session.sessionId;
                                         if (sid) void rdpSessionApi.kbdCapture(sid, on);

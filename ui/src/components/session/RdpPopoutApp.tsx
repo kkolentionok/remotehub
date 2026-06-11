@@ -24,7 +24,6 @@ export function RdpPopoutApp() {
     const h = Number(params.get("h")) || 800;
 
     const attachExternalRdp = useSessionsStore((s) => s.attachExternalRdp);
-    const gfxOn = useSettingsStore((s) => s.settings?.rdp_gfx ?? false);
     const [key, setKey] = useState<string | null>(null);
     const didAttach = useRef(false);
 
@@ -89,7 +88,8 @@ export function RdpPopoutApp() {
                 onResize={(rw, rh) => {
                     if (sid) void rdpSessionApi.resize(sid, rw, rh);
                 }}
-                enableDynamicResize={gfxOn}
+                // See SessionView: continuous reflow corrupts on resize (#447).
+                enableDynamicResize={false}
                 onKbdCapture={(on) => {
                     if (sid) void rdpSessionApi.kbdCapture(sid, on);
                 }}

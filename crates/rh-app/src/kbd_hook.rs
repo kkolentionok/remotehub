@@ -49,7 +49,8 @@ mod imp {
 
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_MENU, VK_RCONTROL, VK_RETURN, VK_RMENU,
+        VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_MENU, VK_RCONTROL, VK_RETURN, VK_RMENU,
+        VK_RSHIFT, VK_SHIFT,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, GetForegroundWindow, GetMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
@@ -101,12 +102,37 @@ mod imp {
                 }
 
                 let extended = (kb.flags & LLKHF_EXTENDED) != 0;
+                // Pure modifier keys (Shift/Ctrl/Alt) are forwarded to the
+                // remote AND passed through to the local OS (not swallowed).
+                // EMPIRICALLY REQUIRED: fully swallowing them (mstsc-style) broke
+                // RU comma (Shift+/) — confirmed twice. The exact dependency
+                // isn't understood (scancodes *should* be layout-independent),
+                // so DO NOT remove this without a live test of: switch layout
+                // Alt+Shift in fullscreen → type RU comma. Known downside: the
+                // passed-through modifiers leak into our own webview — a lone
+                // Ctrl can fire the Ctrl+K search and Alt+Shift can steal input
+                // focus. Fixing those WITHOUT regressing comma needs the fast
+                // build cycle (try: swallow Ctrl only, keep Shift+Alt; or disable
+                // the app's own Ctrl+K handler while RDP capture is active).
+                // Printable keys are still swallowed. Win stays swallowed.
+                let modifier_passthrough = vk == VK_SHIFT as u32
+                    || vk == VK_LSHIFT as u32
+                    || vk == VK_RSHIFT as u32
+                    || vk == VK_CONTROL as u32
+                    || vk == VK_LCONTROL as u32
+                    || vk == VK_RCONTROL as u32
+                    || vk == VK_MENU as u32
+                    || vk == VK_LMENU as u32
+                    || vk == VK_RMENU as u32;
                 if let Some(tx) = FORWARD.get() {
                     let _ = tx.send(HookEvent::Key {
                         scancode: kb.scanCode as u8,
                         extended,
                         pressed,
                     });
+                }
+                if modifier_passthrough {
+                    return CallNextHookEx(ptr::null_mut(), code, wparam, lparam);
                 }
                 return 1; // swallow locally; delivered to the remote instead
             }

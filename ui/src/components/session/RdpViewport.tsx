@@ -250,12 +250,15 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, con
             // size entering, the pane size leaving. Deferred a frame so the
             // element box has settled to its new size.
             requestAnimationFrame(() => {
+                // Physical pixels (CSS × DPR) — native-DPI rendering, no
+                // upscale blur on scaled displays (see store.createSession).
+                const dpr = Math.min(window.devicePixelRatio || 1, 3);
                 const w = on
-                    ? Math.round(window.screen.width)
-                    : Math.round(wrapRef.current?.clientWidth ?? 0);
+                    ? Math.round(window.screen.width * dpr)
+                    : Math.round((wrapRef.current?.clientWidth ?? 0) * dpr);
                 const h = on
-                    ? Math.round(window.screen.height)
-                    : Math.round(wrapRef.current?.clientHeight ?? 0);
+                    ? Math.round(window.screen.height * dpr)
+                    : Math.round((wrapRef.current?.clientHeight ?? 0) * dpr);
                 if (w >= 200 && h >= 200) onResizeRef.current?.(w, h);
             });
         };
@@ -398,9 +401,11 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, con
         let timer = 0;
         let lastSent = "";
         const fire = () => {
-            // Logical (CSS) pixels — like mstsc.
-            const w = Math.round(el.clientWidth);
-            const h = Math.round(el.clientHeight);
+            // Physical pixels (CSS × DPR): the server renders at native DPI and
+            // the canvas backing matches 1:1 physical — crisp on scaled displays.
+            const dpr = Math.min(window.devicePixelRatio || 1, 3);
+            const w = Math.round(el.clientWidth * dpr);
+            const h = Math.round(el.clientHeight * dpr);
             if (w < 200 || h < 200) return;
             const dim = `${w}x${h}`;
             if (dim === lastSent) return;
@@ -590,7 +595,7 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, con
                         {hostLabel}
                     </span>
                 )}
-                {onMinimize && (
+                {onMinimize && (onPopIn || isFs) && (
                     <button
                         type="button"
                         className={styles.barBtn}
@@ -601,16 +606,21 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, con
                         <Minus size={15} />
                     </button>
                 )}
-                <button
-                    type="button"
-                    className={styles.barBtn}
-                    title={t("session.fullscreen")}
-                    aria-label={t("session.fullscreen")}
-                    onClick={toggleFs}
-                >
-                    {isFs ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
-                </button>
-                {onPopOut && (
+                {/* Fullscreen toggle: hidden in main-window fullscreen — the X
+                    below exits instead (per the agreed fullscreen layout:
+                    title · minimize · close). Pop-out keeps its toggle. */}
+                {(!isFs || onPopIn) && (
+                    <button
+                        type="button"
+                        className={styles.barBtn}
+                        title={t("session.fullscreen")}
+                        aria-label={t("session.fullscreen")}
+                        onClick={toggleFs}
+                    >
+                        {isFs ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+                    </button>
+                )}
+                {onPopOut && !isFs && (
                     <button
                         type="button"
                         className={styles.barBtn}
@@ -619,6 +629,17 @@ export function RdpViewport({ sessionKey, width, height, onInput, hostLabel, con
                         onClick={onPopOut}
                     >
                         <PictureInPicture2 size={15} />
+                    </button>
+                )}
+                {isFs && !onPopIn && (
+                    <button
+                        type="button"
+                        className={`${styles.barBtn} ${styles.barClose}`}
+                        title={t("session.exitFullscreen")}
+                        aria-label={t("session.exitFullscreen")}
+                        onClick={toggleFs}
+                    >
+                        <X size={15} />
                     </button>
                 )}
                 {onPopIn && (

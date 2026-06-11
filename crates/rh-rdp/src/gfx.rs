@@ -24,9 +24,10 @@ use ironrdp::core::{impl_as_any, Decode as _, Encode, EncodeResult, ReadCursor, 
 use ironrdp::dvc::{DvcClientProcessor, DvcEncode, DvcMessage, DvcProcessor};
 use ironrdp::graphics::zgfx::Decompressor;
 use ironrdp::pdu::rdp::vc::dvc::gfx::{
-    CapabilitiesAdvertisePdu, CapabilitiesV103Flags, CapabilitiesV104Flags, CapabilitiesV10Flags,
-    CapabilitiesV81Flags, CapabilitiesV8Flags, CapabilitySet, ClientPdu, Codec1Type, Codec2Type,
-    FrameAcknowledgePdu, QueueDepth, ServerPdu,
+    Avc420BitmapStream, Avc444BitmapStream, CapabilitiesAdvertisePdu, CapabilitiesV103Flags,
+    CapabilitiesV104Flags, CapabilitiesV10Flags, CapabilitiesV81Flags, CapabilitiesV8Flags,
+    CapabilitySet, ClientPdu, Codec1Type, Codec2Type, Encoding, FrameAcknowledgePdu, QueueDepth,
+    ServerPdu,
 };
 use ironrdp::pdu::PduResult;
 use tracing::{info, warn};
@@ -379,6 +380,128 @@ fn rect_xywh(left: u16, top: u16, right: u16, bottom: u16) -> (u16, u16, u16, u1
     )
 }
 
+/// Decode one AVC420 bitmap stream into a surface: feed the H.264 packet to
+/// the per-surface decoder, then blit each metadata region rect of the decoded
+/// picture onto the surface (and propagate to the output framebuffer).
+///
+/// Free function (not a method) on purpose: the caller holds the `GfxState`
+/// mutex guard (an immutable borrow of `self.state`), so it can only lend out
+/// *disjoint* `self` fields (`self.avc`, `self.avc_warns`) — a `&mut self`
+/// method would conflict with the live guard.
+fn apply_avc420(
+    decoders: &mut HashMap<u16, openh264::decoder::Decoder>,
+    st: &mut GfxState,
+    surface_id: u16,
+    stream: &Avc420BitmapStream<'_>,
+    warns: &mut u64,
+) {
+    use openh264::formats::YUVSource as _;
+    use std::collections::hash_map::Entry;
+
+    let dec = match decoders.entry(surface_id) {
+        Entry::Occupied(e) => e.into_mut(),
+        Entry::Vacant(v) => match openh264::decoder::Decoder::new() {
+            Ok(d) => v.insert(d),
+            Err(e) => {
+                *warns += 1;
+                if *warns <= 3 {
+                    warn!("GFX: openh264 decoder init failed: {e}");
+                }
+                return;
+            }
+        },
+    };
+
+    match dec.decode(stream.data) {
+        Ok(Some(yuv)) => {
+            let (fw, fh) = yuv.dimensions();
+            let (ys, us, vs) = yuv.strides();
+            let (yp, up, vp) = (yuv.y(), yuv.u(), yuv.v());
+            // Blit ONLY the regionRects the server flagged as changed. Blitting
+            // the whole decoded picture is wrong: the H.264 reference frame
+            // keeps the last-encoded content for regions the server later
+            // repaints via a *different* codec (ClearCodec/Cache2S, e.g. the
+            // wallpaper revealed when a window closes). A full blit would stamp
+            // that stale reference back over the correct non-AVC pixels — which
+            // re-creates the very "ghost" of a closed window we were chasing.
+            for r in &stream.rectangles {
+                let (x, y, w, h) = rect_xywh(r.left, r.top, r.right, r.bottom);
+                blit_avc_rect(st, surface_id, yp, up, vp, ys, us, vs, fw, fh, x, y, w, h);
+                st.propagate(surface_id, x, y, w, h);
+            }
+        }
+        // Parameter sets / partial data only — no displayable picture yet.
+        Ok(None) => {}
+        Err(e) => {
+            *warns += 1;
+            if *warns <= 5 || *warns % 240 == 0 {
+                warn!("GFX: AVC decode failed ({} total): {e}", *warns);
+            }
+        }
+    }
+}
+
+/// Copy one region rect of a decoded YUV420 picture onto a surface as RGBA.
+/// Conversion is BT.709 full-range with the same fixed-point coefficients
+/// FreeRDP uses for RDP AVC streams. Clamped to both the picture (`fw`/`fh`,
+/// which are 16-aligned and may exceed the surface) and the surface bounds.
+#[allow(clippy::too_many_arguments)]
+fn blit_avc_rect(
+    st: &mut GfxState,
+    id: u16,
+    yp: &[u8],
+    up: &[u8],
+    vp: &[u8],
+    ys: usize,
+    us: usize,
+    vs: usize,
+    fw: usize,
+    fh: usize,
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
+) {
+    let Some(s) = st.surfaces.get_mut(&id) else {
+        return;
+    };
+    let (sw, sh) = (s.w as usize, s.h as usize);
+    let x0 = x as usize;
+    if x0 >= sw || x0 >= fw {
+        return;
+    }
+    for row in 0..h as usize {
+        let py = y as usize + row;
+        if py >= sh || py >= fh {
+            break;
+        }
+        let max_w = (w as usize)
+            .min(sw.saturating_sub(x0))
+            .min(fw.saturating_sub(x0));
+        if max_w == 0 {
+            continue;
+        }
+        let yrow = &yp[py * ys..];
+        let urow = &up[(py / 2) * us..];
+        let vrow = &vp[(py / 2) * vs..];
+        let dst = &mut s.px[(py * sw + x0) * 4..(py * sw + x0 + max_w) * 4];
+        for col in 0..max_w {
+            let px = x0 + col;
+            let yv = i32::from(yrow[px]);
+            let u = i32::from(urow[px / 2]) - 128;
+            let v = i32::from(vrow[px / 2]) - 128;
+            let r = (256 * yv + 403 * v + 128) >> 8;
+            let g = (256 * yv - 48 * u - 120 * v + 128) >> 8;
+            let b = (256 * yv + 475 * u + 128) >> 8;
+            let o = col * 4;
+            dst[o] = r.clamp(0, 255) as u8;
+            dst[o + 1] = g.clamp(0, 255) as u8;
+            dst[o + 2] = b.clamp(0, 255) as u8;
+            dst[o + 3] = 255;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // DVC processor
 // ---------------------------------------------------------------------------
@@ -415,6 +538,13 @@ pub struct GraphicsPipeline {
     op_counts: std::collections::BTreeMap<&'static str, u32>,
     last_op_log: std::time::Instant,
     trace: bool,
+    /// Per-surface H.264 decoders for the AVC420/AVC444 GFX path. Each surface
+    /// carries its own independent H.264 bitstream; created lazily on the first
+    /// AVC PDU for a surface, dropped on DeleteSurface / CreateSurface (a fresh
+    /// surface starts a fresh stream with a new IDR).
+    avc: HashMap<u16, openh264::decoder::Decoder>,
+    avc_warns: u64,
+    avc_started: bool,
 }
 
 impl GraphicsPipeline {
@@ -435,6 +565,9 @@ impl GraphicsPipeline {
             // window-move disocclusion (S2S / CacheToSurface / SolidFill /
             // uncompressed). Off by default.
             trace: std::env::var("RDP_GFX_TRACE").is_ok(),
+            avc: HashMap::new(),
+            avc_warns: 0,
+            avc_started: false,
         }
     }
 
@@ -546,10 +679,14 @@ impl DvcProcessor for GraphicsPipeline {
                         s.surface_id, s.width, s.height, s.pixel_format
                     );
                     st.create_surface(s.surface_id, s.width, s.height);
+                    // A (re)created surface starts a fresh H.264 stream (the
+                    // server opens with a new IDR) — drop any old decoder state.
+                    self.avc.remove(&s.surface_id);
                 }
                 ServerPdu::DeleteSurface(d) => {
                     st.surfaces.remove(&d.surface_id);
                     st.origin.remove(&d.surface_id);
+                    self.avc.remove(&d.surface_id);
                 }
                 ServerPdu::MapSurfaceToOutput(m) => {
                     info!(
@@ -635,8 +772,90 @@ impl DvcProcessor for GraphicsPipeline {
                                 st.propagate(w.surface_id, x, y, rw, rh);
                             }
                         }
+                        Codec1Type::Avc420 => {
+                            let mut acur = ReadCursor::new(&w.bitmap_data);
+                            match Avc420BitmapStream::decode(&mut acur) {
+                                Ok(s) => {
+                                    if !self.avc_started {
+                                        self.avc_started = true;
+                                        info!("GFX: AVC stream ACTIVE (Avc420)");
+                                    }
+                                    if self.trace {
+                                        let rs: Vec<String> = s
+                                            .rectangles
+                                            .iter()
+                                            .take(6)
+                                            .map(|r| {
+                                                format!(
+                                                    "({},{},{},{})",
+                                                    r.left,
+                                                    r.top,
+                                                    r.right - r.left,
+                                                    r.bottom - r.top
+                                                )
+                                            })
+                                            .collect();
+                                        info!(
+                                            "TRACE Avc420 surf={} rects={} bytes={} rs=[{}]",
+                                            w.surface_id,
+                                            s.rectangles.len(),
+                                            s.data.len(),
+                                            rs.join(" ")
+                                        );
+                                    }
+                                    apply_avc420(
+                                        &mut self.avc,
+                                        &mut st,
+                                        w.surface_id,
+                                        &s,
+                                        &mut self.avc_warns,
+                                    );
+                                }
+                                Err(e) => warn!("GFX: Avc420 meta decode failed: {e}"),
+                            }
+                        }
+                        Codec1Type::Avc444 | Codec1Type::Avc444v2 => {
+                            let mut acur = ReadCursor::new(&w.bitmap_data);
+                            match Avc444BitmapStream::decode(&mut acur) {
+                                Ok(s) => {
+                                    if !self.avc_started {
+                                        self.avc_started = true;
+                                        info!(
+                                            "GFX: AVC stream ACTIVE ({:?}, lc={:?})",
+                                            w.codec_id, s.encoding
+                                        );
+                                    }
+                                    if self.trace {
+                                        info!(
+                                            "TRACE Avc444 surf={} lc={:?} rects={} bytes1={} has2={}",
+                                            w.surface_id,
+                                            s.encoding,
+                                            s.stream1.rectangles.len(),
+                                            s.stream1.data.len(),
+                                            s.stream2.is_some()
+                                        );
+                                    }
+                                    // MVP: decode only the main (luma) view — it is a
+                                    // complete 4:2:0 picture on its own. The auxiliary
+                                    // chroma-upgrade stream is ignored for now, so
+                                    // chroma stays 4:2:0 (visually: slightly softer
+                                    // colour edges, text/luma fully sharp). LC==CHROMA
+                                    // PDUs carry only the aux stream — skip them.
+                                    if s.encoding != Encoding::CHROMA {
+                                        apply_avc420(
+                                            &mut self.avc,
+                                            &mut st,
+                                            w.surface_id,
+                                            &s.stream1,
+                                            &mut self.avc_warns,
+                                        );
+                                    }
+                                }
+                                Err(e) => warn!("GFX: Avc444 meta decode failed: {e}"),
+                            }
+                        }
                         _ => {
-                            // Planar / RemoteFx / Avc* — next slices.
+                            // Planar / RemoteFx — next slices.
                             self.skipped_codec = self.skipped_codec.wrapping_add(1);
                             if self.skipped_codec <= 3 || self.skipped_codec % 240 == 0 {
                                 info!(
@@ -789,11 +1008,31 @@ impl DvcProcessor for GraphicsPipeline {
                         );
                     }
                 }
+                ServerPdu::MapSurfaceToScaledOutput(m) => {
+                    // Like MapSurfaceToOutput but the server also gives a target
+                    // size for scaling. We render at native resolution and let
+                    // the UI canvas scale, so the target size is irrelevant —
+                    // map at the origin and blit the surface. Ignoring this (the
+                    // old catch-all) left the surface unmapped → an unpainted /
+                    // stale region (the "stuck strip").
+                    st.origin
+                        .insert(m.surface_id, (m.output_origin_x, m.output_origin_y));
+                    let dims = st.surfaces.get(&m.surface_id).map(|s| (s.w, s.h));
+                    if let Some((sw, sh)) = dims {
+                        st.propagate(m.surface_id, 0, 0, sw, sh);
+                    }
+                }
+                ServerPdu::EvictCacheEntry(e) => {
+                    // Drop the cached tile so a later reuse of this slot can't
+                    // stamp stale pixels (keeps our cache in lockstep with the
+                    // server's eviction).
+                    st.cache.remove(&e.cache_slot);
+                }
                 _ => {
-                    // Map*Scaled / EvictCacheEntry / DeleteEncodingContext /
-                    // CacheImportReply — none repaint pixels, so ignoring them
-                    // can't cause ghosting. Warn once if one ever shows up so we
-                    // can revisit if a future server relies on it.
+                    // MapSurfaceToScaledWindow / CacheImportReply /
+                    // DeleteEncodingContext — none repaint surface pixels, so
+                    // ignoring them can't cause ghosting. Warn once if one ever
+                    // shows up so we can revisit if a future server relies on it.
                     use std::sync::atomic::{AtomicBool, Ordering};
                     static WARNED: AtomicBool = AtomicBool::new(false);
                     if !WARNED.swap(true, Ordering::Relaxed) {

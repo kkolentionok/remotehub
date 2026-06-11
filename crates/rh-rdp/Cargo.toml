@@ -19,6 +19,10 @@ zeroize.workspace = true
 # --- IronRDP (Stage 4, round 2b) — versions confirmed by the spike ---
 ironrdp = { version = "0.14", features = ["connector", "session", "graphics", "input", "cliprdr", "dvc", "displaycontrol"] }
 ironrdp-blocking = "0.8"
+# H.264 decode for the GFX AVC420/AVC444 path. Default `source` feature builds
+# Cisco's OpenH264 from bundled C sources via `cc` (needs only the MSVC
+# toolchain already required by the project; first build adds a few minutes).
+openh264 = "0.9"
 sspi = { version = "0.18", features = ["network_client"] }
 tokio-rustls = "0.26"
 x509-cert = "0.2"

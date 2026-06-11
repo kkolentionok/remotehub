@@ -370,6 +370,7 @@ export const messages = {
     "session.log.failNetwork": "Network unreachable",
     "session.log.failGeneric": "Connection failed",
     "session.fullscreen": "Fullscreen (Ctrl+Alt+Enter)",
+    "session.exitFullscreen": "Back to tab (Ctrl+Alt+Enter)",
     "session.minimize": "Minimize",
     "session.moveBar": "Drag to move",
     "session.fullscreenHint": "Ctrl+Alt+Enter or Esc to exit fullscreen",
