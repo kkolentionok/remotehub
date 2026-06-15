@@ -28,7 +28,11 @@ param(
     [int]$Port = 22,
     [string]$SshUser = "root",
     [string]$RemoteDir = "/srv/remotehub-updates",
-    [string]$KeyPath = "$env:USERPROFILE\.tauri\remotehub.key"
+    [string]$KeyPath = "$env:USERPROFILE\.tauri\remotehub.key",
+    # Stable "download latest" filename, overwritten every release. The updater
+    # manifest keeps pointing at the versioned exe (immutable); this is just a
+    # fixed human link: https://<Server>/updates/<StableName>
+    [string]$StableName = "pingiesetup.exe"
 )
 
 $ErrorActionPreference = "Stop"
@@ -118,5 +122,11 @@ if ($LASTEXITCODE -ne 0) { throw "scp installer failed" }
 scp -P $Port "latest.json" "${SshUser}@${UploadHost}:${RemoteDir}/"
 if ($LASTEXITCODE -ne 0) { throw "scp manifest failed" }
 
+# Stable "download latest" copy (same signed bytes, fixed name; overwritten each release).
+scp -P $Port $exe.FullName "${SshUser}@${UploadHost}:${RemoteDir}/$StableName"
+if ($LASTEXITCODE -ne 0) { throw "scp stable installer failed" }
+
 Write-Host "==> Published v$Version -> https://$Server/updates/latest.json" -ForegroundColor Green
+Write-Host "    Versioned: https://$Server/updates/$($exe.Name)" -ForegroundColor Green
+Write-Host "    Stable:    https://$Server/updates/$StableName" -ForegroundColor Green
 Write-Host "    Don't forget: git commit the version bump." -ForegroundColor Yellow
