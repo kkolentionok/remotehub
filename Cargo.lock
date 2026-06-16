@@ -5704,7 +5704,7 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rh-app"
-version = "0.2.5"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5727,6 +5727,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "tauri-plugin-process",
+ "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "thiserror 2.0.18",
  "tokio",
@@ -5740,7 +5741,7 @@ dependencies = [
 
 [[package]]
 name = "rh-core"
-version = "0.2.5"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5753,7 +5754,7 @@ dependencies = [
 
 [[package]]
 name = "rh-rdp"
-version = "0.2.5"
+version = "0.2.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5780,7 +5781,7 @@ dependencies = [
 
 [[package]]
 name = "rh-ssh"
-version = "0.2.5"
+version = "0.2.4"
 dependencies = [
  "aes 0.8.4",
  "argon2",
@@ -5805,7 +5806,7 @@ dependencies = [
 
 [[package]]
 name = "rh-storage"
-version = "0.2.5"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5824,7 +5825,7 @@ dependencies = [
 
 [[package]]
 name = "rh-vault"
-version = "0.2.5"
+version = "0.2.4"
 dependencies = [
  "aes-gcm 0.10.3",
  "argon2",
@@ -7559,6 +7560,21 @@ checksum = "d55511a7bf6cd70c8767b02c97bf8134fa434daf3926cfc1be0a0f94132d165a"
 dependencies = [
  "tauri",
  "tauri-plugin",
+]
+
+[[package]]
+name = "tauri-plugin-single-instance"
+version = "2.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c8f29386f5e9fdc699182388a33ee80a56de436d91b67459e86afef426282af"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "thiserror 2.0.18",
+ "tracing",
+ "windows-sys 0.60.2",
+ "zbus",
 ]
 
 [[package]]

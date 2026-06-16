@@ -19,6 +19,7 @@ import {
 } from "../../store";
 import { app as appApi, settings as settingsApi } from "../../lib/ipc";
 import { TERMINAL_THEMES } from "../../lib/terminalThemes";
+import { createLogHighlighter } from "../../lib/logHighlight";
 import styles from "./Terminal.module.css";
 
 /** Terminal font-size zoom bounds (Ctrl+wheel). */
@@ -254,8 +255,12 @@ function acquireTerm(
 
     // Live PTY output sink — lives with the instance, so output keeps landing
     // in the buffer even while the pane is briefly detached during a split.
+    // Output passes through a client-side log highlighter (Termius-style):
+    // it colourises plain-text tokens (log levels, ok/fail, IP:port) but never
+    // touches escape sequences or text the program already styled.
+    const highlight = createLogHighlighter();
     const unregisterOutput = registerSessionTerminal(sessionKey, (data) =>
-        term.write(data),
+        term.write(highlight(data)),
     );
 
     const pooled: PooledTerm = {

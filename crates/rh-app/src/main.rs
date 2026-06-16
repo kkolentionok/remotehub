@@ -44,6 +44,16 @@ fn main() {
     );
 
     tauri::Builder::default()
+        // MUST be the first plugin: a second launch hands its args to this
+        // callback instead of spawning a new process. The window may be hidden
+        // in the tray (close-to-tray), so show + unminimize before focusing.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())

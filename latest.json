@@ -1,11 +1,11 @@
 {
-    "version":  "0.2.5",
-    "notes":  "RDP: render at window size (sharper), refresh-rect ghost fix, smoother windowed resize, keyboard passthrough fix",
-    "pub_date":  "2026-06-11T19:16:59Z",
+    "version":  "0.2.4",
+    "notes":  "sync via dl, logout safety, http timeouts",
+    "pub_date":  "2026-06-10T15:21:12Z",
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdklEbWtlKzdiNTdYQjl4RERyOWtuMXB5OU9wSHpkdlRtdUswK3RMMmhTcVpkSUlLaVU5eVVpcHRjOHg5a3c3Y3pUTzNZZE84cUpJa1U4UitaRW11RFJLbU5vSjNqU3dZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgxMjA1NDE4CWZpbGU6UmVtb3RlSHViXzAuMi41X3g2NC1zZXR1cC5leGUKVXMxYjhRZnZ0SEx2djRBdnNFbmVIcHRvQUEzNXRzOUxGMURUWTJHdlAwQWQxNVUzTE9FOXR2dXlWZk1DdGRaWVVQR2Uvd0NsWkU5R0V3bHJaYWY2Q2c9PQo=",
-                                             "url":  "https://dl.pingie.ru/updates/RemoteHub_0.2.5_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdklEbWtlKzdiNTdsUkc0MHEvK3YxWlFVbzRvMjhlLzhuZnZoU2pMcklpQTA0eEtTakRaSzUvRkc4Q21Vdmk3SllZdExCMUZWOElzYkcrNlBveTFaakdua1RDSlljeGdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgxMTA0ODY5CWZpbGU6UmVtb3RlSHViXzAuMi40X3g2NC1zZXR1cC5leGUKeVVOcHRlMUFDZUpMalB0cEZlQWU4UXlacDBPaTJPSXhVRnVMS1VxYllsTU0ycys4SWlMeGxTMjhsZmVDSnVZOUdDWjhTWjF2NG44TGZNS3ZTaFNtQ2c9PQo=",
+                                             "url":  "https://dl.pingie.ru/updates/RemoteHub_0.2.4_x64-setup.exe"
                                          }
                   }
 }

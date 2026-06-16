@@ -36,6 +36,14 @@ let pending: Update | null = null;
  */
 export async function runUpdateCheck(opts: { silent: boolean }): Promise<void> {
     const set = useUpdateStore.getState().set;
+    // In a `cargo tauri dev` build the updater compares the compiled-in source
+    // version to the published manifest and would try to run the installer —
+    // which can't replace a dev build, so a freshly-built (older) dev tree gets
+    // nagged with a "restart to update" banner that never clears. Skip in dev.
+    if (import.meta.env.DEV) {
+        set(opts.silent ? { kind: "idle" } : { kind: "uptodate" });
+        return;
+    }
     const cur = useUpdateStore.getState().state;
     // Don't start a new check while one is in flight or an update is staged.
     if (cur.kind === "checking" || cur.kind === "downloading" || cur.kind === "ready") {

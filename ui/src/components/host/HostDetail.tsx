@@ -391,6 +391,9 @@ function HostForm(props: HostFormProps) {
     // those few hundred milliseconds.
     const promotingRef = useRef(false);
     const pendingDuringPromote = useRef<FormState | null>(null);
+    // Set by connectNow() in draft mode: once the draft is promoted to a real
+    // host, open a session to it immediately (Enter-to-connect on a new host).
+    const connectAfterPromoteRef = useRef(false);
 
     // Track what we've committed for credential fields, so saveAction
     // can skip no-op writes. Without this, every keystroke would trigger
@@ -767,6 +770,12 @@ function HostForm(props: HostFormProps) {
                         // useEffect in HostDetail.
                         const fresh = await hostsApi.get(res.id);
                         props.onDraftPromoted(fresh);
+                        // Enter-to-connect on a brand-new host: the draft has
+                        // just become a real host — open the session now.
+                        if (connectAfterPromoteRef.current) {
+                            connectAfterPromoteRef.current = false;
+                            void useSessionsStore.getState().open(fresh);
+                        }
                     } finally {
                         promotingRef.current = false;
                     }
@@ -1150,6 +1159,26 @@ function HostForm(props: HostFormProps) {
         }
     }, [props.mode, props.host, saveAction, debouncedField, debouncedNotes]);
 
+    // Enter-to-connect. Edit mode → connect straight away. Draft mode → if the
+    // typed data is enough to promote (valid hostname), promote and open the
+    // session on the freshly-created host; otherwise stay idle (we never error
+    // on half-typed input).
+    const connectNow = useCallback(() => {
+        if (props.mode === "edit") {
+            void handleConnect();
+            return;
+        }
+        const state = formRef.current;
+        if (!isValidHostname(state.hostname)) return;
+        // Cancel the pending debounced save so it can't race our explicit
+        // promote. connectAfterPromoteRef survives until whichever promotion
+        // finishes (this one, or one already in flight) opens the session.
+        debouncedField.cancel();
+        debouncedNotes.cancel();
+        connectAfterPromoteRef.current = true;
+        void saveAction(state);
+    }, [props.mode, handleConnect, saveAction, debouncedField, debouncedNotes]);
+
     const handleDelete = useCallback(() => {
         if (props.mode === "draft") {
             clearDraft();
@@ -1184,7 +1213,19 @@ function HostForm(props: HostFormProps) {
             />
 
 
-            <div className={styles.body}>
+            <div
+                className={styles.body}
+                onKeyDown={(e) => {
+                    if (e.key !== "Enter") return;
+                    const el = e.target as HTMLElement;
+                    // Multi-line fields (notes / pasted key) and combobox
+                    // dropdowns own Enter for their own actions — don't hijack.
+                    if (el.tagName === "TEXTAREA") return;
+                    if (el.getAttribute("role") === "combobox") return;
+                    e.preventDefault();
+                    connectNow();
+                }}
+            >
             <div className={styles.frow}>
                 <div className={styles.frow__l}>{t("dialog.host.label")}</div>
                 <div className={styles.frow__c}>
