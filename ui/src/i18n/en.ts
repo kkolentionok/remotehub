@@ -145,6 +145,7 @@ export const messages = {
     "tools.forwards.lbl.host": "Remote host",
     "tools.forwards.lbl.remote": "Remote port",
     "tools.forwards.create": "Create & start",
+    "tools.forwards.previewHost": "host",
     "tools.forwards.via": "via {host}",
     "tools.forwards.onServer": "on server",
     "tools.forwards.anyAddr": "any address",

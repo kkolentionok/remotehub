@@ -140,6 +140,7 @@ export const messages: Partial<Record<keyof typeof enMessages, string>> = {
     "tools.forwards.lbl.host": "Удалённый хост",
     "tools.forwards.lbl.remote": "Удалённый порт",
     "tools.forwards.create": "Создать и запустить",
+    "tools.forwards.previewHost": "хост",
     "tools.forwards.via": "через {host}",
     "tools.forwards.onServer": "на сервере",
     "tools.forwards.anyAddr": "любой адрес",

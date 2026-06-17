@@ -661,6 +661,19 @@
     color: var(--text-2);
     line-height: 1.4;
 }
+.pfPreview {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--text-2);
+    letter-spacing: -0.01em;
+}
+/* action buttons relocated to the pane header */
+.pfHeadActions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: none;
+}
 
 /* form row: numbered fields + animated connectors */
 .pfForm {

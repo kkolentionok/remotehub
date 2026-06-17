@@ -1,6 +1,7 @@
 import {
     useEffect,
     useId,
+    useLayoutEffect,
     useMemo,
     useRef,
     useState,
@@ -81,6 +82,16 @@ export function Combobox({
     const [open, setOpen] = useState(false);
     const [query, setQuery] = useState("");
     const [highlighted, setHighlighted] = useState(0);
+    // The dropdown is rendered with position:fixed at coordinates measured from
+    // the input, so it escapes any ancestor with `overflow` clipping (e.g. a
+    // horizontally-scrollable form card). Flips upward when space below is tight.
+    const [coords, setCoords] = useState<{
+        left: number;
+        top: number;
+        width: number;
+        maxH: number;
+        up: boolean;
+    } | null>(null);
 
     // Display value when not actively typing.
     const selectedLabel = useMemo(() => {
@@ -111,6 +122,39 @@ export function Combobox({
     useEffect(() => {
         setHighlighted(0);
     }, [query, open]);
+
+    // Position the fixed dropdown from the input's viewport rect. Re-measures
+    // on any scroll (capture=true catches scrollable ancestors) and on resize.
+    useLayoutEffect(() => {
+        if (!open) {
+            setCoords(null);
+            return;
+        }
+        const measure = () => {
+            const el = inputRef.current;
+            if (!el) return;
+            const r = el.getBoundingClientRect();
+            const gap = 4;
+            const spaceBelow = window.innerHeight - r.bottom - 8;
+            const spaceAbove = r.top - 8;
+            const up = spaceBelow < 180 && spaceAbove > spaceBelow;
+            const maxH = Math.min(240, Math.max(120, up ? spaceAbove : spaceBelow));
+            setCoords({
+                left: r.left,
+                top: up ? r.top - gap - maxH : r.bottom + gap,
+                width: r.width,
+                maxH,
+                up,
+            });
+        };
+        measure();
+        window.addEventListener("scroll", measure, true);
+        window.addEventListener("resize", measure);
+        return () => {
+            window.removeEventListener("scroll", measure, true);
+            window.removeEventListener("resize", measure);
+        };
+    }, [open]);
 
     // Click-outside closes the dropdown.
     useEffect(() => {
@@ -204,8 +248,19 @@ export function Combobox({
                 aria-controls={`${id}-list`}
                 aria-autocomplete="list"
             />
-            {open && (
-                <ul id={`${id}-list`} className={styles.list} role="listbox">
+            {open && coords && (
+                <ul
+                    id={`${id}-list`}
+                    className={styles.list}
+                    role="listbox"
+                    style={{
+                        position: "fixed",
+                        left: coords.left,
+                        top: coords.top,
+                        width: coords.width,
+                        maxHeight: coords.maxH,
+                    }}
+                >
                     {showCreateRow && (
                         <li
                             role="option"

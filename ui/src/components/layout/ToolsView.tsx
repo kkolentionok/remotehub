@@ -3,6 +3,7 @@ import {
     ArrowRight,
     ArrowRightLeft,
     ArrowUpRight,
+    Check,
     Copy,
     Download,
     Eye,
@@ -12,7 +13,6 @@ import {
     KeyRound,
     Lock,
     Pencil,
-    Play,
     Search,
     Server,
     Share2,
@@ -537,6 +537,16 @@ function ForwardsPane({ onToast }: { onToast: (s: string) => void }) {
 
     const onlyDigits = (v: string) => v.replace(/[^0-9]/g, "").slice(0, 5);
 
+    // Live preview of what the forward will do, in plain endpoint terms.
+    const fwdPreview = useMemo(() => {
+        const host = selHostName || t("tools.forwards.previewHost");
+        const L = localPort || "·";
+        const R = remotePort || "·";
+        if (kind === "remote") return `${host}:${R} → localhost:${L}`;
+        if (kind === "dynamic") return `localhost:${L} → SOCKS5`;
+        return `localhost:${L} → ${host}:${R}`;
+    }, [kind, selHostName, localPort, remotePort, t]);
+
     const resetForm = () => {
         setEditId(null);
         setAutoStart(false);
@@ -731,6 +741,36 @@ function ForwardsPane({ onToast }: { onToast: (s: string) => void }) {
                         </span>
                     )}
                     <div className={styles.paneSp} />
+                    <div className={styles.pfHeadActions}>
+                        <button
+                            type="button"
+                            className={`${styles.pfAuto} ${autoStart ? styles.pfAutoOn : ""}`}
+                            aria-pressed={autoStart}
+                            title={t("tools.forwards.autoStart")}
+                            onClick={() => setAutoStart((v) => !v)}
+                        >
+                            <Zap size={15} />
+                        </button>
+                        {editId !== null && (
+                            <button
+                                type="button"
+                                className={styles.pfCancel}
+                                title={t("tools.forwards.cancel")}
+                                onClick={resetForm}
+                            >
+                                <X size={15} />
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            className={styles.pfCreate}
+                            disabled={!valid || busy}
+                            onClick={() => void submit()}
+                        >
+                            <Check size={15} />
+                            {t("tools.forwards.save")}
+                        </button>
+                    </div>
                 </div>
 
                 <div className={styles.pfCard}>
@@ -755,7 +795,7 @@ function ForwardsPane({ onToast }: { onToast: (s: string) => void }) {
                             ))}
                         </div>
                         <div className={styles.pfDesc}>
-                            {t(`tools.forwards.desc.${kind}` as Parameters<typeof t>[0])}
+                            <span className={styles.pfPreview}>{fwdPreview}</span>
                         </div>
                     </div>
 
@@ -822,39 +862,6 @@ function ForwardsPane({ onToast }: { onToast: (s: string) => void }) {
                                 </label>
                             </div>
                         )}
-
-                        <Conn />
-
-                        <div className={styles.pfActions}>
-                            <button
-                                type="button"
-                                className={`${styles.pfAuto} ${autoStart ? styles.pfAutoOn : ""}`}
-                                aria-pressed={autoStart}
-                                title={t("tools.forwards.autoStart")}
-                                onClick={() => setAutoStart((v) => !v)}
-                            >
-                                <Zap size={15} />
-                            </button>
-                            {editId !== null && (
-                                <button
-                                    type="button"
-                                    className={styles.pfCancel}
-                                    title={t("tools.forwards.cancel")}
-                                    onClick={resetForm}
-                                >
-                                    <X size={15} />
-                                </button>
-                            )}
-                            <button
-                                type="button"
-                                className={styles.pfCreate}
-                                disabled={!valid || busy}
-                                onClick={() => void submit()}
-                            >
-                                <Play size={14} />
-                                {t(editId !== null ? "tools.forwards.save" : "tools.forwards.create")}
-                            </button>
-                        </div>
                     </div>
                 </div>
             </div>

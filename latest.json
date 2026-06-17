@@ -1,11 +1,11 @@
 {
-    "version":  "0.2.4",
-    "notes":  "sync via dl, logout safety, http timeouts",
-    "pub_date":  "2026-06-10T15:21:12Z",
+    "version":  "0.2.6",
+    "notes":  "Single-window mode; Enter to connect; terminal log highlighting; port-forwarding form redesign (Save + auto-start in header, live preview); combobox dropdown no longer clipped",
+    "pub_date":  "2026-06-16T19:10:53Z",
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdklEbWtlKzdiNTdsUkc0MHEvK3YxWlFVbzRvMjhlLzhuZnZoU2pMcklpQTA0eEtTakRaSzUvRkc4Q21Vdmk3SllZdExCMUZWOElzYkcrNlBveTFaakdua1RDSlljeGdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgxMTA0ODY5CWZpbGU6UmVtb3RlSHViXzAuMi40X3g2NC1zZXR1cC5leGUKeVVOcHRlMUFDZUpMalB0cEZlQWU4UXlacDBPaTJPSXhVRnVMS1VxYllsTU0ycys4SWlMeGxTMjhsZmVDSnVZOUdDWjhTWjF2NG44TGZNS3ZTaFNtQ2c9PQo=",
-                                             "url":  "https://dl.pingie.ru/updates/RemoteHub_0.2.4_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdklEbWtlKzdiNXdKNG50eXJ3aWs4ZG84aEZVVWE4VGdxbUppUlA5TkZkaFRJRis5NERvNk04NU1udjBzS2Z1djQrRVMzaU9yMzhlVERrQ3V3MFlnMHRteTVtOTlMUHdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgxNjM3MDQyCWZpbGU6UmVtb3RlSHViXzAuMi42X3g2NC1zZXR1cC5leGUKNVNpK09Ga0NrNzg5VHh0Q0ZZbkNzR1BwU0VKc0ViY2htRVN2S05NcGFuMGVQQUdob3hSUi93T1JnY2EvL0M4eCtVNnFuMXNRMFh4d3kzQ21GK04yRGc9PQo=",
+                                             "url":  "https://dl.pingie.ru/updates/RemoteHub_0.2.6_x64-setup.exe"
                                          }
                   }
 }
