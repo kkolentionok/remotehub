@@ -95,16 +95,29 @@ function applySgr(seq: string, styled: boolean): boolean {
 interface HiState {
     styled: boolean;
     carry: string;
+    // True while a full-screen TUI owns the alternate screen buffer (vim, mc,
+    // mcedit, htop, less…). We must NOT touch its output: injecting our SGR
+    // resets would clobber its background fills and corrupt the layout.
+    alt: boolean;
+}
+
+// Detect alternate-screen enter/leave (xterm private modes 1049/1047/47).
+function applyAlt(seq: string, alt: boolean): boolean {
+    const mm = /^\x1b\[\?(1049|1047|47)([hl])$/.exec(seq);
+    if (!mm) return alt;
+    return mm[2] === "h";
 }
 
 /** Create a per-terminal highlighter. Returns a function that takes a raw PTY
  *  chunk and returns the (possibly colourised) string to hand to xterm. */
 export function createLogHighlighter(): (data: Uint8Array) => string {
     const decoder = new TextDecoder("utf-8");
-    const state: HiState = { styled: false, carry: "" };
+    const state: HiState = { styled: false, carry: "", alt: false };
 
     const emitText = (text: string): string => {
         if (text.length === 0) return text;
+        // Never touch a full-screen TUI's output.
+        if (state.alt) return text;
         // Colour almost never persists across a line break — programs reset
         // their SGR at end of line. So treat each newline as a fresh, unstyled
         // start. This also self-heals if a program's colour region was cut off
@@ -147,6 +160,7 @@ export function createLogHighlighter(): (data: Uint8Array) => string {
             out += emitText(work.slice(last, m.index));
             out += m[0];
             state.styled = applySgr(m[0], state.styled);
+            state.alt = applyAlt(m[0], state.alt);
             last = m.index + m[0].length;
         }
         out += emitText(work.slice(last));

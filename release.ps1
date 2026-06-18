@@ -32,7 +32,10 @@ param(
     # Stable "download latest" filename, overwritten every release. The updater
     # manifest keeps pointing at the versioned exe (immutable); this is just a
     # fixed human link: https://<Server>/updates/<StableName>
-    [string]$StableName = "pingiesetup.exe"
+    [string]$StableName = "pingiesetup.exe",
+    # Standalone (no-installer) build: the raw exe, uploaded both versioned and
+    # under this stable name. Same binary, just run without installing.
+    [string]$LightStableName = "light.exe"
 )
 
 $ErrorActionPreference = "Stop"
@@ -93,6 +96,14 @@ $signature = (Get-Content $sigFile -Raw).Trim()
 
 Write-Host "==> Installer: $($exe.Name)" -ForegroundColor Green
 
+# Standalone (no-installer) binary straight out of target/release. cargo emits
+# it under the package name (rh-app) but Tauri renames it to productName
+# (RemoteHub); accept either.
+$lightExe = Get-ChildItem (Join-Path $root "target\release\*.exe") -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -in @("RemoteHub.exe", "rh-app.exe") } |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$lightVersionedName = "RemoteHub_${Version}_x64-light.exe"
+
 # --- latest.json (Tauri static format) ------------------------------------
 $pubDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 $manifest = [ordered]@{
@@ -126,7 +137,22 @@ if ($LASTEXITCODE -ne 0) { throw "scp manifest failed" }
 scp -P $Port $exe.FullName "${SshUser}@${UploadHost}:${RemoteDir}/$StableName"
 if ($LASTEXITCODE -ne 0) { throw "scp stable installer failed" }
 
+# Standalone (no-installer) build: versioned + stable name. Non-fatal if the
+# raw exe wasn't found, so a failure here never blocks the real release.
+if ($lightExe) {
+    scp -P $Port $lightExe.FullName "${SshUser}@${UploadHost}:${RemoteDir}/$lightVersionedName"
+    if ($LASTEXITCODE -ne 0) { throw "scp light (versioned) failed" }
+    scp -P $Port $lightExe.FullName "${SshUser}@${UploadHost}:${RemoteDir}/$LightStableName"
+    if ($LASTEXITCODE -ne 0) { throw "scp light (stable) failed" }
+} else {
+    Write-Host "==> WARN: standalone exe not found in target/release; skipped light upload" -ForegroundColor Yellow
+}
+
 Write-Host "==> Published v$Version -> https://$Server/updates/latest.json" -ForegroundColor Green
 Write-Host "    Versioned: https://$Server/updates/$($exe.Name)" -ForegroundColor Green
 Write-Host "    Stable:    https://$Server/updates/$StableName" -ForegroundColor Green
+if ($lightExe) {
+    Write-Host "    Light:     https://$Server/updates/$lightVersionedName" -ForegroundColor Green
+    Write-Host "    Light std: https://$Server/updates/$LightStableName" -ForegroundColor Green
+}
 Write-Host "    Don't forget: git commit the version bump." -ForegroundColor Yellow

@@ -234,6 +234,19 @@ function acquireTerm(
     };
     el.addEventListener("contextmenu", onContextMenu);
 
+    // With mouse reporting on (mcedit/vim/mc…), xterm forwards the right-click
+    // as a mouse event, which moves the app's caret to the pointer BEFORE our
+    // paste lands — so the paste ends up under the mouse, not at the input
+    // caret. Swallow the right button in the capture phase so xterm never
+    // forwards it. The contextmenu paste above still fires (stopPropagation
+    // doesn't suppress the separate contextmenu event) and lands at the real
+    // caret. Left button is untouched, so click-to-position still works.
+    const swallowRight = (e: MouseEvent) => {
+        if (e.button === 2) e.stopPropagation();
+    };
+    el.addEventListener("mousedown", swallowRight, true);
+    el.addEventListener("mouseup", swallowRight, true);
+
     // Ctrl + wheel zooms the shared terminal_font_size setting (debounced
     // backend write). Plain wheel is left to xterm for scrollback.
     let zoomTimer = 0;
@@ -273,6 +286,8 @@ function acquireTerm(
             el.removeEventListener("mousedown", onMouseDown);
             document.removeEventListener("mouseup", onDocMouseUp);
             el.removeEventListener("contextmenu", onContextMenu);
+            el.removeEventListener("mousedown", swallowRight, true);
+            el.removeEventListener("mouseup", swallowRight, true);
             el.removeEventListener("wheel", onWheel);
             if (linkTip) linkTip.remove();
             unregisterOutput();
