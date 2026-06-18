@@ -1,11 +1,11 @@
 {
-    "version":  "0.2.6",
-    "notes":  "Single-window mode; Enter to connect; terminal log highlighting; port-forwarding form redesign (Save + auto-start in header, live preview); combobox dropdown no longer clipped",
-    "pub_date":  "2026-06-16T19:10:53Z",
+    "version":  "0.2.7",
+    "notes":  "Терминал: чистая отрисовка mcedit/vim/htop (alt-screen passthrough); правый клик вставляет под курсор ввода, а не под мышь",
+    "pub_date":  "2026-06-18T19:23:50Z",
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdklEbWtlKzdiNXdKNG50eXJ3aWs4ZG84aEZVVWE4VGdxbUppUlA5TkZkaFRJRis5NERvNk04NU1udjBzS2Z1djQrRVMzaU9yMzhlVERrQ3V3MFlnMHRteTVtOTlMUHdrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgxNjM3MDQyCWZpbGU6UmVtb3RlSHViXzAuMi42X3g2NC1zZXR1cC5leGUKNVNpK09Ga0NrNzg5VHh0Q0ZZbkNzR1BwU0VKc0ViY2htRVN2S05NcGFuMGVQQUdob3hSUi93T1JnY2EvL0M4eCtVNnFuMXNRMFh4d3kzQ21GK04yRGc9PQo=",
-                                             "url":  "https://dl.pingie.ru/updates/RemoteHub_0.2.6_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdklEbWtlKzdiNXp4Zm01U0crdUhGQzBtTjlsOHBoTnlJR0lDdU9HVnNuWHA2alNaeGVnZjFIN0d3OFlzc2FXcVo2QlprTytpNVhXN1pNNncwYXF0L1dNNlRxVXRuT3cwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgxODEwNjI2CWZpbGU6UmVtb3RlSHViXzAuMi43X3g2NC1zZXR1cC5leGUKR1pxc1hURjhwNUJXd2VldmpUWjBwTUZvbm5YZGh3L1dYRWpTSEw5UHdEM1ZVRG9pd2VMZERxOVNyQmpqV25FTEErQ05DSXBUdDRqY0t0S21jZ3VRQVE9PQo=",
+                                             "url":  "https://dl.pingie.ru/updates/RemoteHub_0.2.7_x64-setup.exe"
                                          }
                   }
 }
