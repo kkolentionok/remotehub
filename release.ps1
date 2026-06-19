@@ -29,6 +29,10 @@ param(
     [string]$SshUser = "root",
     [string]$RemoteDir = "/srv/remotehub-updates",
     [string]$KeyPath = "$env:USERPROFILE\.tauri\remotehub.key",
+    # Signing key password. Precedence: this param > $env:RH_SIGN_PW > interactive
+    # prompt. Set $env:RH_SIGN_PW once per session to avoid retyping (and the
+    # silent no-echo typo that wastes a 5-min build).
+    [string]$KeyPassword = "",
     # Stable "download latest" filename, overwritten every release. The updater
     # manifest keeps pointing at the versioned exe (immutable); this is just a
     # fixed human link: https://<Server>/updates/<StableName>
@@ -77,11 +81,17 @@ Write-Host "==> Building signed bundle" -ForegroundColor Cyan
 if (-not (Test-Path $KeyPath)) {
     throw "Signing key not found at $KeyPath. Run 'tauri signer generate' first (see docs/UPDATER.md)."
 }
-$securePw = Read-Host "Signing key password" -AsSecureString
+$pw = $KeyPassword
+if (-not $pw) { $pw = $env:RH_SIGN_PW }
+if (-not $pw) {
+    $securePw = Read-Host "Signing key password" -AsSecureString
+    $pw = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+            [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePw))
+} else {
+    Write-Host "    (using password from -KeyPassword / `$env:RH_SIGN_PW)" -ForegroundColor DarkGray
+}
 $env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content $KeyPath -Raw)
-$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD =
-    [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-        [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePw))
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $pw
 
 cargo tauri build
 if ($LASTEXITCODE -ne 0) { throw "cargo tauri build failed" }
