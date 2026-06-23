@@ -124,6 +124,20 @@ export function ProfileSection() {
         }
     }
 
+    // Session expired (server token TTL elapsed): the fix is to re-authenticate
+    // and overwrite the stale bearer token — NOT to re-enter the vault master
+    // password (that's the E2E key, unrelated to the server session). Re-runs
+    // the Yandex OAuth flow; the sync engine resumes on its next pass.
+    // (Password-account re-auth would route to the login form — follow-up.)
+    async function reauth() {
+        try {
+            await sync.oauthYandex();
+            await refresh();
+        } catch (e: unknown) {
+            setAuthError(localizeSyncError(t, e));
+        }
+    }
+
     async function doLogout() {
         setLogoutError(null);
         setLogoutBusy(true);
@@ -238,7 +252,11 @@ export function ProfileSection() {
                     ) : (
                         <SyncStatusCard
                             status={syncStatus}
-                            onFix={() => setDialog({ kind: "sync-master", mode: "fix" })}
+                            onFix={() => {
+                                const msg = (syncStatus?.message ?? "").toLowerCase();
+                                if (msg.includes("unauthorized")) void reauth();
+                                else setDialog({ kind: "sync-master", mode: "fix" });
+                            }}
                         />
                     )}
                 </div>
