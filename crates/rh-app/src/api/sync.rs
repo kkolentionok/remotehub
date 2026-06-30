@@ -105,12 +105,15 @@ pub async fn sync_login(req: SyncAuthRequest) -> ApiResult<()> {
     if cfg.endpoint.is_empty() {
         return Err(ApiError::validation("sync", "endpoint not set"));
     }
-    let token = sync_remote::server_login(&cfg.endpoint, &req.email, &req.password)
+    let (token, refresh) = sync_remote::server_login(&cfg.endpoint, &req.email, &req.password)
         .await
         .map_err(|m| ApiError::validation("sync", m))?;
     sync_remote::token_set(&token).map_err(|e| ApiError::Internal {
         message: format!("keychain: {e}"),
     })?;
+    if let Some(refresh) = refresh {
+        let _ = sync_remote::refresh_set(&refresh);
+    }
     cfg.email = Some(req.email.trim().to_lowercase());
     cfg.save();
     Ok(())
@@ -166,6 +169,7 @@ pub async fn sync_logout(app: AppHandle, state: State<'_, AppState>) -> ApiResul
 
     // Confirmed on the server — now safe to forget credentials and wipe.
     sync_remote::token_clear();
+    sync_remote::refresh_clear();
     sync_remote::vault_key_clear();
     *state.sync_master_mem.lock().await = None;
 
@@ -196,12 +200,15 @@ pub async fn sync_oauth_yandex() -> ApiResult<SyncConfigResponse> {
     if cfg.endpoint.is_empty() {
         return Err(ApiError::validation("sync", "endpoint not set"));
     }
-    let token = sync_remote::run_yandex_login(&cfg.endpoint)
+    let (token, refresh) = sync_remote::run_yandex_login(&cfg.endpoint)
         .await
         .map_err(|m| ApiError::validation("sync", m))?;
     sync_remote::token_set(&token).map_err(|e| ApiError::Internal {
         message: format!("keychain: {e}"),
     })?;
+    if let Some(refresh) = refresh {
+        let _ = sync_remote::refresh_set(&refresh);
+    }
     // Best-effort: remember the email for the "signed in as …" display.
     let mut cfg = SyncConfig::load();
     if let Ok(email) = sync_remote::server_me(&cfg.endpoint, &token).await {
@@ -225,7 +232,11 @@ pub(crate) async fn run_sync_core(
     token: &str,
     master: &str,
 ) -> ApiResult<SyncNowResponse> {
-    let remote = ServerRemote::new(endpoint.to_string(), token.to_string());
+    let remote = ServerRemote::new(
+        endpoint.to_string(),
+        token.to_string(),
+        sync_remote::refresh_get(),
+    );
 
     let local = crate::api::vault::build_snapshot(state).await?;
 
