@@ -1,11 +1,11 @@
 {
-    "version":  "0.3.0",
-    "notes":  "Ребрендинг в Pingie",
-    "pub_date":  "2026-06-30T19:13:32Z",
+    "version":  "0.2.7",
+    "notes":  "Терминал: чистая отрисовка mcedit/vim/htop (alt-screen passthrough); правый клик вставляет под курсор ввода, а не под мышь",
+    "pub_date":  "2026-06-18T19:23:50Z",
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdklEbWtlKzdiNSsxaU9lVGJWWEpxbjhLSytESmRKdzlzd2diMnZYMmc2eXVBSXQyK2FQa0RwOXZUT052WGVWdVd1c2dwRkFBdW9OdDJGQ3dHSzIyQjhXU2s5ZlpUOUFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgyODQ2ODA5CWZpbGU6UGluZ2llXzAuMy4wX3g2NC1zZXR1cC5leGUKMWh2bTkvbElXcTgvUUZwNU9lMG0rTWVhYzVWWE5oeDcwYzVESWpGMGdoT3J6enBBVDZIcHNvWExxMUJmRm94SDU2eEFRc2p3eGxCRWczMDRqdXIzRHc9PQo=",
-                                             "url":  "https://dl.pingie.ru/updates/Pingie_0.3.0_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdklEbWtlKzdiNXp4Zm01U0crdUhGQzBtTjlsOHBoTnlJR0lDdU9HVnNuWHA2alNaeGVnZjFIN0d3OFlzc2FXcVo2QlprTytpNVhXN1pNNncwYXF0L1dNNlRxVXRuT3cwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgxODEwNjI2CWZpbGU6UmVtb3RlSHViXzAuMi43X3g2NC1zZXR1cC5leGUKR1pxc1hURjhwNUJXd2VldmpUWjBwTUZvbm5YZGh3L1dYRWpTSEw5UHdEM1ZVRG9pd2VMZERxOVNyQmpqV25FTEErQ05DSXBUdDRqY0t0S21jZ3VRQVE9PQo=",
+                                             "url":  "https://dl.pingie.ru/updates/RemoteHub_0.2.7_x64-setup.exe"
                                          }
                   }
 }
