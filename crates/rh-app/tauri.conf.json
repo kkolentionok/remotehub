@@ -1,8 +1,8 @@
 {
     "$schema": "https://schema.tauri.app/config/2",
-    "productName": "RemoteHub",
-    "version": "0.2.8",
-    "identifier": "app.remotehub.desktop",
+    "productName": "Pingie",
+    "version": "0.3.0",
+    "identifier": "ru.pingie.desktop",
     "build": {
         "beforeDevCommand": {
             "script": "pnpm dev",
@@ -19,7 +19,7 @@
         "withGlobalTauri": true,
         "windows": [
             {
-                "title": "RemoteHub",
+                "title": "Pingie",
                 "width": 1280,
                 "height": 800,
                 "minWidth": 800,

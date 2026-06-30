@@ -7,15 +7,15 @@ use std::path::PathBuf;
 
 /// Base directory for application data on this OS.
 ///
-/// - Windows: `%APPDATA%\RemoteHub\`
-/// - macOS:   `~/Library/Application Support/RemoteHub/`
-/// - Linux:   `$XDG_DATA_HOME/remotehub/` or `~/.local/share/remotehub/`
+/// - Windows: `%APPDATA%\Pingie\`
+/// - macOS:   `~/Library/Application Support/Pingie/`
+/// - Linux:   `$XDG_DATA_HOME/pingie/` or `~/.local/share/pingie/`
 pub fn app_data_dir() -> PathBuf {
     if let Some(dir) = platform_app_data_dir() {
         return dir;
     }
     // Fallback: cwd. This should never happen on a normal install.
-    PathBuf::from(".").join("remotehub-data")
+    PathBuf::from(".").join("pingie-data")
 }
 
 /// Directory for rotating log files.
@@ -25,21 +25,21 @@ pub fn log_dir() -> PathBuf {
 
 #[cfg(target_os = "windows")]
 fn platform_app_data_dir() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("RemoteHub"))
+    std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join("Pingie"))
 }
 
 #[cfg(target_os = "macos")]
 fn platform_app_data_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
-        .map(|p| PathBuf::from(p).join("Library/Application Support/RemoteHub"))
+        .map(|p| PathBuf::from(p).join("Library/Application Support/Pingie"))
 }
 
 #[cfg(target_os = "linux")]
 fn platform_app_data_dir() -> Option<PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
-        Some(PathBuf::from(xdg).join("remotehub"))
+        Some(PathBuf::from(xdg).join("pingie"))
     } else {
-        std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/share/remotehub"))
+        std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/share/pingie"))
     }
 }
 

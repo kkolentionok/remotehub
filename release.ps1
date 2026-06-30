@@ -107,12 +107,12 @@ $signature = (Get-Content $sigFile -Raw).Trim()
 Write-Host "==> Installer: $($exe.Name)" -ForegroundColor Green
 
 # Standalone (no-installer) binary straight out of target/release. cargo emits
-# it under the package name (rh-app) but Tauri renames it to productName
-# (RemoteHub); accept either.
+# it under the package name (rh-app); Tauri may also produce one named after
+# productName (Pingie). Accept any of them.
 $lightExe = Get-ChildItem (Join-Path $root "target\release\*.exe") -File -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -in @("RemoteHub.exe", "rh-app.exe") } |
+    Where-Object { $_.Name -in @("Pingie.exe", "RemoteHub.exe", "rh-app.exe") } |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
-$lightVersionedName = "RemoteHub_${Version}_x64-light.exe"
+$lightVersionedName = "Pingie_${Version}_x64-light.exe"
 
 # --- latest.json (Tauri static format) ------------------------------------
 $pubDate = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")

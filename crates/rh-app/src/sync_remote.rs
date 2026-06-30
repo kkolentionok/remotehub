@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::paths;
 
-const KEYCHAIN_SERVICE: &str = "RemoteHub";
+const KEYCHAIN_SERVICE: &str = "Pingie";
 const KEYCHAIN_TOKEN_KEY: &str = "sync-token";
 /// Long-lived refresh token. Kept beside the access token; lets the client
 /// silently renew an expired access token (no "session expired" prompt).

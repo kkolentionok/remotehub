@@ -38,7 +38,7 @@ import s from "./ImportExportSection.module.css";
  *  read) or drag-and-drop (File → text). */
 type StagedFile = { name: string; size: number; body: string };
 
-const VAULT_FILTERS = [{ name: "RemoteHub Vault", extensions: ["rvault"] }];
+const VAULT_FILTERS = [{ name: "Pingie Vault", extensions: ["rvault"] }];
 
 /**
  * Settings -> Import / Export. Two separated flows behind a toggle:

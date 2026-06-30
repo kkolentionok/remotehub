@@ -126,9 +126,9 @@ fn show_main(app: &AppHandle) {
 /// Tray tooltip text for a given live-session count.
 fn tooltip_for(n: usize) -> String {
     match n {
-        0 => "RemoteHub".to_string(),
-        1 => "RemoteHub · 1 active session".to_string(),
-        _ => format!("RemoteHub · {n} active sessions"),
+        0 => "Pingie".to_string(),
+        1 => "Pingie · 1 active session".to_string(),
+        _ => format!("Pingie · {n} active sessions"),
     }
 }
 
@@ -165,7 +165,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     });
 
     let mut b = MenuBuilder::new(app);
-    b = b.item(&MenuItemBuilder::with_id("show", "Open RemoteHub").build(app)?);
+    b = b.item(&MenuItemBuilder::with_id("show", "Open Pingie").build(app)?);
     b = b.item(&MenuItemBuilder::with_id("forwards", "Port forwarding").build(app)?);
 
     // Favorites — user-pinned hosts, by name.

@@ -198,7 +198,7 @@ export const messages = {
     "tools.section.share": "File serving",
     "tools.creds.empty": "No saved credentials yet.",
     "tools.share.sub": "Temporary HTTP access to a file — handy for wget/curl on a remote host.",
-    "tools.share.body": "Drop a file and RemoteHub serves it over a temporary local HTTP link, so you can wget/curl it from a remote host without SFTP. In development.",
+    "tools.share.body": "Drop a file and Pingie serves it over a temporary local HTTP link, so you can wget/curl it from a remote host without SFTP. In development.",
     "tools.cred.new": "New credential",
     "tools.cred.newSub": "Fill in and create",
     "tools.cred.untitled": "Untitled",
@@ -410,7 +410,7 @@ export const messages = {
     // ------------------------------------------------------------------
     // Host detail (main pane)
     // ------------------------------------------------------------------
-    "host.welcome.title": "Welcome to RemoteHub",
+    "host.welcome.title": "Welcome to Pingie",
     "host.welcome.description": "Select a host from the sidebar, or create a new one with the + button.",
     "host.error.loadFailed": "Could not load host",
     "host.connect": "Connect",
@@ -525,7 +525,7 @@ export const messages = {
     "dialog.confirm.discardChanges.title": "Discard changes?",
     "dialog.confirm.discardChanges.description": "Not all required fields are filled. Do you want to finish editing and discard all changes?",
     "dialog.confirm.discardChanges.action": "Discard changes",
-    "dialog.confirm.quit.title": "Quit RemoteHub?",
+    "dialog.confirm.quit.title": "Quit Pingie?",
     "dialog.confirm.quit.description": "You have {n} active session(s). Quitting will close them all.",
     "dialog.confirm.quit.action": "Quit",
 
@@ -726,7 +726,7 @@ export const messages = {
     "settings.io.strength.good": "good",
     "settings.io.strength.strong": "strong",
     "settings.io.dropTitle": "Drop a file here or choose manually",
-    "settings.io.pickHint": "Only a file exported from RemoteHub will work. We\u2019ll ask for the file\u2019s master password on the next step — the one it was encrypted with.",
+    "settings.io.pickHint": "Only a file exported from Pingie will work. We\u2019ll ask for the file\u2019s master password on the next step — the one it was encrypted with.",
     "settings.io.filePassword": "File master password",
     "settings.io.filePwPlaceholder": "The password the file was encrypted with",
     "settings.io.wrongPassword": "Wrong password or the file is damaged",
@@ -751,7 +751,7 @@ export const messages = {
     "settings.io.encrypted": "encrypted",
     "settings.io.removeFile": "Remove file",
 
-    "settings.about.title": "About RemoteHub",
+    "settings.about.title": "About Pingie",
     "settings.about.description": "A cross-platform SSH, RDP and SFTP client. Local-first.",
     "settings.about.version": "Version",
     "settings.about.updates": "Updates",

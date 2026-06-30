@@ -1,11 +1,11 @@
 {
-    "version":  "0.2.8",
-    "notes":  "Синхронизация: сессия больше не истекает (refresh-токены, тихое обновление). Вход через Yandex без токена в адресной строке.",
-    "pub_date":  "2026-06-30T18:42:47Z",
+    "version":  "0.3.0",
+    "notes":  "Ребрендинг в Pingie",
+    "pub_date":  "2026-06-30T19:13:32Z",
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdklEbWtlKzdiNTdVeXF4UkxSU1Y2NzVPZTArQzV6Z0Uyd3l3TnpiNy94aGw1bUlCMWk5SXN0aFZFTUppTzlOQlRkOE9zQWt6b2IvWWc0c3Yvb2xNcCt3ejgzSitXVUFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgyODQ0OTYzCWZpbGU6UmVtb3RlSHViXzAuMi44X3g2NC1zZXR1cC5leGUKMmI0Z2RyTmgvQUZnTmdDQStFbElpdHNwczV1dnJsMEhnVEtHK2tPd0cxVStuOFVTcXFSRjVTdVh5MXlEREx2aXFOdE4vOHp1OUltT3hZMFBzMENKQVE9PQo=",
-                                             "url":  "https://dl.pingie.ru/updates/RemoteHub_0.2.8_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdklEbWtlKzdiNSsxaU9lVGJWWEpxbjhLSytESmRKdzlzd2diMnZYMmc2eXVBSXQyK2FQa0RwOXZUT052WGVWdVd1c2dwRkFBdW9OdDJGQ3dHSzIyQjhXU2s5ZlpUOUFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgyODQ2ODA5CWZpbGU6UGluZ2llXzAuMy4wX3g2NC1zZXR1cC5leGUKMWh2bTkvbElXcTgvUUZwNU9lMG0rTWVhYzVWWE5oeDcwYzVESWpGMGdoT3J6enBBVDZIcHNvWExxMUJmRm94SDU2eEFRc2p3eGxCRWczMDRqdXIzRHc9PQo=",
+                                             "url":  "https://dl.pingie.ru/updates/Pingie_0.3.0_x64-setup.exe"
                                          }
                   }
 }

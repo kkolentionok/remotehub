@@ -134,7 +134,7 @@ impl KeychainRef {
     /// Service name used as the `service` field in keychain entries.
     /// All entries this app writes share this service name, making them
     /// easy to audit and bulk-delete in the OS keychain UI.
-    pub const SERVICE: &'static str = "RemoteHub";
+    pub const SERVICE: &'static str = "Pingie";
 
     /// Build a reference for the primary secret of a credential.
     #[must_use]
@@ -234,9 +234,11 @@ mod tests {
 
     #[test]
     fn keychain_ref_service_is_stable() {
-        // Crate-wide invariant: do NOT change SERVICE without a migration
-        // path — existing user keychains depend on this exact string.
-        assert_eq!(KeychainRef::SERVICE, "RemoteHub");
+        // Crate-wide invariant: changing SERVICE orphans every existing
+        // keychain entry. The RemoteHub→Pingie rebrand does this deliberately
+        // (fresh install; data is restored from the server vault on next login).
+        // Don't change it again without the same understanding.
+        assert_eq!(KeychainRef::SERVICE, "Pingie");
     }
 
     #[test]

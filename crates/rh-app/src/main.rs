@@ -40,7 +40,7 @@ fn main() {
     info!(
         version = env!("CARGO_PKG_VERSION"),
         target = std::env::consts::OS,
-        "RemoteHub starting"
+        "Pingie starting"
     );
 
     tauri::Builder::default()
@@ -221,7 +221,7 @@ async fn build_state(_app: &tauri::AppHandle) -> Result<AppState, String> {
     let data_dir = paths::app_data_dir();
     std::fs::create_dir_all(&data_dir)
         .map_err(|e| format!("create data dir {}: {e}", data_dir.display()))?;
-    let db_path = data_dir.join("remotehub.db");
+    let db_path = data_dir.join("pingie.db");
 
     info!(db_path = %db_path.display(), "opening database");
 
