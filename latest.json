@@ -1,11 +1,11 @@
 {
-    "version":  "0.2.7",
-    "notes":  "Терминал: чистая отрисовка mcedit/vim/htop (alt-screen passthrough); правый клик вставляет под курсор ввода, а не под мышь",
-    "pub_date":  "2026-06-18T19:23:50Z",
+    "version":  "0.2.8",
+    "notes":  "Синхронизация: сессия больше не истекает (refresh-токены, тихое обновление). Вход через Yandex без токена в адресной строке.",
+    "pub_date":  "2026-06-30T18:42:47Z",
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdklEbWtlKzdiNXp4Zm01U0crdUhGQzBtTjlsOHBoTnlJR0lDdU9HVnNuWHA2alNaeGVnZjFIN0d3OFlzc2FXcVo2QlprTytpNVhXN1pNNncwYXF0L1dNNlRxVXRuT3cwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgxODEwNjI2CWZpbGU6UmVtb3RlSHViXzAuMi43X3g2NC1zZXR1cC5leGUKR1pxc1hURjhwNUJXd2VldmpUWjBwTUZvbm5YZGh3L1dYRWpTSEw5UHdEM1ZVRG9pd2VMZERxOVNyQmpqV25FTEErQ05DSXBUdDRqY0t0S21jZ3VRQVE9PQo=",
-                                             "url":  "https://dl.pingie.ru/updates/RemoteHub_0.2.7_x64-setup.exe"
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdklEbWtlKzdiNTdVeXF4UkxSU1Y2NzVPZTArQzV6Z0Uyd3l3TnpiNy94aGw1bUlCMWk5SXN0aFZFTUppTzlOQlRkOE9zQWt6b2IvWWc0c3Yvb2xNcCt3ejgzSitXVUFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzgyODQ0OTYzCWZpbGU6UmVtb3RlSHViXzAuMi44X3g2NC1zZXR1cC5leGUKMmI0Z2RyTmgvQUZnTmdDQStFbElpdHNwczV1dnJsMEhnVEtHK2tPd0cxVStuOFVTcXFSRjVTdVh5MXlEREx2aXFOdE4vOHp1OUltT3hZMFBzMENKQVE9PQo=",
+                                             "url":  "https://dl.pingie.ru/updates/RemoteHub_0.2.8_x64-setup.exe"
                                          }
                   }
 }
