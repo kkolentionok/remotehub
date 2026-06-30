@@ -16,6 +16,10 @@ pub struct Config {
     pub jwt_secret: String,
     /// Token lifetime in hours.
     pub token_ttl_hours: i64,
+    /// Refresh-token lifetime in days. Refresh tokens let the client silently
+    /// renew an expired access token (no "session expired" prompt). Default is
+    /// effectively "never" for a personal tool.
+    pub refresh_ttl_days: i64,
     /// Reject vault blobs larger than this (defense against abuse).
     pub max_blob_bytes: usize,
     /// Public base URL (e.g. `https://pingie.ru`) — used to build the Yandex
@@ -51,6 +55,10 @@ impl Config {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(168),
+            refresh_ttl_days: env::var("REFRESH_TTL_DAYS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3650),
             max_blob_bytes: env::var("MAX_BLOB_BYTES")
                 .ok()
                 .and_then(|s| s.parse().ok())

@@ -14,7 +14,9 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::auth::{hash_password, issue_token, verify_password, AuthAccount};
+use crate::auth::{
+    decode_refresh, hash_password, issue_refresh, issue_token, verify_password, AuthAccount,
+};
 use crate::error::AppError;
 use crate::{oauth, AppState};
 
@@ -82,6 +84,9 @@ pub struct LoginReq {
 #[derive(Serialize)]
 pub struct LoginResp {
     pub token: String,
+    /// Long-lived refresh token. The client stores it and uses `/v1/refresh`
+    /// to renew `token` silently. (Older clients simply ignore this field.)
+    pub refresh: String,
 }
 
 pub async fn login(
@@ -108,7 +113,47 @@ pub async fn login(
     }
 
     let token = issue_token(&id, &st.cfg.jwt_secret, st.cfg.token_ttl_hours)?;
-    Ok(Json(LoginResp { token }))
+    let refresh = issue_refresh(&id, &st.cfg.jwt_secret, st.cfg.refresh_ttl_days)?;
+    Ok(Json(LoginResp { token, refresh }))
+}
+
+#[derive(Deserialize)]
+pub struct RefreshReq {
+    pub refresh: String,
+}
+
+#[derive(Serialize)]
+pub struct RefreshResp {
+    pub token: String,
+}
+
+/// Exchange a valid refresh token for a fresh access token. The refresh token
+/// itself is unchanged (kept until it lapses). 401 if the refresh is invalid
+/// or expired — only then must the user sign in again.
+pub async fn refresh(
+    State(st): State<AppState>,
+    Json(req): Json<RefreshReq>,
+) -> Result<Json<RefreshResp>, AppError> {
+    let account = decode_refresh(&req.refresh, &st.cfg.jwt_secret)?;
+    let token = issue_token(&account, &st.cfg.jwt_secret, st.cfg.token_ttl_hours)?;
+    Ok(Json(RefreshResp { token }))
+}
+
+#[derive(Deserialize)]
+pub struct ExchangeReq {
+    pub code: String,
+}
+
+/// Exchange a one-time OAuth `code` (from the loopback redirect) for the
+/// access+refresh pair. This keeps the session token out of the browser URL.
+pub async fn oauth_exchange(
+    State(st): State<AppState>,
+    Json(req): Json<ExchangeReq>,
+) -> Result<Json<LoginResp>, AppError> {
+    let account = oauth::decode_exchange(&req.code, &st.cfg.jwt_secret)?;
+    let token = issue_token(&account, &st.cfg.jwt_secret, st.cfg.token_ttl_hours)?;
+    let refresh = issue_refresh(&account, &st.cfg.jwt_secret, st.cfg.refresh_ttl_days)?;
+    Ok(Json(LoginResp { token, refresh }))
 }
 
 #[derive(Serialize)]
@@ -222,6 +267,10 @@ pub async fn put_vault(
 pub struct StartQuery {
     /// The desktop app's loopback callback, e.g. `http://127.0.0.1:53127/cb`.
     pub cb: String,
+    /// Delivery mode: "code" (new clients — one-time exchange code) or absent
+    /// (legacy clients — session token in the loopback URL).
+    #[serde(default)]
+    pub mode: Option<String>,
 }
 
 /// Begin the Yandex flow: validate the loopback `cb`, sign it into `state`,
@@ -239,7 +288,8 @@ pub async fn oauth_yandex_start(
         return Err(AppError::BadRequest("cb must be a loopback URL".to_string()));
     }
     let nonce = Uuid::new_v4().to_string();
-    let state = oauth::encode_state(&q.cb, &nonce, &st.cfg.jwt_secret)?;
+    let mode = q.mode.as_deref().unwrap_or("");
+    let state = oauth::encode_state(&q.cb, &nonce, mode, &st.cfg.jwt_secret)?;
     // Safe: oauth_enabled() guarantees these are Some.
     let base = st.cfg.public_base_url.as_deref().unwrap_or_default();
     let client_id = st.cfg.yandex_client_id.as_deref().unwrap_or_default();
@@ -259,24 +309,43 @@ pub struct CallbackQuery {
 }
 
 /// Yandex redirects here with `code` + `state`. We exchange the code, upsert
-/// the account, mint our bearer token, and bounce it back to the app's
-/// loopback `cb?token=…` (or `cb?error=…` on failure).
+/// the account, and bounce back to the app's loopback. New clients (mode=code)
+/// receive a one-time `cb?code=…` they exchange for tokens; legacy clients
+/// receive `cb?token=…` (the session token). Failures go back as `cb?error=…`.
 pub async fn oauth_yandex_callback(
     State(st): State<AppState>,
     Query(q): Query<CallbackQuery>,
 ) -> Response {
-    // Recover cb from state up-front so failures can be reported to the app.
-    let cb = q
+    // Recover cb + mode from state up-front so failures can be reported.
+    let decoded = q
         .state
         .as_deref()
-        .and_then(|s| oauth::decode_state(s, &st.cfg.jwt_secret).ok())
-        .map(|(cb, _nonce)| cb);
+        .and_then(|s| oauth::decode_state(s, &st.cfg.jwt_secret).ok());
+    let cb = decoded.as_ref().map(|(cb, _nonce, _mode)| cb.clone());
+    let mode = decoded
+        .as_ref()
+        .map(|(_cb, _nonce, mode)| mode.clone())
+        .unwrap_or_default();
 
     match oauth_callback_inner(&st, &q).await {
-        Ok(token) => match cb {
-            Some(cb) => Redirect::to(&append_param(&cb, "token", &token)).into_response(),
-            None => Html(SIGNED_IN_HTML.to_string()).into_response(),
-        },
+        Ok(account_id) => {
+            let delivered = if mode == "code" {
+                oauth::encode_exchange(&account_id, &st.cfg.jwt_secret)
+                    .map(|code| ("code", code))
+            } else {
+                issue_token(&account_id, &st.cfg.jwt_secret, st.cfg.token_ttl_hours)
+                    .map(|tok| ("token", tok))
+            };
+            match (cb, delivered) {
+                (Some(cb), Ok((key, val))) => {
+                    Redirect::to(&append_param(&cb, key, &val)).into_response()
+                }
+                (Some(cb), Err(e)) => {
+                    Redirect::to(&append_param(&cb, "error", &e.to_string())).into_response()
+                }
+                (None, _) => Html(SIGNED_IN_HTML.to_string()).into_response(),
+            }
+        }
         Err(e) => {
             let msg = e.to_string();
             match cb {
@@ -291,6 +360,8 @@ pub async fn oauth_yandex_callback(
     }
 }
 
+/// Runs the Yandex exchange + account upsert. Returns the account id; the
+/// caller decides how to deliver the session (code vs token).
 async fn oauth_callback_inner(st: &AppState, q: &CallbackQuery) -> Result<String, AppError> {
     if !st.cfg.oauth_enabled() {
         return Err(AppError::BadRequest("OAuth is not configured".to_string()));
@@ -313,8 +384,7 @@ async fn oauth_callback_inner(st: &AppState, q: &CallbackQuery) -> Result<String
     let client_secret = st.cfg.yandex_client_secret.as_deref().unwrap_or_default();
     let access = oauth::exchange_code(client_id, client_secret, code).await?;
     let user = oauth::fetch_userinfo(&access).await?;
-    let account_id = upsert_oauth_account(st, &user).await?;
-    issue_token(&account_id, &st.cfg.jwt_secret, st.cfg.token_ttl_hours)
+    upsert_oauth_account(st, &user).await
 }
 
 /// Find the account by Yandex subject; else by email (link it); else create a

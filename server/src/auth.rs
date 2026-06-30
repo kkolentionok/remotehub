@@ -42,20 +42,30 @@ pub fn verify_password(password: &str, stored_hash: &str) -> bool {
     }
 }
 
+fn default_typ() -> String {
+    "access".to_string()
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
     /// Subject = account id.
     pub sub: String,
     /// Expiry (unix seconds).
     pub exp: usize,
+    /// Token kind: "access" (default, for back-compat with pre-refresh tokens)
+    /// or "refresh". Access tokens authenticate API calls; refresh tokens are
+    /// only accepted by `/v1/refresh`.
+    #[serde(default = "default_typ")]
+    pub typ: String,
 }
 
-/// Mint a signed bearer token for `account_id`.
+/// Mint a signed bearer (access) token for `account_id`.
 pub fn issue_token(account_id: &str, secret: &str, ttl_hours: i64) -> Result<String, AppError> {
     let exp = (Utc::now() + chrono::Duration::hours(ttl_hours)).timestamp() as usize;
     let claims = Claims {
         sub: account_id.to_string(),
         exp,
+        typ: "access".to_string(),
     };
     encode(
         &Header::default(),
@@ -63,6 +73,38 @@ pub fn issue_token(account_id: &str, secret: &str, ttl_hours: i64) -> Result<Str
         &EncodingKey::from_secret(secret.as_bytes()),
     )
     .map_err(|_| AppError::Internal)
+}
+
+/// Mint a long-lived refresh token. The client stores it and exchanges it for
+/// a fresh access token via `/v1/refresh` whenever the access token expires —
+/// so the user is never asked to sign in again until the refresh itself lapses.
+pub fn issue_refresh(account_id: &str, secret: &str, ttl_days: i64) -> Result<String, AppError> {
+    let exp = (Utc::now() + chrono::Duration::days(ttl_days)).timestamp() as usize;
+    let claims = Claims {
+        sub: account_id.to_string(),
+        exp,
+        typ: "refresh".to_string(),
+    };
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|_| AppError::Internal)
+}
+
+/// Validate a refresh token and return its account id. Rejects access tokens.
+pub fn decode_refresh(token: &str, secret: &str) -> Result<String, AppError> {
+    let data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default(),
+    )
+    .map_err(|_| AppError::Unauthorized)?;
+    if data.claims.typ != "refresh" {
+        return Err(AppError::Unauthorized);
+    }
+    Ok(data.claims.sub)
 }
 
 /// The authenticated account id, extracted from the bearer JWT. Add it as a
@@ -91,6 +133,10 @@ impl FromRequestParts<AppState> for AuthAccount {
             &Validation::default(),
         )
         .map_err(|_| AppError::Unauthorized)?;
+        // A refresh token must not be usable as a bearer credential.
+        if data.claims.typ != "access" {
+            return Err(AppError::Unauthorized);
+        }
         Ok(AuthAccount(data.claims.sub))
     }
 }

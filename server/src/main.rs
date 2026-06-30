@@ -65,10 +65,12 @@ async fn main() {
         .route("/health", get(routes::health))
         .route("/v1/register", post(routes::register))
         .route("/v1/login", post(routes::login))
+        .route("/v1/refresh", post(routes::refresh))
         .route("/v1/vault", get(routes::get_vault).put(routes::put_vault))
         .route("/v1/me", get(routes::me))
         .route("/v1/oauth/yandex/start", get(routes::oauth_yandex_start))
         .route("/v1/oauth/yandex/callback", get(routes::oauth_yandex_callback))
+        .route("/v1/oauth/exchange", post(routes::oauth_exchange))
         .route("/v1/verify", get(routes::verify))
         .with_state(state);
 

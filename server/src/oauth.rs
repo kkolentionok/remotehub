@@ -28,15 +28,20 @@ struct StateClaims {
     cb: String,
     nonce: String,
     purpose: String,
+    /// Delivery mode the app asked for: "code" (new, one-time exchange code) or
+    /// "" / "token" (legacy: session token in the loopback URL).
+    #[serde(default)]
+    mode: String,
     exp: usize,
 }
 
-pub fn encode_state(cb: &str, nonce: &str, secret: &str) -> Result<String, AppError> {
+pub fn encode_state(cb: &str, nonce: &str, mode: &str, secret: &str) -> Result<String, AppError> {
     let exp = (Utc::now() + chrono::Duration::minutes(10)).timestamp() as usize;
     let claims = StateClaims {
         cb: cb.to_string(),
         nonce: nonce.to_string(),
         purpose: "oauth_state".to_string(),
+        mode: mode.to_string(),
         exp,
     };
     encode(
@@ -47,8 +52,8 @@ pub fn encode_state(cb: &str, nonce: &str, secret: &str) -> Result<String, AppEr
     .map_err(|_| AppError::Internal)
 }
 
-/// Returns `(cb, nonce)`.
-pub fn decode_state(state: &str, secret: &str) -> Result<(String, String), AppError> {
+/// Returns `(cb, nonce, mode)`.
+pub fn decode_state(state: &str, secret: &str) -> Result<(String, String, String), AppError> {
     let data = decode::<StateClaims>(
         state,
         &DecodingKey::from_secret(secret.as_bytes()),
@@ -58,7 +63,7 @@ pub fn decode_state(state: &str, secret: &str) -> Result<(String, String), AppEr
     if data.claims.purpose != "oauth_state" {
         return Err(AppError::BadRequest("invalid OAuth state".to_string()));
     }
-    Ok((data.claims.cb, data.claims.nonce))
+    Ok((data.claims.cb, data.claims.nonce, data.claims.mode))
 }
 
 /// `cb` must be a loopback `http://` URL (`127.0.0.1` / `localhost`). This
@@ -191,6 +196,49 @@ pub fn decode_verify(token: &str, secret: &str) -> Result<String, AppError> {
     .map_err(|_| AppError::BadRequest("invalid or expired verification link".to_string()))?;
     if data.claims.purpose != "verify" {
         return Err(AppError::BadRequest("invalid verification link".to_string()));
+    }
+    Ok(data.claims.sub)
+}
+
+// ---- one-time OAuth exchange code ----------------------------------------
+//
+// Instead of redirecting the loopback to `cb?token=<session JWT>` (the session
+// token ends up in the browser address bar + history), we redirect to
+// `cb?code=<short-lived JWT>`. The app POSTs that code to `/v1/oauth/exchange`
+// and receives the real access+refresh pair over HTTPS. The code is a stateless
+// signed JWT (purpose "exchange"), valid ~2 min — no server-side store needed.
+
+#[derive(Serialize, Deserialize)]
+struct ExchangeClaims {
+    sub: String,
+    purpose: String,
+    exp: usize,
+}
+
+pub fn encode_exchange(account_id: &str, secret: &str) -> Result<String, AppError> {
+    let exp = (Utc::now() + chrono::Duration::minutes(2)).timestamp() as usize;
+    let claims = ExchangeClaims {
+        sub: account_id.to_string(),
+        purpose: "exchange".to_string(),
+        exp,
+    };
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|_| AppError::Internal)
+}
+
+pub fn decode_exchange(code: &str, secret: &str) -> Result<String, AppError> {
+    let data = decode::<ExchangeClaims>(
+        code,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default(),
+    )
+    .map_err(|_| AppError::BadRequest("invalid or expired exchange code".to_string()))?;
+    if data.claims.purpose != "exchange" {
+        return Err(AppError::BadRequest("invalid exchange code".to_string()));
     }
     Ok(data.claims.sub)
 }
