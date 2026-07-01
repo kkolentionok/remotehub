@@ -9,6 +9,7 @@ mod auth;
 mod config;
 mod db;
 mod error;
+mod handles;
 mod oauth;
 mod routes;
 
@@ -72,6 +73,15 @@ async fn main() {
         .route("/v1/oauth/yandex/callback", get(routes::oauth_yandex_callback))
         .route("/v1/oauth/exchange", post(routes::oauth_exchange))
         .route("/v1/verify", get(routes::verify))
+        // SSH ID — authed management
+        .route("/v1/handle", get(handles::handle_get).put(handles::handle_set))
+        .route("/v1/handle/check", get(handles::handle_check))
+        .route("/v1/handle/keys", post(handles::handle_add_key))
+        .route("/v1/handle/keys/:id", axum::routing::delete(handles::handle_delete_key))
+        // SSH ID — public resolution at the apex root. MUST stay last; static
+        // routes above take priority, and reserved words are rejected inside.
+        .route("/:handle", get(handles::public_handle))
+        .route("/:handle/:type", get(handles::public_handle_type))
         .with_state(state);
 
     let listener = match tokio::net::TcpListener::bind(&bind_addr).await {

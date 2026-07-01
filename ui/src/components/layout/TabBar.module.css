@@ -93,6 +93,29 @@
 .sessionIcon.connecting {
     animation: pulse 1s ease-in-out infinite;
 }
+/* Real loader spun in the tab while a session is connecting. */
+.spin {
+    color: var(--color-accent);
+    flex: 0 0 auto;
+    animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+/* Persistent red dot (top-right of the tab) when a connect failed. */
+.errorDot {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--color-danger);
+    box-shadow: 0 0 0 2px var(--color-surface);
+    pointer-events: none;
+}
 @keyframes pulse {
     0%,
     100% {

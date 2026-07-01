@@ -51,5 +51,33 @@ async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // SSH ID: a public handle per account, resolvable at `/<handle>`, plus the
+    // set of PUBLIC keys published under it. Public keys are NOT secret, so —
+    // unlike the vault — they are stored in plaintext (the whole point is that
+    // `curl https://host/<handle>` returns them). Private keys never leave the
+    // client keychain.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS handles (
+            account_id  TEXT PRIMARY KEY NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            handle      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            created_at  TEXT NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS handle_keys (
+            id          TEXT PRIMARY KEY NOT NULL,
+            account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            key_type    TEXT NOT NULL,
+            public_key  TEXT NOT NULL,
+            label       TEXT,
+            created_at  TEXT NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }

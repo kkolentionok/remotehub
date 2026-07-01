@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Columns2, Copy, FolderOpen, HardDrive, Lock, Monitor, PictureInPicture2, Plus, RefreshCw, Search, Server, Settings, Terminal, Users, Wrench, X } from "lucide-react";
+import { Check, ChevronDown, Columns2, Copy, FolderOpen, HardDrive, Loader2, Lock, Monitor, PictureInPicture2, Plus, RefreshCw, Search, Server, Settings, Terminal, Users, Wrench, X } from "lucide-react";
 
 import { useT } from "../../i18n";
 import { sync } from "../../lib/ipc";
@@ -273,9 +273,12 @@ export function TabBar() {
                         : focused?.title;
                 const connecting =
                     !!focused &&
-                    ["resolving", "connecting", "authenticating", "host_key_pending"].includes(
+                    ["resolving", "connecting", "authenticating"].includes(
                         focused.state,
                     );
+                // A failed connect / abnormal drop shows a persistent red dot
+                // on the tab until the user reopens or closes it.
+                const failed = focused?.state === "failed";
                 return (
                     <button
                         key={tab.id}
@@ -337,10 +340,18 @@ export function TabBar() {
                         }}
                         onDragEnd={endDrag}
                     >
-                        <SessIco
-                            size={13}
-                            className={`${styles.sessionIcon} ${connecting ? styles.connecting : ""}`}
-                        />
+                        {connecting ? (
+                            <Loader2 size={13} className={styles.spin} />
+                        ) : (
+                            <SessIco size={13} className={styles.sessionIcon} />
+                        )}
+                        {failed && (
+                            <span
+                                className={styles.errorDot}
+                                aria-hidden="true"
+                                title={focused?.message ?? undefined}
+                            />
+                        )}
                         <span className={styles.label}>
                             {paneCount > 1
                                 ? t("tab.split")
