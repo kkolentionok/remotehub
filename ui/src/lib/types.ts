@@ -673,3 +673,30 @@ export interface ForwardSaveResponse {
 export interface ForwardListResponse {
     forwards: ForwardSaved[];
 }
+
+// =====================================================================
+// SSH ID — public key handle (Tools › SSH ID). Mirrors api/ssh_id.rs.
+// =====================================================================
+
+export interface SshIdKey {
+    id: string;
+    key_type: string;
+    public_key: string;
+    label: string | null;
+}
+
+export interface SshIdData {
+    /** The account's handle, or null if not claimed yet. */
+    handle: string | null;
+    keys: SshIdKey[];
+}
+
+export interface SshIdCheck {
+    available: boolean;
+    reason: string | null;
+}
+
+export interface SshIdAddedKey {
+    id: string;
+    key_type: string;
+}

@@ -38,6 +38,9 @@ import type {
     HostId,
     HostListRequest,
     HostListResponse,
+    SshIdAddedKey,
+    SshIdCheck,
+    SshIdData,
     HostUpdateRequest,
     KnownHostGetResponse,
     KnownHostsListResponse,
@@ -567,4 +570,33 @@ export const forwards = {
         call("forward_set_auto_start", { forward_id: forwardId, auto_start: autoStart }),
 
     list: (): Promise<ForwardListResponse> => call("forward_list"),
+};
+
+// =====================================================================
+// SSH ID (Tools → SSH ID): public key handle CRUD. These proxy to the
+// sync server through rh-app (which holds the bearer token).
+// =====================================================================
+
+export const sshId = {
+    /** Current handle + published keys for the logged-in account. */
+    get: (): Promise<SshIdData> => invoke<SshIdData>("ssh_id_get"),
+
+    /** Claim or rename the handle; returns the canonical handle. */
+    setHandle: (handle: string): Promise<string> =>
+        invoke<string>("ssh_id_set_handle", { handle }),
+
+    /** Inline availability check for the create form. */
+    check: (handle: string): Promise<SshIdCheck> =>
+        invoke<SshIdCheck>("ssh_id_check", { handle }),
+
+    /** Publish a public key under the handle. */
+    addKey: (public_key: string, label: string | null): Promise<SshIdAddedKey> =>
+        invoke<SshIdAddedKey>("ssh_id_add_key", { publicKey: public_key, label }),
+
+    /** Unpublish a key. */
+    deleteKey: (id: string): Promise<void> => invoke<void>("ssh_id_delete_key", { id }),
+
+    /** Rename a key's label. */
+    updateLabel: (id: string, label: string | null): Promise<void> =>
+        invoke<void>("ssh_id_update_label", { id, label }),
 };

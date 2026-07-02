@@ -18,6 +18,7 @@ import {
     Share2,
     Terminal,
     Trash2,
+    Waypoints,
     X,
     Zap,
 } from "lucide-react";
@@ -28,6 +29,7 @@ import type { CredentialDto, CredentialKind, ForwardKind, ForwardSaved, HostDto 
 import { formatApiError } from "../../lib/types";
 import { useCredentialsStore, useHostsStore, useSessionsStore, useUiStore } from "../../store";
 import { Combobox, type ComboboxOption } from "../ui/Combobox";
+import { SshIdPane } from "./SshIdManager";
 import styles from "./ToolsView.module.css";
 
 type CredLink = { count: number; username: string };
@@ -70,18 +72,19 @@ function useCredentialLinks(hosts: HostDto[]): {
     return { links, ready };
 }
 
-type ManageKey = "keys" | "import" | "forwards" | "mounts" | "share";
+type ManageKey = "keys" | "ssh_id" | "import" | "forwards" | "mounts" | "share";
 type KeySeg = "all" | "keys" | "pwd";
 
 const NAV: { id: ManageKey; icon: typeof KeyRound; label: string; soon: boolean }[] = [
     { id: "keys", icon: KeyRound, label: "tools.section.creds", soon: false },
+    { id: "ssh_id", icon: Waypoints, label: "tools.section.sshId", soon: false },
     { id: "import", icon: Download, label: "tools.nav.import", soon: false },
     { id: "forwards", icon: ArrowRightLeft, label: "tools.section.forwards", soon: false },
     { id: "mounts", icon: HardDrive, label: "tools.section.mounts", soon: true },
     { id: "share", icon: Share2, label: "tools.section.share", soon: true },
 ];
 
-const EMPTY: Record<Exclude<ManageKey, "keys">, { icon: typeof KeyRound; title: string; body: string; soon: boolean }> = {
+const EMPTY: Record<Exclude<ManageKey, "keys" | "ssh_id">, { icon: typeof KeyRound; title: string; body: string; soon: boolean }> = {
     import: { icon: Download, title: "tools.nav.import", body: "tools.import.body", soon: false },
     forwards: { icon: ArrowRightLeft, title: "tools.section.forwards", body: "tools.forwards.body", soon: true },
     mounts: { icon: HardDrive, title: "tools.section.mounts", body: "tools.mounts.body", soon: true },
@@ -114,7 +117,7 @@ export function ToolsView() {
     // once, then clear the request so it doesn't re-fire.
     useEffect(() => {
         if (!toolsSection) return;
-        const valid: ManageKey[] = ["keys", "import", "forwards", "mounts", "share"];
+        const valid: ManageKey[] = ["keys", "ssh_id", "import", "forwards", "mounts", "share"];
         if ((valid as string[]).includes(toolsSection)) {
             setActive(toolsSection as ManageKey);
         }
@@ -191,6 +194,8 @@ export function ToolsView() {
             <div className={styles.pane}>
                 {active === "keys" ? (
                     <KeysPane creds={inUse} links={links} ready={ready} onToast={toast} />
+                ) : active === "ssh_id" ? (
+                    <SshIdPane onToast={toast} />
                 ) : active === "forwards" ? (
                     <ForwardsPane onToast={toast} />
                 ) : (

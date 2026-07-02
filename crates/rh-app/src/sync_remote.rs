@@ -375,6 +375,74 @@ fn urldecode(s: &str) -> String {
         .unwrap_or_else(|_| s.to_string())
 }
 
+/// Authenticated JSON request to the sync server, reusing the stored endpoint +
+/// access token, with the same one-shot refresh-on-401 retry as `ServerRemote`.
+/// Returns the parsed JSON body (`Null` for an empty/204 response). Used by the
+/// SSH ID commands (and any future thin API call that isn't the vault).
+pub async fn api_request(
+    method: reqwest::Method,
+    path: &str,
+    body: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let cfg = SyncConfig::load();
+    let token = token_get().ok_or_else(|| "not logged in".to_string())?;
+    let url = format!("{}{}", cfg.endpoint, path);
+    let client = http_client();
+
+    let build = |tok: &str| {
+        let mut r = client.request(method.clone(), &url).bearer_auth(tok);
+        if let Some(b) = &body {
+            r = r.json(b);
+        }
+        r
+    };
+
+    let mut resp = build(&token)
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+
+    // Access token expired → renew via refresh and retry once.
+    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        if let Some(refresh) = refresh_get() {
+            if let Ok(fresh) = server_refresh(&cfg.endpoint, &refresh).await {
+                let _ = token_set(&fresh);
+                resp = build(&fresh)
+                    .send()
+                    .await
+                    .map_err(|e| format!("request failed: {e}"))?;
+            }
+        }
+    }
+
+    let status = resp.status();
+    if !status.is_success() {
+        // Surface the server's `{ "error": … }` message when present.
+        let msg = resp
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| {
+                v.get("error")
+                    .and_then(|e| e.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| format!("server returned {}", status.as_u16()));
+        return Err(msg);
+    }
+    if status == reqwest::StatusCode::NO_CONTENT {
+        return Ok(serde_json::Value::Null);
+    }
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("read failed: {e}"))?;
+    if text.trim().is_empty() {
+        return Ok(serde_json::Value::Null);
+    }
+    serde_json::from_str(&text).map_err(|e| format!("bad response: {e}"))
+}
+
 /// The `SyncRemote` backed by `rh-sync-server` over HTTP.
 #[derive(Debug)]
 pub struct ServerRemote {

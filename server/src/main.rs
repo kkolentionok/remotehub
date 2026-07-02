@@ -77,7 +77,7 @@ async fn main() {
         .route("/v1/handle", get(handles::handle_get).put(handles::handle_set))
         .route("/v1/handle/check", get(handles::handle_check))
         .route("/v1/handle/keys", post(handles::handle_add_key))
-        .route("/v1/handle/keys/:id", axum::routing::delete(handles::handle_delete_key))
+        .route("/v1/handle/keys/:id", axum::routing::delete(handles::handle_delete_key).patch(handles::handle_update_key))
         // SSH ID — public resolution at the apex root. MUST stay last; static
         // routes above take priority, and reserved words are rejected inside.
         .route("/:handle", get(handles::public_handle))

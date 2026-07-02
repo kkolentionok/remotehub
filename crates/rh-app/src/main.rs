@@ -152,6 +152,12 @@ fn main() {
             api::sync::sync_oauth_yandex,
             api::sync::sync_set_master,
             api::sync::sync_status,
+            api::ssh_id::ssh_id_get,
+            api::ssh_id::ssh_id_set_handle,
+            api::ssh_id::ssh_id_check,
+            api::ssh_id::ssh_id_add_key,
+            api::ssh_id::ssh_id_delete_key,
+            api::ssh_id::ssh_id_update_label,
             api::settings::settings_update,
             // Sessions (Stage 2: SSH)
             api::sessions::session_open,

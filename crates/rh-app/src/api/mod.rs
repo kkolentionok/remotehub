@@ -14,5 +14,6 @@ pub mod forwards;
 pub mod sessions;
 pub mod sftp_sessions;
 pub mod settings;
+pub mod ssh_id;
 pub mod sync;
 pub mod vault;
