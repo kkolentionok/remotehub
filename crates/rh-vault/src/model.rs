@@ -30,7 +30,7 @@
 
 use std::collections::BTreeMap;
 
-use rh_core::{Credential, Host, HostGroup};
+use rh_core::{Credential, Host, HostGroup, Snippet};
 use serde::{Deserialize, Serialize};
 
 use crate::clock::{Hlc, NodeId};
@@ -48,6 +48,7 @@ pub enum EntityKind {
     Group,
     Credential,
     Setting,
+    Snippet,
 }
 
 /// Per-record sync metadata: the logical time of the last write, who
@@ -154,6 +155,16 @@ impl SyncRecord {
         })
     }
 
+    /// Build a live snippet record.
+    pub fn snippet(snippet: &Snippet, rev: Hlc, origin: NodeId) -> Result<Self, VaultError> {
+        Ok(Self {
+            kind: EntityKind::Snippet,
+            id: snippet.id.to_string(),
+            meta: RecordMeta::new(rev, origin),
+            data: Some(serde_json::to_value(snippet)?),
+        })
+    }
+
     /// Build a live setting record. `value` is the setting's JSON value.
     #[must_use]
     pub fn setting(key: &str, value: serde_json::Value, rev: Hlc, origin: NodeId) -> Self {
@@ -196,6 +207,11 @@ impl SyncRecord {
     /// Reconstruct a [`SyncCredentialPayload`] from a live credential record.
     pub fn as_credential(&self) -> Result<SyncCredentialPayload, VaultError> {
         self.decode(EntityKind::Credential)
+    }
+
+    /// Reconstruct a [`Snippet`] from a live snippet record.
+    pub fn as_snippet(&self) -> Result<Snippet, VaultError> {
+        self.decode(EntityKind::Snippet)
     }
 
     /// The raw setting value of a live setting record.

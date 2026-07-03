@@ -12,6 +12,7 @@ use rh_core::{Snippet, SnippetId};
 
 use crate::api::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use crate::sync_clock::KIND_SNIPPET;
 
 const MAX_NAME: usize = 200;
 const MAX_COMMAND: usize = 16_384;
@@ -49,6 +50,7 @@ pub async fn snippet_create(
     let snippet = Snippet::new(name.trim(), command);
     let id = snippet.id.clone();
     state.snippets.create(&snippet).await?;
+    state.stamp_live(KIND_SNIPPET, id.as_str()).await?;
     Ok(id)
 }
 
@@ -71,6 +73,7 @@ pub async fn snippet_update(
         updated_at: now,
     };
     state.snippets.update(&snippet).await?;
+    state.stamp_live(KIND_SNIPPET, snippet.id.as_str()).await?;
     Ok(())
 }
 
@@ -78,5 +81,6 @@ pub async fn snippet_update(
 #[instrument(level = "debug", skip(state))]
 pub async fn snippet_delete(state: State<'_, AppState>, id: SnippetId) -> ApiResult<()> {
     state.snippets.delete(&id).await?;
+    state.stamp_deleted(KIND_SNIPPET, id.as_str()).await?;
     Ok(())
 }
