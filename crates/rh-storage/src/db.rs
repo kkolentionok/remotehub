@@ -20,7 +20,7 @@ use rh_core::StorageError;
 /// Schema version this binary expects. Bumping this triggers either an
 /// incremental migration (when a path exists, e.g. v2 → v3) or, for any
 /// other mismatch, a drop-recreate in alpha mode.
-pub const CURRENT_SCHEMA_VERSION: u32 = 11;
+pub const CURRENT_SCHEMA_VERSION: u32 = 12;
 
 /// Embedded migration script for the current version.
 const V1_SQL: &str = include_str!("migrations/v1.sql");
@@ -103,6 +103,17 @@ CREATE TABLE forwards (\
 );\
 CREATE INDEX idx_forwards_host ON forwards(host_id);";
 
+/// Incremental, data-preserving migration v11 → v12: `snippets` table —
+/// reusable commands (Tools → Snippets). New table, no existing rows touched.
+const MIGRATE_V11_TO_V12: &str = "\
+CREATE TABLE snippets (\
+    id         TEXT PRIMARY KEY NOT NULL,\
+    name       TEXT NOT NULL,\
+    command    TEXT NOT NULL,\
+    created_at TEXT NOT NULL,\
+    updated_at TEXT NOT NULL\
+);";
+
 /// Ordered forward migrations `(from_version, sql)`. The runner applies
 /// every step whose `from_version >= existing` in sequence, so a DB any
 /// number of versions behind (as long as the chain is contiguous from
@@ -118,6 +129,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (8, MIGRATE_V8_TO_V9),
     (9, MIGRATE_V9_TO_V10),
     (10, MIGRATE_V10_TO_V11),
+    (11, MIGRATE_V11_TO_V12),
 ];
 
 /// What [`Db::open`] decided to do with the schema.

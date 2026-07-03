@@ -15,10 +15,10 @@
 use async_trait::async_trait;
 
 use crate::error::{SecretError, StorageError};
-use crate::id::{CredentialId, ForwardId, GroupId, HostId};
+use crate::id::{CredentialId, ForwardId, GroupId, HostId, SnippetId};
 use crate::secret::{RevealedSecret, SecretValue};
 use crate::settings::Settings;
-use crate::types::{Credential, Host, HostGroup, Protocol, SavedForward};
+use crate::types::{Credential, Host, HostGroup, Protocol, SavedForward, Snippet};
 
 /// Filter passed to [`HostStore::list`]. All fields are optional; `None`
 /// means "don't filter on this dimension". Combining multiple fields
@@ -78,6 +78,16 @@ pub trait GroupStore: Send + Sync {
     /// the data model, child groups cascade-delete and contained hosts
     /// fall back to the root.
     async fn delete(&self, id: &GroupId) -> Result<(), StorageError>;
+}
+
+/// Reusable command snippets (Tools → Snippets). Plain CRUD; ordering is
+/// by name in the UI.
+#[async_trait]
+pub trait SnippetStore: Send + Sync {
+    async fn list(&self) -> Result<Vec<Snippet>, StorageError>;
+    async fn create(&self, snippet: &Snippet) -> Result<(), StorageError>;
+    async fn update(&self, snippet: &Snippet) -> Result<(), StorageError>;
+    async fn delete(&self, id: &SnippetId) -> Result<(), StorageError>;
 }
 
 #[async_trait]

@@ -169,3 +169,11 @@ CREATE TABLE forwards (
 );
 
 CREATE INDEX idx_forwards_host ON forwards(host_id);
+
+CREATE TABLE snippets (
+    id         TEXT PRIMARY KEY NOT NULL,
+    name       TEXT NOT NULL,
+    command    TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);

@@ -707,3 +707,15 @@ export interface SshIdAvailableKey {
     key_type: string;
     public_key: string;
 }
+
+// =====================================================================
+// Snippets (Tools › Snippets). Mirrors rh-core Snippet.
+// =====================================================================
+
+export interface Snippet {
+    id: string;
+    name: string;
+    command: string;
+    created_at: string;
+    updated_at: string;
+}

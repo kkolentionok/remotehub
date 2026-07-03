@@ -6,6 +6,7 @@ import { sync } from "../../lib/ipc";
 import { leafKeys } from "../../lib/paneTree";
 import { toggleSessionSearch, useSessionsStore, useTransferBadgeStore, useUiStore } from "../../store";
 import { ContextMenu, type MenuItem } from "../ui/ContextMenu";
+import { SnippetsMenu } from "./SnippetsMenu";
 import { WindowControls } from "./WindowControls";
 import styles from "./TabBar.module.css";
 
@@ -127,6 +128,13 @@ export function TabBar() {
         !!focusedSession &&
         focusedSession.protocol !== "rdp" &&
         !focusedSession.sftp;
+    // A snippet runs into a live shell (SSH or local terminal). RDP takes no
+    // text input this way and SFTP has no shell; those fall back to copy.
+    const canRunSnippet =
+        !!focusedSession &&
+        focusedSession.protocol !== "rdp" &&
+        !focusedSession.sftp &&
+        focusedSession.state === "ready";
 
     return (
         <div
@@ -399,6 +407,7 @@ export function TabBar() {
 
             {/* Draggable empty area, then search + settings + window controls. */}
             <div className={styles.drag} data-tauri-drag-region />
+            <SnippetsMenu focusedKey={focusedKey} canRun={canRunSnippet} />
             {canSearch && (
                 <button
                     type="button"

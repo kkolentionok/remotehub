@@ -42,6 +42,7 @@ import type {
     SshIdAvailableKey,
     SshIdCheck,
     SshIdData,
+    Snippet,
     HostUpdateRequest,
     KnownHostGetResponse,
     KnownHostsListResponse,
@@ -604,4 +605,17 @@ export const sshId = {
     /** SSH-key credentials with their derived public key (for the picker). */
     availableKeys: (): Promise<SshIdAvailableKey[]> =>
         invoke<SshIdAvailableKey[]>("ssh_id_available_keys"),
+};
+
+// =====================================================================
+// Snippets (Tools → Snippets): reusable commands. Plain CRUD.
+// =====================================================================
+
+export const snippets = {
+    list: (): Promise<Snippet[]> => invoke<Snippet[]>("snippet_list"),
+    create: (name: string, command: string): Promise<string> =>
+        invoke<string>("snippet_create", { name, command }),
+    update: (id: string, name: string, command: string): Promise<void> =>
+        invoke<void>("snippet_update", { id, name, command }),
+    delete: (id: string): Promise<void> => invoke<void>("snippet_delete", { id }),
 };

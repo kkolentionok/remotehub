@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
 use rh_core::{
-    CredentialStore, ForwardStore, GroupStore, HostStore, KnownHostsStore, RdpCertStore,
+    CredentialStore, ForwardStore, GroupStore, HostStore, KnownHostsStore, RdpCertStore, SnippetStore,
     SettingsStore, StorageError, SyncMetaStore,
 };
 
@@ -33,6 +33,7 @@ use crate::sync_engine::SyncStatusSnapshot;
 pub struct AppState {
     pub hosts: Arc<dyn HostStore>,
     pub groups: Arc<dyn GroupStore>,
+    pub snippets: Arc<dyn SnippetStore>,
     pub credentials: Arc<dyn CredentialStore>,
     pub settings: Arc<dyn SettingsStore>,
     pub known_hosts: Arc<dyn KnownHostsStore>,
@@ -78,6 +79,7 @@ impl std::fmt::Debug for AppState {
         f.debug_struct("AppState")
             .field("hosts", &"<dyn HostStore>")
             .field("groups", &"<dyn GroupStore>")
+            .field("snippets", &"<dyn SnippetStore>")
             .field("credentials", &"<dyn CredentialStore>")
             .field("settings", &"<dyn SettingsStore>")
             .field("known_hosts", &"<dyn KnownHostsStore>")
@@ -102,6 +104,7 @@ impl AppState {
     pub fn new(
         hosts: Arc<dyn HostStore>,
         groups: Arc<dyn GroupStore>,
+        snippets: Arc<dyn SnippetStore>,
         credentials: Arc<dyn CredentialStore>,
         settings: Arc<dyn SettingsStore>,
         known_hosts: Arc<dyn KnownHostsStore>,
@@ -113,6 +116,7 @@ impl AppState {
         Self {
             hosts,
             groups,
+            snippets,
             credentials,
             settings,
             known_hosts,

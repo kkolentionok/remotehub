@@ -1,0 +1,161 @@
+.wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    -webkit-app-region: no-drag;
+}
+
+/* mirrors TabBar's .gear icon button */
+.trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-2);
+    cursor: pointer;
+}
+.trigger:hover {
+    background: var(--color-subtle);
+    color: var(--text-1);
+}
+
+.pop {
+    position: fixed;
+    width: 300px;
+    max-height: 60vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--color-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg, 0 8px 30px rgba(0, 0, 0, 0.35));
+    z-index: 1000;
+    overflow: hidden;
+}
+.popHead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 12px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    border-bottom: 1px solid var(--color-border);
+}
+.hint {
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--text-3);
+}
+.list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px;
+}
+.msg {
+    padding: 18px 12px;
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--text-3);
+}
+.row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    padding: 7px 9px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-1);
+    text-align: left;
+    cursor: pointer;
+}
+.row:hover {
+    background: var(--color-subtle);
+}
+.name {
+    font-size: 13px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.cmd {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.manage {
+    padding: 9px 12px;
+    border: none;
+    border-top: 1px solid var(--color-border);
+    background: transparent;
+    color: var(--color-accent);
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+}
+.manage:hover {
+    background: var(--color-subtle);
+}
+
+.headRight {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+.pinBtn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-3);
+    cursor: pointer;
+}
+.pinBtn:hover {
+    background: var(--color-subtle);
+    color: var(--text-1);
+}
+.filterRow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--color-border);
+}
+.filterIcon {
+    color: var(--text-3);
+    flex: none;
+}
+.filter {
+    flex: 1;
+    min-width: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text-1);
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+}
+.filter::placeholder {
+    color: var(--text-3);
+}

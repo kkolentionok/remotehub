@@ -233,6 +233,8 @@ interface UiStore {
     toolsSection: string | null;
     /** Active app section shown when no session tab is active. */
     section: "vault" | "tools";
+    /** When true, the snippets panel is docked on the right of the session area. */
+    snippetsPinned: boolean;
     /** Latest background-sync status (from the `sync:status` event), or null
      *  before the first report. Surfaced quietly in the Vault scope dropdown. */
     syncStatus: SyncStatus | null;
@@ -249,6 +251,7 @@ interface UiStore {
     setShortcutsOpen: (open: boolean) => void;
     setToolsSection: (section: string | null) => void;
     setSection: (section: "vault" | "tools") => void;
+    setSnippetsPinned: (v: boolean) => void;
     setSyncStatus: (status: SyncStatus) => void;
 }
 
@@ -283,6 +286,7 @@ export const useUiStore = create<UiStore>((set) => ({
     shortcutsOpen: false,
     toolsSection: null,
     section: "vault",
+    snippetsPinned: false,
     syncStatus: null,
 
     selectHost: (id) => set({ selectedHostId: id, draft: null }),
@@ -298,6 +302,7 @@ export const useUiStore = create<UiStore>((set) => ({
     setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
     setToolsSection: (toolsSection) => set({ toolsSection }),
     setSection: (section) => set({ section }),
+    setSnippetsPinned: (snippetsPinned) => set({ snippetsPinned }),
     setSyncStatus: (syncStatus) => set({ syncStatus }),
     toggleGroupCollapsed: (id) =>
         set((s) => {

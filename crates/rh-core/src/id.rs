@@ -117,6 +117,11 @@ ulid_newtype! {
     ForwardId
 }
 
+ulid_newtype! {
+    /// Identifier for a [`Snippet`](crate::Snippet) — a reusable command.
+    SnippetId
+}
+
 /// Opaque reference to a secret stored in the OS keychain.
 ///
 /// This type **never** contains the secret itself, only the lookup key.

@@ -12,7 +12,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::id::{CredentialId, ForwardId, GroupId, HostId};
+use crate::id::{CredentialId, ForwardId, GroupId, HostId, SnippetId};
 
 /// Network protocol used for a connection.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -256,6 +256,32 @@ impl HostGroup {
             name: name.into(),
             parent_id,
             created_at: Utc::now(),
+        }
+    }
+}
+
+/// A reusable command ("snippet") the user can run into an active session
+/// or copy. Not a secret — stored in SQLite like hosts/groups.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Snippet {
+    pub id: SnippetId,
+    pub name: String,
+    /// The command text (may be multi-line).
+    pub command: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl Snippet {
+    #[must_use]
+    pub fn new(name: impl Into<String>, command: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: SnippetId::new(),
+            name: name.into(),
+            command: command.into(),
+            created_at: now,
+            updated_at: now,
         }
     }
 }

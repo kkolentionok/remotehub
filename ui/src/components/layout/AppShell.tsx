@@ -24,6 +24,7 @@ import { PaneGroup } from "./PaneGroup";
 import { ShortcutsSheet } from "./ShortcutsSheet";
 import { TabBar } from "./TabBar";
 import { ToolsView } from "./ToolsView";
+import { SnippetsDock } from "./SnippetsDock";
 import { UpdateBanner } from "./UpdateBanner";
 import styles from "./AppShell.module.css";
 
@@ -49,6 +50,7 @@ export function AppShell() {
     const launcherOpen = useUiStore((s) => s.launcherOpen);
     const shortcutsOpen = useUiStore((s) => s.shortcutsOpen);
     const section = useUiStore((s) => s.section);
+    const snippetsPinned = useUiStore((s) => s.snippetsPinned);
 
     // Borderless window (decorations:false): when maximized on Windows the
     // client area extends past the work area by the resize-border thickness,
@@ -378,6 +380,7 @@ export function AppShell() {
                         </div>
                     );
                 })}
+                {snippetsPinned && <SnippetsDock />}
             </div>
             <DialogHost />
             {launcherOpen && <Launcher />}
