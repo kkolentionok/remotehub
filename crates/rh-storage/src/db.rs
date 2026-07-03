@@ -106,7 +106,7 @@ CREATE INDEX idx_forwards_host ON forwards(host_id);";
 /// Incremental, data-preserving migration v11 → v12: `snippets` table —
 /// reusable commands (Tools → Snippets). New table, no existing rows touched.
 const MIGRATE_V11_TO_V12: &str = "\
-CREATE TABLE snippets (\
+CREATE TABLE IF NOT EXISTS snippets (\
     id         TEXT PRIMARY KEY NOT NULL,\
     name       TEXT NOT NULL,\
     command    TEXT NOT NULL,\
