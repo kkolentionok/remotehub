@@ -4,12 +4,16 @@ import { Code2, Copy, Pencil, Plus, Trash2 } from "lucide-react";
 import { useT } from "../../i18n";
 import { snippets } from "../../lib/ipc";
 import { formatApiError, type Snippet } from "../../lib/types";
+import { useUiStore } from "../../store";
 import styles from "./SnippetsManager.module.css";
 
 type Draft = { id: string | null; name: string; command: string };
 
 export function SnippetsPane({ onToast }: { onToast: (s: string) => void }) {
     const { t } = useT();
+    const bump = useUiStore((st) => st.bumpSnippets);
+    const rev = useUiStore((st) => st.snippetsRev);
+    const syncAt = useUiStore((st) => st.syncStatus?.at_ms);
     const [items, setItems] = useState<Snippet[] | null>(null);
     const [editing, setEditing] = useState<Draft | null>(null);
     const [busy, setBusy] = useState(false);
@@ -25,7 +29,7 @@ export function SnippetsPane({ onToast }: { onToast: (s: string) => void }) {
 
     useEffect(() => {
         void load();
-    }, [load]);
+    }, [load, rev, syncAt]);
 
     async function save() {
         if (!editing) return;
@@ -37,6 +41,7 @@ export function SnippetsPane({ onToast }: { onToast: (s: string) => void }) {
             else await snippets.create(name, editing.command);
             setEditing(null);
             await load();
+            bump();
             onToast(t("tools.snip.saved"));
         } catch (e) {
             onToast(formatApiError(e));
@@ -49,6 +54,7 @@ export function SnippetsPane({ onToast }: { onToast: (s: string) => void }) {
         try {
             await snippets.delete(id);
             await load();
+            bump();
             onToast(t("tools.snip.deleted"));
         } catch (e) {
             onToast(formatApiError(e));

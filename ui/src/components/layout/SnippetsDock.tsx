@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Code2, CornerDownLeft, Plus, Search, X } from "lucide-react";
+import { Code2, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 
 import { useT } from "../../i18n";
 import { snippets } from "../../lib/ipc";
@@ -11,7 +11,8 @@ import styles from "./SnippetsDock.module.css";
  * Snippets panel docked on the right of the session area (toggled via the pin
  * in the top-bar snippets menu). Same run/copy behaviour as the popover:
  * clicking a snippet runs it into the focused terminal, or copies if there's
- * no runnable session. Read/run only — CRUD lives in Tools → Snippets.
+ * no runnable session. Supports add/edit/delete inline; changes propagate to the
+ * Tools tab (and vice-versa) via the shared `snippetsRev` signal.
  */
 export function SnippetsDock() {
     const { t } = useT();
@@ -19,10 +20,15 @@ export function SnippetsDock() {
     const tabs = useSessionsStore((s) => s.tabs);
     const activeTabId = useSessionsStore((s) => s.activeTabId);
     const sessions = useSessionsStore((s) => s.sessions);
+    const bump = useUiStore((s) => s.bumpSnippets);
+    const rev = useUiStore((s) => s.snippetsRev);
+    const syncAt = useUiStore((s) => s.syncStatus?.at_ms);
 
     const [items, setItems] = useState<Snippet[] | null>(null);
     const [q, setQ] = useState("");
     const [flash, setFlash] = useState<string | null>(null);
+    const [edit, setEdit] = useState<{ id: string | null; name: string; command: string } | null>(null);
+    const [busy, setBusy] = useState(false);
 
     const load = useCallback(() => {
         void snippets
@@ -37,7 +43,8 @@ export function SnippetsDock() {
         const onFocus = () => load();
         window.addEventListener("focus", onFocus);
         return () => window.removeEventListener("focus", onFocus);
-    }, [load]);
+        // rev = local mutations (Tools/dock); syncAt = a completed sync pass.
+    }, [load, rev, syncAt]);
 
     const activeTab = tabs.find((tb) => tb.id === activeTabId);
     const focusedKey = activeTab ? (activeTab.focusKey ?? activeTab.activePaneKey) : null;
@@ -70,10 +77,31 @@ export function SnippetsDock() {
         }
     }
 
-    function newSnippet() {
-        useSessionsStore.getState().setActiveTab(null);
-        useUiStore.getState().setSection("tools");
-        useUiStore.getState().setToolsSection("snippets");
+    async function save() {
+        if (!edit) return;
+        const name = edit.name.trim();
+        if (!name || busy) return;
+        setBusy(true);
+        try {
+            if (edit.id) await snippets.update(edit.id, name, edit.command);
+            else await snippets.create(name, edit.command);
+            setEdit(null);
+            bump();
+        } catch {
+            /* surfaced elsewhere; keep the editor open */
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function del(id: string) {
+        try {
+            await snippets.delete(id);
+            if (edit?.id === id) setEdit(null);
+            bump();
+        } catch {
+            /* ignore */
+        }
     }
 
     return (
@@ -116,29 +144,82 @@ export function SnippetsDock() {
                     </div>
                 ) : (
                     filtered.map((s) => (
-                        <button
-                            key={s.id}
-                            type="button"
-                            className={styles.row}
-                            onClick={() => activate(s)}
-                            title={s.command}
-                        >
-                            <div className={styles.rowMain}>
+                        <div key={s.id} className={styles.row}>
+                            <button
+                                type="button"
+                                className={styles.rowMain}
+                                onClick={() => activate(s)}
+                                title={s.command}
+                            >
                                 <span className={styles.name}>{s.name}</span>
                                 <span className={styles.cmd}>
                                     {flash === s.id ? t("snippets.menu.copied") : s.command}
                                 </span>
+                            </button>
+                            <div className={styles.rowActions}>
+                                <button
+                                    type="button"
+                                    className={styles.rowBtn}
+                                    title={t("tools.snip.edit")}
+                                    onClick={() => setEdit({ id: s.id, name: s.name, command: s.command })}
+                                >
+                                    <Pencil size={13} />
+                                </button>
+                                <button
+                                    type="button"
+                                    className={`${styles.rowBtn} ${styles.del}`}
+                                    title={t("tools.snip.delete")}
+                                    onClick={() => void del(s.id)}
+                                >
+                                    <Trash2 size={13} />
+                                </button>
                             </div>
-                            {canRun && <CornerDownLeft size={14} className={styles.runIcon} />}
-                        </button>
+                        </div>
                     ))
                 )}
             </div>
 
-            <button type="button" className={styles.newBtn} onClick={newSnippet}>
-                <Plus size={14} />
-                {t("snippets.dock.new")}
-            </button>
+            {edit ? (
+                <div className={styles.editor}>
+                    <input
+                        className={styles.nameInput}
+                        value={edit.name}
+                        onChange={(e) => setEdit({ ...edit, name: e.target.value })}
+                        placeholder={t("tools.snip.namePlaceholder")}
+                        spellCheck={false}
+                        autoFocus
+                    />
+                    <textarea
+                        className={styles.cmdInput}
+                        value={edit.command}
+                        onChange={(e) => setEdit({ ...edit, command: e.target.value })}
+                        placeholder={t("tools.snip.cmdPlaceholder")}
+                        spellCheck={false}
+                    />
+                    <div className={styles.editorActions}>
+                        <button type="button" className={styles.cancelBtn} onClick={() => setEdit(null)}>
+                            {t("tools.snip.cancel")}
+                        </button>
+                        <button
+                            type="button"
+                            className={styles.saveBtn}
+                            disabled={!edit.name.trim() || busy}
+                            onClick={() => void save()}
+                        >
+                            {t("tools.snip.save")}
+                        </button>
+                    </div>
+                </div>
+            ) : (
+                <button
+                    type="button"
+                    className={styles.newBtn}
+                    onClick={() => setEdit({ id: null, name: "", command: "" })}
+                >
+                    <Plus size={14} />
+                    {t("snippets.dock.new")}
+                </button>
+            )}
         </aside>
     );
 }

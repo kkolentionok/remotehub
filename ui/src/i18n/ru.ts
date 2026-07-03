@@ -677,6 +677,7 @@ export const messages: Partial<Record<keyof typeof enMessages, string>> = {
     "settings.sync.rowHosts": "Хосты",
     "settings.sync.rowGroups": "Группы",
     "settings.sync.rowCreds": "Учётные данные",
+    "settings.sync.rowSnippets": "Сниппеты",
     "settings.sync.statusOn": "Автосинхронизация включена",
     "settings.sync.statusSyncing": "Синхронизация…",
     "settings.sync.statusSynced": "Синхронизировано",

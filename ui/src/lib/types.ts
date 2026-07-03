@@ -270,6 +270,7 @@ export interface SyncNowResponse {
     hosts: number;
     groups: number;
     credentials: number;
+    snippets: number;
     deleted: number;
 }
 
@@ -284,6 +285,7 @@ export interface SyncStatus {
     hosts: number;
     groups: number;
     credentials: number;
+    snippets: number;
     deleted: number;
 }
 

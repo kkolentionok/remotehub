@@ -4,6 +4,7 @@ import {
     Check,
     Eye,
     EyeOff,
+    Code2,
     Folder,
     KeyRound,
     Loader2,
@@ -459,7 +460,7 @@ function SyncStatusCard({
     const { t } = useT();
     const state = status?.state ?? "idle";
     const time = status?.at_ms ? new Date(status.at_ms).toLocaleTimeString() : null;
-    const counts = status && (status.hosts || status.groups || status.credentials);
+    const counts = status && (status.hosts || status.groups || status.credentials || status.snippets);
 
     let badge = s.badgeOk;
     let icon = <Check size={18} />;
@@ -506,6 +507,7 @@ function SyncStatusCard({
                     <Row icon={<Server size={15} />} label={t("settings.sync.rowHosts")} n={status!.hosts} />
                     <Row icon={<Folder size={15} />} label={t("settings.sync.rowGroups")} n={status!.groups} />
                     <Row icon={<KeyRound size={15} />} label={t("settings.sync.rowCreds")} n={status!.credentials} />
+                    <Row icon={<Code2 size={15} />} label={t("settings.sync.rowSnippets")} n={status!.snippets} />
                 </div>
             ) : null}
         </div>

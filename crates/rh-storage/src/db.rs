@@ -36,7 +36,7 @@ const MIGRATE_V2_TO_V3: &str =
 /// Incremental, data-preserving migration v3 → v4: pinned SSH host keys
 /// (TOFU). Purely additive — a new table, no existing rows touched.
 const MIGRATE_V3_TO_V4: &str = "\
-CREATE TABLE known_hosts (\
+CREATE TABLE IF NOT EXISTS known_hosts (\
     hostname            TEXT NOT NULL,\
     port                INTEGER NOT NULL,\
     key_type            TEXT NOT NULL,\
@@ -61,7 +61,7 @@ const MIGRATE_V6_TO_V7: &str =
 
 /// Incremental, data-preserving migration v7 → v8: `rdp_known_certs`
 /// table (TOFU pins for RDP server certificates). New table, no data loss.
-const MIGRATE_V7_TO_V8: &str = "CREATE TABLE rdp_known_certs (\n    hostname            TEXT NOT NULL,\n    port                INTEGER NOT NULL,\n    fingerprint_sha256  TEXT NOT NULL,\n    subject             TEXT NOT NULL,\n    trusted_at          TEXT NOT NULL,\n    PRIMARY KEY (hostname, port)\n);";
+const MIGRATE_V7_TO_V8: &str = "CREATE TABLE IF NOT EXISTS rdp_known_certs (\n    hostname            TEXT NOT NULL,\n    port                INTEGER NOT NULL,\n    fingerprint_sha256  TEXT NOT NULL,\n    subject             TEXT NOT NULL,\n    trusted_at          TEXT NOT NULL,\n    PRIMARY KEY (hostname, port)\n);";
 
 /// Incremental, data-preserving migration v8 → v9: `favorite` on hosts
 /// (user-pinned, drives the tray Favorites submenu). Additive NOT NULL
@@ -76,7 +76,7 @@ const MIGRATE_V8_TO_V9: &str =
 /// every entity table and lets a deletion survive its entity row as a
 /// `deleted = 1` tombstone so it can replicate.
 const MIGRATE_V9_TO_V10: &str = "\
-CREATE TABLE sync_meta (\
+CREATE TABLE IF NOT EXISTS sync_meta (\
     kind        TEXT NOT NULL,\
     id          TEXT NOT NULL,\
     rev_wall    INTEGER NOT NULL,\
@@ -90,7 +90,7 @@ CREATE TABLE sync_meta (\
 /// persisted port-forward definitions (Tools → Forwards). New table, no
 /// existing rows touched. `host_id` cascades on host delete.
 const MIGRATE_V10_TO_V11: &str = "\
-CREATE TABLE forwards (\
+CREATE TABLE IF NOT EXISTS forwards (\
     id           TEXT PRIMARY KEY NOT NULL,\
     host_id      TEXT NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,\
     kind         TEXT NOT NULL CHECK (kind IN ('local','remote','dynamic')),\
@@ -101,7 +101,7 @@ CREATE TABLE forwards (\
     auto_start   INTEGER NOT NULL DEFAULT 0,\
     created_at   TEXT NOT NULL\
 );\
-CREATE INDEX idx_forwards_host ON forwards(host_id);";
+CREATE INDEX IF NOT EXISTS idx_forwards_host ON forwards(host_id);";
 
 /// Incremental, data-preserving migration v11 → v12: `snippets` table —
 /// reusable commands (Tools → Snippets). New table, no existing rows touched.
@@ -316,9 +316,19 @@ impl Db {
             .acquire()
             .await
             .map_err(|e| StorageError::Backend(format!("acquire for migration: {e}")))?;
-        conn.execute(sql)
-            .await
-            .map_err(|e| StorageError::Backend(format!("apply migration: {e}")))?;
+        if let Err(e) = conn.execute(sql).await {
+            let msg = e.to_string();
+            // Idempotency: a half-applied migration (DDL ran but the version
+            // bump didn't commit) re-runs on the next start. CREATE TABLE/INDEX
+            // use IF NOT EXISTS; the remaining case is `ALTER TABLE ADD COLUMN`,
+            // which SQLite can't guard — tolerate its "duplicate column name" so
+            // the chain still completes instead of bricking the app.
+            if msg.contains("duplicate column name") {
+                warn!(error = %msg, "migration statement already applied; skipping (idempotent)");
+            } else {
+                return Err(StorageError::Backend(format!("apply migration: {msg}")));
+            }
+        }
         Ok(())
     }
 

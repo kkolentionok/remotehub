@@ -693,6 +693,7 @@ export const messages = {
     "settings.sync.rowHosts": "Hosts",
     "settings.sync.rowGroups": "Groups",
     "settings.sync.rowCreds": "Credentials",
+    "settings.sync.rowSnippets": "Snippets",
     "settings.sync.statusOn": "Auto-sync is on",
     "settings.sync.statusSyncing": "Syncing…",
     "settings.sync.statusSynced": "Synced",

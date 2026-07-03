@@ -49,6 +49,7 @@ pub struct SyncStatusSnapshot {
     pub hosts: u32,
     pub groups: u32,
     pub credentials: u32,
+    pub snippets: u32,
     pub deleted: u32,
 }
 
@@ -62,6 +63,7 @@ impl Default for SyncStatusSnapshot {
             hosts: 0,
             groups: 0,
             credentials: 0,
+            snippets: 0,
             deleted: 0,
         }
     }
@@ -135,6 +137,7 @@ async fn run_pass(app: &AppHandle, state: &AppState) {
                     hosts: resp.hosts,
                     groups: resp.groups,
                     credentials: resp.credentials,
+                    snippets: resp.snippets,
                     deleted: resp.deleted,
                 },
             )

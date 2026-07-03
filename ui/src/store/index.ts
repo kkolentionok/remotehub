@@ -235,6 +235,8 @@ interface UiStore {
     section: "vault" | "tools";
     /** When true, the snippets panel is docked on the right of the session area. */
     snippetsPinned: boolean;
+    /** Bumped on any snippet mutation so open snippet views (Tools tab + dock) reload. */
+    snippetsRev: number;
     /** Latest background-sync status (from the `sync:status` event), or null
      *  before the first report. Surfaced quietly in the Vault scope dropdown. */
     syncStatus: SyncStatus | null;
@@ -252,6 +254,7 @@ interface UiStore {
     setToolsSection: (section: string | null) => void;
     setSection: (section: "vault" | "tools") => void;
     setSnippetsPinned: (v: boolean) => void;
+    bumpSnippets: () => void;
     setSyncStatus: (status: SyncStatus) => void;
 }
 
@@ -286,7 +289,8 @@ export const useUiStore = create<UiStore>((set) => ({
     shortcutsOpen: false,
     toolsSection: null,
     section: "vault",
-    snippetsPinned: false,
+    snippetsPinned: localStorage.getItem("pingie.snippetsPinned") === "1",
+    snippetsRev: 0,
     syncStatus: null,
 
     selectHost: (id) => set({ selectedHostId: id, draft: null }),
@@ -302,7 +306,15 @@ export const useUiStore = create<UiStore>((set) => ({
     setShortcutsOpen: (shortcutsOpen) => set({ shortcutsOpen }),
     setToolsSection: (toolsSection) => set({ toolsSection }),
     setSection: (section) => set({ section }),
-    setSnippetsPinned: (snippetsPinned) => set({ snippetsPinned }),
+    setSnippetsPinned: (snippetsPinned) => {
+        try {
+            localStorage.setItem("pingie.snippetsPinned", snippetsPinned ? "1" : "0");
+        } catch {
+            /* ignore storage errors */
+        }
+        set({ snippetsPinned });
+    },
+    bumpSnippets: () => set((st) => ({ snippetsRev: st.snippetsRev + 1 })),
     setSyncStatus: (syncStatus) => set({ syncStatus }),
     toggleGroupCollapsed: (id) =>
         set((s) => {

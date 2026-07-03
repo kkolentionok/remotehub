@@ -171,6 +171,7 @@ pub(crate) struct ImportCounts {
     pub(crate) hosts: u32,
     pub(crate) groups: u32,
     pub(crate) credentials: u32,
+    pub(crate) snippets: u32,
     pub(crate) deleted: u32,
 }
 
@@ -296,6 +297,7 @@ pub(crate) async fn apply_snapshot(state: &AppState, snap: &SyncSnapshot) -> Api
             .sync_meta
             .bump(KIND_SNIPPET, s.id.as_str(), &stamp_from(rec))
             .await?;
+        c.snippets += 1;
     }
 
     // Phase 4 — deletions, reverse FK order (hosts → credentials → groups).
