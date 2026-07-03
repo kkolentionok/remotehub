@@ -700,3 +700,10 @@ export interface SshIdAddedKey {
     id: string;
     key_type: string;
 }
+
+export interface SshIdAvailableKey {
+    credential_id: string;
+    name: string;
+    key_type: string;
+    public_key: string;
+}

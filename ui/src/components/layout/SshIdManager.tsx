@@ -14,7 +14,7 @@ import {
 
 import { useT } from "../../i18n";
 import { app, sshId } from "../../lib/ipc";
-import { formatApiError, type SshIdKey } from "../../lib/types";
+import { formatApiError, type SshIdAvailableKey, type SshIdKey } from "../../lib/types";
 import styles from "./SshIdManager.module.css";
 
 const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{0,30}[a-z0-9]$/; // 2–32, first/last alnum
@@ -65,6 +65,9 @@ export function SshIdPane({ onToast }: { onToast: (s: string) => void }) {
     const [paste, setPaste] = useState("");
     const [addLabel, setAddLabel] = useState("");
     const [adding, setAdding] = useState(false);
+    const [addTab, setAddTab] = useState<"paste" | "mine">("paste");
+    const [mine, setMine] = useState<SshIdAvailableKey[] | null>(null);
+    const [mineLoading, setMineLoading] = useState(false);
     const [linkCopied, setLinkCopied] = useState(false);
     const [cmdCopied, setCmdCopied] = useState(false);
     const [fps, setFps] = useState<Record<string, string>>({});
@@ -191,6 +194,35 @@ export function SshIdPane({ onToast }: { onToast: (s: string) => void }) {
             setAddOpen(false);
             setPaste("");
             setAddLabel("");
+            await reloadKeys();
+            onToast(t("tools.sshId.keyAdded"));
+        } catch (e) {
+            onToast(formatApiError(e));
+        } finally {
+            setAdding(false);
+        }
+    }
+
+    async function loadMine() {
+        setMineLoading(true);
+        try {
+            setMine(await sshId.availableKeys());
+        } catch (e) {
+            setMine([]);
+            onToast(formatApiError(e));
+        } finally {
+            setMineLoading(false);
+        }
+    }
+
+    async function addFromMine(k: SshIdAvailableKey) {
+        if (adding) return;
+        setAdding(true);
+        try {
+            await sshId.addKey(k.public_key, k.name || null);
+            setAddOpen(false);
+            setAddTab("paste");
+            setMine(null);
             await reloadKeys();
             onToast(t("tools.sshId.keyAdded"));
         } catch (e) {
@@ -410,6 +442,8 @@ export function SshIdPane({ onToast }: { onToast: (s: string) => void }) {
                                     setAddOpen((v) => !v);
                                     setPaste("");
                                     setAddLabel("");
+                                    setAddTab("paste");
+                                    setMine(null);
                                 }}
                             >
                                 <Plus size={13} />
@@ -465,37 +499,90 @@ export function SshIdPane({ onToast }: { onToast: (s: string) => void }) {
                         {addOpen && (
                             <div className={styles.dialog}>
                                 <div className={styles.dialogBody}>
-                                    <textarea
-                                        className={styles.textarea}
-                                        value={paste}
-                                        onChange={(e) => setPaste(e.target.value)}
-                                        placeholder={t("tools.sshId.pastePlaceholder")}
-                                        spellCheck={false}
-                                    />
-                                    <input
-                                        className={styles.labelInput}
-                                        value={addLabel}
-                                        onChange={(e) => setAddLabel(e.target.value)}
-                                        placeholder={t("tools.sshId.labelPlaceholder")}
-                                        spellCheck={false}
-                                    />
-                                    <div className={styles.dialogActions}>
+                                    <div className={styles.tabs}>
                                         <button
                                             type="button"
-                                            className={styles.cancel}
-                                            onClick={() => setAddOpen(false)}
+                                            className={`${styles.tab} ${addTab === "paste" ? styles.tabActive : ""}`}
+                                            onClick={() => setAddTab("paste")}
                                         >
-                                            {t("tools.sshId.cancel")}
+                                            {t("tools.sshId.fromPaste")}
                                         </button>
                                         <button
                                             type="button"
-                                            className={styles.confirm}
-                                            disabled={paste.trim().length < 8 || adding}
-                                            onClick={() => void confirmAdd()}
+                                            className={`${styles.tab} ${addTab === "mine" ? styles.tabActive : ""}`}
+                                            onClick={() => {
+                                                setAddTab("mine");
+                                                if (mine === null && !mineLoading) void loadMine();
+                                            }}
                                         >
-                                            {t("tools.sshId.add")}
+                                            {t("tools.sshId.fromMine")}
                                         </button>
                                     </div>
+
+                                    {addTab === "paste" ? (
+                                        <>
+                                            <textarea
+                                                className={styles.textarea}
+                                                value={paste}
+                                                onChange={(e) => setPaste(e.target.value)}
+                                                placeholder={t("tools.sshId.pastePlaceholder")}
+                                                spellCheck={false}
+                                            />
+                                            <input
+                                                className={styles.labelInput}
+                                                value={addLabel}
+                                                onChange={(e) => setAddLabel(e.target.value)}
+                                                placeholder={t("tools.sshId.labelPlaceholder")}
+                                                spellCheck={false}
+                                            />
+                                            <div className={styles.dialogActions}>
+                                                <button
+                                                    type="button"
+                                                    className={styles.cancel}
+                                                    onClick={() => setAddOpen(false)}
+                                                >
+                                                    {t("tools.sshId.cancel")}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className={styles.confirm}
+                                                    disabled={paste.trim().length < 8 || adding}
+                                                    onClick={() => void confirmAdd()}
+                                                >
+                                                    {t("tools.sshId.add")}
+                                                </button>
+                                            </div>
+                                        </>
+                                    ) : (
+                                        <>
+                                            {mineLoading ? (
+                                                <div className={styles.mineEmpty}>{t("common.loading")}</div>
+                                            ) : mine && mine.length > 0 ? (
+                                                <div className={styles.mineList}>
+                                                    {mine.map((k) => (
+                                                        <button
+                                                            key={k.credential_id}
+                                                            type="button"
+                                                            className={styles.mineRow}
+                                                            disabled={adding}
+                                                            onClick={() => void addFromMine(k)}
+                                                        >
+                                                            <span
+                                                                className={`${styles.badge} ${k.key_type === "ed25519" ? styles.badgeAccent : styles.badgeNeutral}`}
+                                                            >
+                                                                {k.key_type.toUpperCase()}
+                                                            </span>
+                                                            <span className={styles.mineName}>{k.name}</span>
+                                                            <Plus size={14} />
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div className={styles.mineEmpty}>{t("tools.sshId.mineEmpty")}</div>
+                                            )}
+                                            <div className={styles.mineHint}>{t("tools.sshId.mineHint")}</div>
+                                        </>
+                                    )}
                                 </div>
                             </div>
                         )}

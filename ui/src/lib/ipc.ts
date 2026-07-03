@@ -39,6 +39,7 @@ import type {
     HostListRequest,
     HostListResponse,
     SshIdAddedKey,
+    SshIdAvailableKey,
     SshIdCheck,
     SshIdData,
     HostUpdateRequest,
@@ -599,4 +600,8 @@ export const sshId = {
     /** Rename a key's label. */
     updateLabel: (id: string, label: string | null): Promise<void> =>
         invoke<void>("ssh_id_update_label", { id, label }),
+
+    /** SSH-key credentials with their derived public key (for the picker). */
+    availableKeys: (): Promise<SshIdAvailableKey[]> =>
+        invoke<SshIdAvailableKey[]>("ssh_id_available_keys"),
 };

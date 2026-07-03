@@ -158,6 +158,7 @@ fn main() {
             api::ssh_id::ssh_id_add_key,
             api::ssh_id::ssh_id_delete_key,
             api::ssh_id::ssh_id_update_label,
+            api::ssh_id::ssh_id_available_keys,
             api::settings::settings_update,
             // Sessions (Stage 2: SSH)
             api::sessions::session_open,

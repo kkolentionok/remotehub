@@ -509,3 +509,91 @@
 .labelEdit::placeholder {
     color: var(--text-3);
 }
+
+/* Kill the global 2px accent focus outline inside this pane (it gets clipped by
+   rounded/overflow-hidden rows into stray side bars). Focus is shown by the
+   container's accent border instead. */
+.pane input:focus,
+.pane input:focus-visible,
+.pane textarea:focus,
+.pane textarea:focus-visible,
+.pane select:focus,
+.pane select:focus-visible {
+    outline: none;
+}
+.inputRow:focus-within {
+    border-color: var(--color-accent);
+}
+
+/* add-key dialog tabs + "from my keys" list */
+.tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 10px;
+}
+.tab {
+    flex: 1;
+    height: 30px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-2);
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    cursor: pointer;
+}
+.tab:hover {
+    background: var(--color-subtle);
+}
+.tabActive {
+    background: var(--color-subtle);
+    color: var(--text-1);
+    border-color: var(--color-accent);
+}
+.mineList {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+.mineRow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-1);
+    cursor: pointer;
+    text-align: left;
+}
+.mineRow:hover {
+    background: var(--color-subtle);
+    border-color: var(--color-accent);
+}
+.mineRow:disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}
+.mineName {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.mineEmpty {
+    padding: 18px;
+    text-align: center;
+    color: var(--text-3);
+    font-size: 12.5px;
+}
+.mineHint {
+    margin-top: 9px;
+    font-size: 11px;
+    color: var(--text-3);
+}

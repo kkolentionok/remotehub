@@ -221,3 +221,28 @@ pub fn spawn_session(
     };
     (handle, join)
 }
+
+/// Derive the OpenSSH `authorized_keys` line (e.g. `ssh-ed25519 AAAA…`) from a
+/// private-key PEM. Handles PuTTY `.ppk`. Returns `Err` when the key can't be
+/// decoded (encrypted without the correct passphrase, unsupported format, …).
+///
+/// Used by SSH ID's "publish from my Pingie keys" flow — only the PUBLIC part
+/// is ever produced; the private key stays in the keychain.
+///
+/// NOTE (russh 0.45, version-sensitive): same surface as the auth path —
+/// `decode_secret_key` + the `PublicKeyBase64` trait, plus `clone_public_key`
+/// (the one call not already exercised elsewhere; adjust if the API moved).
+pub fn public_key_line(private_key_pem: &str, passphrase: Option<&str>) -> Result<String, String> {
+    use russh::keys::PublicKeyBase64;
+    let (pem, decode_pass): (String, Option<&str>) = if crate::ppk::is_ppk(private_key_pem) {
+        (
+            crate::ppk::ppk_to_openssh(private_key_pem, passphrase).map_err(|e| e.to_string())?,
+            None,
+        )
+    } else {
+        (private_key_pem.to_string(), passphrase)
+    };
+    let key = russh::keys::decode_secret_key(&pem, decode_pass).map_err(|e| e.to_string())?;
+    let pk = key.clone_public_key().map_err(|e| e.to_string())?;
+    Ok(format!("{} {}", pk.name(), pk.public_key_base64()))
+}
