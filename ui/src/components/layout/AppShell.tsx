@@ -380,7 +380,7 @@ export function AppShell() {
                         </div>
                     );
                 })}
-                {snippetsPinned && <SnippetsDock />}
+                {snippetsPinned && visibleTabId !== null && <SnippetsDock />}
             </div>
             <DialogHost />
             {launcherOpen && <Launcher />}

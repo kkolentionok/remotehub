@@ -7,7 +7,8 @@ import {
     useState,
     type KeyboardEvent,
 } from "react";
-import { Check, Plus } from "lucide-react";
+import { Check, ChevronDown, Plus } from "lucide-react";
+import { createPortal } from "react-dom";
 
 import { useT } from "../../i18n";
 import styles from "./Combobox.module.css";
@@ -75,6 +76,7 @@ export function Combobox({
     const id = useId();
     const rootRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
+    const listRef = useRef<HTMLUListElement>(null);
 
     // Mode: either we show the saved label (when value matches an option),
     // or we're typing (open dropdown). `query` is the live input string;
@@ -87,7 +89,8 @@ export function Combobox({
     // horizontally-scrollable form card). Flips upward when space below is tight.
     const [coords, setCoords] = useState<{
         left: number;
-        top: number;
+        top?: number;
+        bottom?: number;
         width: number;
         maxH: number;
         up: boolean;
@@ -141,10 +144,14 @@ export function Combobox({
             const maxH = Math.min(240, Math.max(120, up ? spaceAbove : spaceBelow));
             setCoords({
                 left: r.left,
-                top: up ? r.top - gap - maxH : r.bottom + gap,
                 width: r.width,
                 maxH,
                 up,
+                // Anchor by the edge nearest the input so the list always hugs
+                // it, regardless of how many rows it ends up rendering.
+                ...(up
+                    ? { bottom: window.innerHeight - r.top + gap }
+                    : { top: r.bottom + gap }),
             });
         };
         measure();
@@ -160,9 +167,11 @@ export function Combobox({
     useEffect(() => {
         if (!open) return;
         const onDocMouseDown = (e: MouseEvent) => {
-            if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-                close();
+            const target = e.target as Node;
+            if (rootRef.current?.contains(target) || listRef.current?.contains(target)) {
+                return;
             }
+            close();
         };
         document.addEventListener("mousedown", onDocMouseDown);
         return () => document.removeEventListener("mousedown", onDocMouseDown);
@@ -171,7 +180,10 @@ export function Combobox({
 
     function openDropdown() {
         if (disabled) return;
-        setQuery(selectedLabel);
+        // Start with an empty query so the FULL list of options is shown on
+        // click/focus (the current selection is marked with a check), rather
+        // than pre-filtering to just the selected label.
+        setQuery("");
         setOpen(true);
     }
 
@@ -239,6 +251,9 @@ export function Combobox({
                 placeholder={placeholder}
                 disabled={disabled}
                 onFocus={openDropdown}
+                onClick={() => {
+                    if (!open) openDropdown();
+                }}
                 onChange={handleChange}
                 onKeyDown={handleKeyDown}
                 autoComplete="off"
@@ -248,19 +263,43 @@ export function Combobox({
                 aria-controls={`${id}-list`}
                 aria-autocomplete="list"
             />
-            {open && coords && (
-                <ul
-                    id={`${id}-list`}
-                    className={styles.list}
-                    role="listbox"
-                    style={{
-                        position: "fixed",
-                        left: coords.left,
-                        top: coords.top,
-                        width: coords.width,
-                        maxHeight: coords.maxH,
-                    }}
-                >
+            <ChevronDown
+                size={14}
+                className={`${styles.caret} ${open ? styles.caretOpen : ""}`}
+                aria-hidden
+                onMouseDown={(e) => {
+                    e.preventDefault();
+                    if (disabled) return;
+                    if (open) {
+                        close();
+                    } else {
+                        openDropdown();
+                        inputRef.current?.focus();
+                    }
+                }}
+            />
+            {open &&
+                createPortal(
+                    <ul
+                        ref={listRef}
+                        id={`${id}-list`}
+                        className={styles.list}
+                        role="listbox"
+                        style={
+                            coords
+                                ? {
+                                      position: "fixed",
+                                      left: coords.left,
+                                      width: coords.width,
+                                      maxHeight: coords.maxH,
+                                      zIndex: 9999,
+                                      ...(coords.up
+                                          ? { bottom: coords.bottom }
+                                          : { top: coords.top }),
+                                  }
+                                : { position: "fixed", visibility: "hidden", zIndex: 9999 }
+                        }
+                    >
                     {showCreateRow && (
                         <li
                             role="option"
@@ -307,8 +346,9 @@ export function Combobox({
                             </li>
                         );
                     })}
-                </ul>
-            )}
+                    </ul>,
+                    document.body,
+                )}
         </div>
     );
 }

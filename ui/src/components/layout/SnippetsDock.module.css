@@ -275,3 +275,10 @@
     cursor: default;
     pointer-events: none;
 }
+
+/* no accent focus outline on the filter (global input:focus-visible would
+   otherwise clip into a stray box) */
+.filterRow input:focus,
+.filterRow input:focus-visible {
+    outline: none;
+}

@@ -1035,10 +1035,7 @@ function HostForm(props: HostFormProps) {
     }, []);
 
     const groupOptions = useMemo(
-        () =>
-            groups
-                .filter((g) => !g.parent_id)
-                .map((g) => ({ value: g.id, label: g.name })),
+        () => groups.map((g) => ({ value: g.id, label: g.name })),
         [groups],
     );
 
