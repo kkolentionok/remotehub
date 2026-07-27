@@ -32,7 +32,7 @@
 .sdot { width: 6px; height: 6px; border-radius: 99px; flex: 0 0 auto; }
 .sdotOnline { background: var(--color-success); }
 
-.emenu { position: absolute; top: 40px; left: 0; z-index: 60; min-width: 240px; background: var(--color-elevated);
+.emenu { position: absolute; top: 40px; left: 0; z-index: 60; min-width: 240px; max-height: 60vh; overflow-y: auto; background: var(--color-elevated);
     border: 1px solid var(--color-border-strong); border-radius: var(--radius-lg); box-shadow: var(--shadow-pop); padding: 6px; }
 .emenuH { font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--text-4); padding: 7px 9px 5px; }
 .emenuItem { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 9px; border-radius: var(--radius-md); text-align: left; color: var(--text-2); }

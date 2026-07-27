@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon, type ISearchOptions } from "@xterm/addon-search";
 import type { ITheme } from "@xterm/xterm";
@@ -173,26 +172,14 @@ function acquireTerm(
     el.style.height = "100%";
     term.open(el);
 
-    // GPU renderer; recreate the context if it's lost (minimise / GPU reset).
-    // If a fresh context dies almost immediately, WebGL is unstable here, so
-    // stop and stay on the DOM renderer.
-    let webgl: WebglAddon | null = null;
-    const loadWebgl = () => {
-        try {
-            const addon = new WebglAddon();
-            webgl = addon;
-            const createdAt = Date.now();
-            addon.onContextLoss(() => {
-                addon.dispose();
-                if (webgl === addon) webgl = null;
-                if (Date.now() - createdAt > 1000) setTimeout(loadWebgl, 200);
-            });
-            term.loadAddon(addon);
-        } catch {
-            /* no WebGL — xterm keeps the DOM renderer */
-        }
-    };
-    loadWebgl();
+    // Renderer: xterm's default DOM renderer.
+    //
+    // The WebGL addon was intentionally removed. On Windows / WebView2 a lost
+    // GPU context — which frequent full repaints (`clear`), GPU resets, driver
+    // updates or waking from sleep can trigger — crashes the entire webview
+    // render process (the white "sad tab" page). Re-initialising the context
+    // then produced a crash→reload loop that flickered every terminal tab.
+    // The DOM renderer is slightly slower on extreme throughput but stable.
 
     // Keystrokes → PTY; xterm reflow → PTY window-change (kept in lockstep).
     const dataDisp = term.onData((d) =>
