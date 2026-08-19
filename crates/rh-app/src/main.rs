@@ -68,12 +68,23 @@ fn release_all_modifiers() {
         );
     }
     // Audible confirmation — plays even while another app (mstsc) is focused and
-    // regardless of whether Pingie's window is hidden in the tray. `Beep` is
-    // blocking (sleeps for the duration), so run it off-thread.
-    std::thread::spawn(|| unsafe {
-        windows_sys::Win32::System::Console::Beep(1000, 120);
-    });
+    // regardless of whether Pingie's window is hidden in the tray.
+    beep();
     info!("released all keyboard modifiers (unstick hotkey)");
+}
+
+/// Short confirmation tone. `kernel32!Beep` is declared directly here because
+/// windows-sys 0.59 exposes neither `Beep` nor `MessageBeep`. It blocks for the
+/// duration, so it runs on its own thread.
+#[cfg(windows)]
+fn beep() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn Beep(dwfreq: u32, dwduration: u32) -> i32;
+    }
+    std::thread::spawn(|| unsafe {
+        Beep(1000, 120);
+    });
 }
 
 #[cfg(not(windows))]
