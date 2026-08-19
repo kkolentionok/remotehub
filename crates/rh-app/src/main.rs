@@ -66,11 +66,13 @@ fn release_all_modifiers() {
             inputs.as_mut_ptr(),
             std::mem::size_of::<INPUT>() as i32,
         );
-        // Audible confirmation — plays even while another app (mstsc) is focused.
-        windows_sys::Win32::UI::WindowsAndMessaging::MessageBeep(
-            windows_sys::Win32::UI::WindowsAndMessaging::MB_OK,
-        );
     }
+    // Audible confirmation — plays even while another app (mstsc) is focused and
+    // regardless of whether Pingie's window is hidden in the tray. `Beep` is
+    // blocking (sleeps for the duration), so run it off-thread.
+    std::thread::spawn(|| unsafe {
+        windows_sys::Win32::System::Console::Beep(1000, 120);
+    });
     info!("released all keyboard modifiers (unstick hotkey)");
 }
 
