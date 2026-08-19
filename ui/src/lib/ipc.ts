@@ -619,3 +619,27 @@ export const snippets = {
         invoke<void>("snippet_update", { id, name, command }),
     delete: (id: string): Promise<void> => invoke<void>("snippet_delete", { id }),
 };
+
+// =====================================================================
+// Global "unstick modifiers" hotkey (release stuck Ctrl/Alt/Shift/Win).
+// =====================================================================
+
+export interface UnstickHotkey {
+    ctrl: boolean;
+    alt: boolean;
+    shift: boolean;
+    meta: boolean;
+    /** W3C KeyboardEvent.code (e.g. "KeyK"); null/"" disables the hotkey. */
+    code: string | null;
+}
+
+export const hotkeys = {
+    setUnstick: (hk: UnstickHotkey): Promise<void> =>
+        invoke<void>("set_unstick_hotkey", {
+            ctrl: hk.ctrl,
+            alt: hk.alt,
+            shift: hk.shift,
+            meta: hk.meta,
+            code: hk.code,
+        }),
+};

@@ -269,3 +269,10 @@
 .scopeCheck { color: var(--color-accent); }
 .scopeLock { color: var(--text-4); }
 .scopeHint { font-size: 11px; color: var(--text-4); padding: 4px 8px 6px; }
+
+/* sync-error shield on the Vault button */
+.vaultErr {
+    color: var(--color-danger);
+    flex: 0 0 auto;
+    margin-left: 1px;
+}

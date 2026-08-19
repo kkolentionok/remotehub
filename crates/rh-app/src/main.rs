@@ -29,6 +29,94 @@ use rh_storage::{
 
 use crate::state::AppState;
 
+/// Force-release every keyboard modifier at the OS level (both L/R + the
+/// generic VK, plus the Win keys). Bound to the global unstick hotkey so a
+/// modifier stuck by another application can be cleared. Windows-only; a no-op
+/// elsewhere.
+#[cfg(windows)]
+fn release_all_modifiers() {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_CONTROL,
+        VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT,
+        VK_RWIN, VK_SHIFT,
+    };
+    let vks = [
+        VK_LCONTROL, VK_RCONTROL, VK_CONTROL, VK_LMENU, VK_RMENU, VK_MENU, VK_LSHIFT, VK_RSHIFT,
+        VK_SHIFT, VK_LWIN, VK_RWIN,
+    ];
+    let mut inputs: Vec<INPUT> = vks
+        .iter()
+        .map(|&vk| INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        })
+        .collect();
+    // SAFETY: `inputs` is a valid, correctly-sized slice of INPUT for its lifetime.
+    unsafe {
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_mut_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        );
+        // Audible confirmation — plays even while another app (mstsc) is focused.
+        windows_sys::Win32::UI::WindowsAndMessaging::MessageBeep(
+            windows_sys::Win32::UI::WindowsAndMessaging::MB_OK,
+        );
+    }
+    info!("released all keyboard modifiers (unstick hotkey)");
+}
+
+#[cfg(not(windows))]
+fn release_all_modifiers() {}
+
+/// Re-bind (or disable) the global "unstick modifiers" hotkey at runtime.
+/// Takes modifier flags + a W3C `KeyboardEvent.code` (e.g. "KeyK"); an empty
+/// `code` disables the hotkey. Called by the settings UI; persisted client-side.
+#[tauri::command]
+fn set_unstick_hotkey(
+    app: tauri::AppHandle,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    meta: bool,
+    code: Option<String>,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+
+    let Some(code) = code.filter(|c| !c.is_empty()) else {
+        info!("unstick hotkey disabled");
+        return Ok(());
+    };
+    let key: Code = code.parse().map_err(|_| format!("unknown key code: {code}"))?;
+    let mut mods = Modifiers::empty();
+    if ctrl {
+        mods |= Modifiers::CONTROL;
+    }
+    if alt {
+        mods |= Modifiers::ALT;
+    }
+    if shift {
+        mods |= Modifiers::SHIFT;
+    }
+    if meta {
+        mods |= Modifiers::SUPER;
+    }
+    let sc = Shortcut::new(if mods.is_empty() { None } else { Some(mods) }, key);
+    gs.register(sc).map_err(|e| format!("register failed: {e}"))?;
+    info!(?sc, "unstick hotkey re-registered");
+    Ok(())
+}
+
 fn main() {
     if let Err(e) = logging::init() {
         eprintln!("warning: logging init failed: {e}");
@@ -59,6 +147,19 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // Global "unstick modifiers" hotkey. Fires system-wide (even when
+        // Pingie is only in the tray) so a modifier stuck by ANOTHER app —
+        // classically mstsc dropping Ctrl after Alt+Tab on a corporate RDP —
+        // can be force-released while Pingie runs in the background.
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|_app, _shortcut, event| {
+                    if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        release_all_modifiers();
+                    }
+                })
+                .build(),
+        )
         .on_window_event(|window, event| {
             // Closing the window must NOT quit the app: live SSH/RDP/SFTP
             // sessions (and any mounted drives / port-forwards) would drop.
@@ -99,6 +200,21 @@ fn main() {
                     // Install the OS-level keyboard hook (Windows) for
                     // fullscreen RDP key capture. No-op elsewhere.
                     kbd_hook::init(app.handle().clone());
+
+                    // Register the global "unstick modifiers" hotkey (Ctrl+Alt+K).
+                    {
+                        use tauri_plugin_global_shortcut::{
+                            Code, GlobalShortcutExt, Modifiers, Shortcut,
+                        };
+                        let sc = Shortcut::new(
+                            Some(Modifiers::CONTROL | Modifiers::ALT),
+                            Code::KeyK,
+                        );
+                        match app.global_shortcut().register(sc) {
+                            Ok(()) => info!("registered Ctrl+Alt+K (release stuck modifiers)"),
+                            Err(e) => error!(error = %e, "failed to register unstick hotkey"),
+                        }
+                    }
                 }
                 Err(e) => {
                     error!(error = %e, "FATAL: storage initialization failed; app cannot start");
@@ -216,6 +332,7 @@ fn main() {
             api::sftp_sessions::sftp_chmod,
             // Meta
             api::meta::app_version,
+            set_unstick_hotkey,
             api::meta::ui_sessions_report,
             api::meta::app_quit,
             api::meta::open_external,

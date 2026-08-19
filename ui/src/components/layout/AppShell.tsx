@@ -13,7 +13,7 @@ import {
     useUiStore,
 } from "../../store";
 import { leafKeys } from "../../lib/paneTree";
-import { app as appApi, sync as syncApi } from "../../lib/ipc";
+import { app as appApi, hotkeys, sync as syncApi } from "../../lib/ipc";
 import { runUpdateCheck } from "../../lib/updater";
 import type { SyncStatus } from "../../lib/types";
 import { DialogHost } from "./DialogHost";
@@ -105,6 +105,15 @@ export function AppShell() {
         void useSettingsStore.getState().load();
         // Rebuild any sessions the Rust process kept alive across a reload.
         void useSessionsStore.getState().restoreSessions();
+
+        // Apply a saved custom unstick hotkey (Rust registers Ctrl+Alt+K by
+        // default; a stored override replaces it once the webview boots).
+        try {
+            const raw = localStorage.getItem("pingie.unstickHotkey");
+            if (raw !== null) void hotkeys.setUnstick(JSON.parse(raw));
+        } catch {
+            /* ignore malformed value */
+        }
 
         let cleanup: (() => void) | undefined;
         subscribeToBackendEvents().then((c) => {

@@ -4,6 +4,7 @@ import { useT } from "../../../i18n";
 import { useSettingsStore } from "../../../store";
 import { useDebouncedCallback } from "../../../lib/useDebouncedCallback";
 import type { Settings } from "../../../lib/types";
+import { HotkeyRecorder } from "./HotkeyRecorder";
 import styles from "../SettingsDialog.module.css";
 
 interface Props {
@@ -96,6 +97,8 @@ export function ConnectionsSection({ settings }: Props) {
                     {t("settings.connections.rdpGfxHint")}
                 </div>
             </div>
+
+            <HotkeyRecorder />
         </div>
     );
 }

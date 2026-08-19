@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Columns2, Copy, FolderOpen, HardDrive, Loader2, Lock, Monitor, PictureInPicture2, Plus, RefreshCw, Search, Server, Settings, Terminal, Users, Wrench, X } from "lucide-react";
+import { Check, ChevronDown, Columns2, Copy, FolderOpen, HardDrive, Loader2, Lock, Monitor, PictureInPicture2, Plus, RefreshCw, Search, Server, Settings, ShieldAlert, Terminal, Users, Wrench, X } from "lucide-react";
 
 import { useT } from "../../i18n";
 import { sync } from "../../lib/ipc";
@@ -172,6 +172,13 @@ export function TabBar() {
                 >
                     <Server size={14} className={styles.sectionIcon} />
                     <span className={styles.label}>{t("nav.vault")}</span>
+                    {syncStatus?.state === "error" && (
+                        <ShieldAlert
+                            size={13}
+                            className={styles.vaultErr}
+                            aria-label={t("settings.sync.statusError")}
+                        />
+                    )}
                     <span
                         className={styles.chevBtn}
                         role="button"
@@ -203,7 +210,9 @@ export function TabBar() {
                         </button>
                         <div className={styles.scopeHint}>
                             {syncCfg?.logged_in
-                                ? t("storage.syncedAs", { email: syncCfg.email ?? "" })
+                                ? syncStatus?.state === "error"
+                                    ? t("storage.accountAs", { email: syncCfg.email ?? "" })
+                                    : t("storage.syncedAs", { email: syncCfg.email ?? "" })
                                 : t("storage.notSignedIn")}
                         </div>
                         {syncCfg?.logged_in && syncStatus && (

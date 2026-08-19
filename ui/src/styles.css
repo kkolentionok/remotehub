@@ -24,6 +24,19 @@ body {
     background: var(--color-canvas);
     -webkit-font-smoothing: antialiased;
     overflow: hidden;       /* App owns its own scroll regions */
+    /* Desktop app: Ctrl+A / drag must not select the whole chrome. Text
+       selection is re-enabled only inside real editable fields below. */
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+/* Selection allowed only where the cursor is actually in an editable field.
+   (The terminal manages its own copy/selection via xterm.) */
+input,
+textarea,
+[contenteditable="true"] {
+    user-select: text;
+    -webkit-user-select: text;
 }
 
 button {

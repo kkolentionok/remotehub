@@ -391,3 +391,44 @@
 .updateStatus[data-kind="error"] {
     color: var(--color-danger);
 }
+
+/* unstick-modifiers hotkey recorder */
+.hotkeyRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.hotkeyBtn {
+    min-width: 150px;
+    height: 34px;
+    padding: 0 14px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-canvas);
+    color: var(--text-1);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    cursor: pointer;
+    text-align: center;
+}
+.hotkeyBtn:hover {
+    border-color: var(--color-border-strong);
+}
+.hotkeyBtnRec {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+}
+.hotkeyAux {
+    height: 34px;
+    padding: 0 12px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-2);
+    font-size: 12.5px;
+    cursor: pointer;
+}
+.hotkeyAux:hover {
+    color: var(--text-1);
+    border-color: var(--color-border-strong);
+}
