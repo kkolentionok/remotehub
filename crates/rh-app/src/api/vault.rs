@@ -19,8 +19,8 @@
 //! The sync engine (server transport, incremental sync) is the next slice.
 
 use rh_core::{
-    Credential, CredentialId, GroupId, Host, HostFilter, HostGroup, HostId, SecretValue, Snippet,
-    SnippetId, SyncStamp,
+    Credential, CredentialId, GroupId, Host, HostFilter, HostGroup, HostId, Note, NoteId,
+    SecretValue, Snippet, SnippetId, SyncStamp,
 };
 use rh_vault::{
     from_export_string, merge, open_envelope, seal_snapshot, to_export_string, EntityKind, Hlc,
@@ -35,7 +35,7 @@ use crate::api::dto::{
 };
 use crate::api::error::{ApiError, ApiResult};
 use crate::state::AppState;
-use crate::sync_clock::{KIND_CREDENTIAL, KIND_GROUP, KIND_HOST, KIND_SNIPPET};
+use crate::sync_clock::{KIND_CREDENTIAL, KIND_GROUP, KIND_HOST, KIND_NOTE, KIND_SNIPPET};
 
 /// On-disk form of the per-device sync identity now lives in
 /// `crate::sync_clock::SyncClock` (shared, process-wide, in `AppState`).
@@ -132,6 +132,17 @@ pub(crate) async fn build_snapshot(state: &AppState) -> ApiResult<SyncSnapshot> 
         records.push(SyncRecord::snippet(&snippet, rev, origin).map_err(vault_err)?);
     }
 
+    for note in state.notes.list().await? {
+        let (rev, origin) = rev_for(
+            state,
+            KIND_NOTE,
+            note.id.as_str(),
+            note.updated_at.timestamp_millis(),
+        )
+        .await?;
+        records.push(SyncRecord::note(&note, rev, origin).map_err(vault_err)?);
+    }
+
     // Tombstones — deletions that must keep propagating until every replica
     // has applied them.
     for (kind, id, stamp) in state.sync_meta.tombstones().await? {
@@ -140,6 +151,7 @@ pub(crate) async fn build_snapshot(state: &AppState) -> ApiResult<SyncSnapshot> 
             KIND_GROUP => EntityKind::Group,
             KIND_CREDENTIAL => EntityKind::Credential,
             KIND_SNIPPET => EntityKind::Snippet,
+            KIND_NOTE => EntityKind::Note,
             _ => continue,
         };
         let rev = Hlc::new(stamp.rev_wall, stamp.rev_counter);
@@ -172,6 +184,7 @@ pub(crate) struct ImportCounts {
     pub(crate) groups: u32,
     pub(crate) credentials: u32,
     pub(crate) snippets: u32,
+    pub(crate) notes: u32,
     pub(crate) deleted: u32,
 }
 
@@ -300,6 +313,31 @@ pub(crate) async fn apply_snapshot(state: &AppState, snap: &SyncSnapshot) -> Api
         c.snippets += 1;
     }
 
+    // Phase 3c — notes (no FK deps; simple upsert).
+    let existing_notes: std::collections::HashSet<String> = state
+        .notes
+        .list()
+        .await?
+        .into_iter()
+        .map(|n| n.id.to_string())
+        .collect();
+    for rec in &snap.records {
+        if rec.kind != EntityKind::Note || rec.is_deleted() {
+            continue;
+        }
+        let n: Note = rec.as_note().map_err(vault_err)?;
+        if existing_notes.contains(&n.id.to_string()) {
+            state.notes.update(&n).await?;
+        } else {
+            state.notes.create(&n).await?;
+        }
+        state
+            .sync_meta
+            .bump(KIND_NOTE, n.id.as_str(), &stamp_from(rec))
+            .await?;
+        c.notes += 1;
+    }
+
     // Phase 4 — deletions, reverse FK order (hosts → credentials → groups).
     // Each deletion is recorded as a `sync_meta` tombstone (always, even if the
     // entity row was already gone) so it keeps propagating to other replicas;
@@ -327,6 +365,17 @@ pub(crate) async fn apply_snapshot(state: &AppState, snap: &SyncSnapshot) -> Api
             state
                 .sync_meta
                 .tombstone(KIND_SNIPPET, &rec.id, &stamp_from(rec))
+                .await?;
+            c.deleted += 1;
+        }
+    }
+    for rec in &snap.records {
+        if rec.kind == EntityKind::Note && rec.is_deleted() {
+            let id = NoteId::from_raw(rec.id.clone());
+            let _ = state.notes.delete(&id).await;
+            state
+                .sync_meta
+                .tombstone(KIND_NOTE, &rec.id, &stamp_from(rec))
                 .await?;
             c.deleted += 1;
         }
@@ -409,6 +458,9 @@ pub(crate) async fn wipe_local(state: &AppState) -> ApiResult<()> {
     }
     for s in state.snippets.list().await? {
         let _ = state.snippets.delete(&s.id).await;
+    }
+    for n in state.notes.list().await? {
+        let _ = state.notes.delete(&n.id).await;
     }
     // Drop all provenance too, so stale stamps for the wiped entities can't
     // resurface as phantom live records in the next snapshot.

@@ -12,7 +12,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::id::{CredentialId, ForwardId, GroupId, HostId, SnippetId};
+use crate::id::{CredentialId, ForwardId, GroupId, HostId, NoteId, SnippetId};
 
 /// Network protocol used for a connection.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -280,6 +280,34 @@ impl Snippet {
             id: SnippetId::new(),
             name: name.into(),
             command: command.into(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}
+
+/// A free-form note (Tools → Notes). Plain text for now; the body may be
+/// long and multi-line. Not a secret — stored in SQLite like snippets, and
+/// replicated through the vault so every signed-in device sees the same set.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Note {
+    pub id: NoteId,
+    /// Short title shown in the list. May be empty — the UI then derives a
+    /// label from the first line of `body`.
+    pub title: String,
+    pub body: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl Note {
+    #[must_use]
+    pub fn new(title: impl Into<String>, body: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: NoteId::new(),
+            title: title.into(),
+            body: body.into(),
             created_at: now,
             updated_at: now,
         }

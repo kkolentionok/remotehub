@@ -7,6 +7,7 @@ pub mod events;
 pub mod groups;
 pub mod hosts;
 pub mod meta;
+pub mod notes;
 pub mod local_fs;
 pub mod local_sessions;
 pub mod rdp_sessions;

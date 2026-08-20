@@ -20,7 +20,7 @@ use rh_core::StorageError;
 /// Schema version this binary expects. Bumping this triggers either an
 /// incremental migration (when a path exists, e.g. v2 → v3) or, for any
 /// other mismatch, a drop-recreate in alpha mode.
-pub const CURRENT_SCHEMA_VERSION: u32 = 12;
+pub const CURRENT_SCHEMA_VERSION: u32 = 13;
 
 /// Embedded migration script for the current version.
 const V1_SQL: &str = include_str!("migrations/v1.sql");
@@ -114,6 +114,15 @@ CREATE TABLE IF NOT EXISTS snippets (\
     updated_at TEXT NOT NULL\
 );";
 
+const MIGRATE_V12_TO_V13: &str = "\
+CREATE TABLE IF NOT EXISTS notes (\
+    id         TEXT PRIMARY KEY NOT NULL,\
+    title      TEXT NOT NULL DEFAULT '',\
+    body       TEXT NOT NULL DEFAULT '',\
+    created_at TEXT NOT NULL,\
+    updated_at TEXT NOT NULL\
+);";
+
 /// Ordered forward migrations `(from_version, sql)`. The runner applies
 /// every step whose `from_version >= existing` in sequence, so a DB any
 /// number of versions behind (as long as the chain is contiguous from
@@ -130,6 +139,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (9, MIGRATE_V9_TO_V10),
     (10, MIGRATE_V10_TO_V11),
     (11, MIGRATE_V11_TO_V12),
+    (12, MIGRATE_V12_TO_V13),
 ];
 
 /// What [`Db::open`] decided to do with the schema.
@@ -375,6 +385,7 @@ impl Db {
             DROP TABLE IF EXISTS host_groups;
             DROP TABLE IF EXISTS known_hosts;
             DROP TABLE IF EXISTS rdp_known_certs;
+            DROP TABLE IF EXISTS notes;
             DROP TABLE IF EXISTS sync_meta;
             DROP TABLE IF EXISTS settings;
             DROP TABLE IF EXISTS schema_meta;

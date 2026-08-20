@@ -2,6 +2,28 @@
 
 **Last updated:** **RDP now advertises SSL too** (`enable_tls: true` in `rh-rdp build_config`) so NLA-disabled targets negotiate TLS-without-NLA like mstsc, instead of falling back to legacy Standard RDP Security (which IronRDP refuses by design — confirmed via its docs). Fixes a laptop that mstsc connected to but we didn't. CredSSP still preferred → NLA servers unaffected. **SPIKE** (this enable_tls combo unproven with our manual TLS upgrade; user compiles + tests; if a target is truly Standard-only with no TLS, only FreeRDP can do it). Also this session: RDP username/domain split for MS-account/AD; cheatsheets refreshed. *(Prior:* **RDP username/domain split** — `api/rdp_sessions.rs` now splits `DOMAIN\user` (incl. `MicrosoftAccount\you@outlook.com`) into separate username+domain for CredSSP (`split_user_domain` + unit tests); UPNs pass through. Does NOT fix the "server only supports Standard RDP Security" negotiation failure — that's a target-side NLA/TLS reconfig. Cheatsheets refreshed (Account & Sync line + RDP troubleshooting). Backend unverified (user compiles). *(Prior:* **sync errors localized** — the backend's English strings (e.g. "invalid email or password") were leaking into the RU UI; added a frontend `localizeSyncError(t, err)` (`ui/src/lib/syncErrors.ts`) + `settings.sync.err.*` keys (en+ru), wired into `ProfileSection` (auth + status-card message) and `SyncMasterDialog`. No backend change. Frontend verified. *(Prior:* **logout now purges the local vault (critical cross-account data-loss fix).** The local SQLite + keychain are shared across accounts and deletions propagate via tombstones; logout used to leave both in place, so signing into another account pushed account A's hosts into B (and replayed B's *deletions* back onto A on the next switch — real data loss). `sync_logout` now clears token + vault key + in-mem master, then (under the `sync_inflight` lock, after clearing creds so no pass races) calls `vault::wipe_local` to drop all hosts/groups/credentials (incl. keychain secrets) **and all `sync_meta` tombstones**, emits the three `*:changed` events + a reset `sync:status`. Purging tombstones is what makes it safe: an empty local no longer carries deletions, so re-login *restores* the account from the server instead of wiping it. The UI adds an inline logout confirm (amber, "data returns on next sign-in"). Adding hosts while signed out still works — they're adopted into whichever account you next sign into. Frontend verified (`tsc -b` + `vite build`); rh-app backend unverified (user compiles). **Next:** RDP keyboard / GFX backlog; auto-updater; Pingie rebrand.
 
+## Latest — Notes move to Launch + open in their own tab
+
+Per user feedback the notes screen is no longer a Tools › Manage section: it sits in the rail's **Launch** group next to Terminal and SFTP, and opens as a **workspace tab**.
+- `store`: `SessionTab.notes?: boolean` + `openNotes(title)` — same session-shaped-container trick as SFTP (`hostId: "__notes__"`, no backend session). `duplicateTab` reopens a notes tab; `reconnectTab` skips it.
+- `PaneGroup` renders `<NotesPane />` for `session.notes`. `TabBar` gets the NotebookPen tab icon and excludes notes from find-in-output / run-snippet; same guard added in `AppShell` (Ctrl+F) and `SnippetsDock`.
+- `NotesPane` is now self-contained (own toast strip, no `onToast` prop) since it owns a tab. `tools.notes.sub` added (en+ru) for the launcher subtitle.
+
+`tsc --noEmit` + `vite build` green. Frontend only — no Rust change from the batch-A archive.
+
+## Latest — Notes (Tools › Notes) + fast sync cadence — batch A
+
+A shared scratchpad that replicates to every device signed into the same account: paste a command on the PC, pick it up on the remote desktop. **Batch A rides the existing vault** (no server change, no redeploy); batch B moves notes into their own blob so a pairing code can grant notes-only access to a non-signed-in (portable/light) client.
+
+- **rh-core**: `NoteId` ULID newtype; `Note { id, title, body, created_at, updated_at }`; `NoteStore` trait (list/create/update/delete).
+- **rh-storage**: migration **v13** `notes` table; `SqliteNoteStore` (runtime SQL, ordered `updated_at DESC`); `v1.sql` gains the table and its fresh-DB version marker moves 11 → 13.
+- **rh-vault**: `EntityKind::Note` + `SyncRecord::note()` / `as_note()`. NB: an older client cannot read a snapshot containing note records — update every device together.
+- **rh-app**: `api/notes.rs` — `note_list/create/update/delete` + `note_set_fast_sync`; `KIND_NOTE`; `AppState.notes` + `AppState.notes_fast`; notes wired into `build_snapshot`, `apply_snapshot` (phase 3c upsert + tombstone branch) and `wipe_local`; `notes` counter threaded through `SyncNowResponse`/`SyncStatusSnapshot`.
+- **Speed**: `sync_engine` now runs its startup pass explicitly, then waits with a cadence read per cycle — **3 s** tick + **400 ms** push debounce while `notes_fast` is set (Notes screen open), otherwise the usual 30 s / 1.5 s. Cross-device latency lands at a few seconds.
+- **ui**: `layout/NotesManager.tsx` + `.module.css` — list (title/date/preview) beside a live-saved editor (400 ms debounce, idle/pending/saving/saved indicator, copy, delete), mono body. New Tools section "Notes"; `notes.*` in `ipc.ts`, `Note` in `types.ts`, i18n en+ru. The screen toggles fast sync on mount/unmount and refetches after each sync pass without clobbering an in-progress edit.
+
+`tsc --noEmit` + `vite build` green. **Rust compiled by the user** — the notable churn is `AppState::new`'s new `notes` argument.
+
 ## Latest — Port forwarding persist (saved forwards, survive restart, auto-start)
 
 Forwards are now **persisted definitions** instead of fire-and-forget. Full stack:

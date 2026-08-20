@@ -39,6 +39,7 @@ pub mod keychain;
 pub mod known_hosts_store;
 pub mod rdp_cert_store;
 pub mod settings_store;
+pub mod note_store;
 pub mod snippet_store;
 pub mod sync_meta_store;
 
@@ -50,6 +51,7 @@ pub use host_store::SqliteHostStore;
 pub use keychain::{Keychain, MemoryKeychain, OsKeychain};
 pub use known_hosts_store::SqliteKnownHostsStore;
 pub use rdp_cert_store::SqliteRdpCertStore;
+pub use note_store::SqliteNoteStore;
 pub use settings_store::SqliteSettingsStore;
 pub use snippet_store::SqliteSnippetStore;
 pub use sync_meta_store::SqliteSyncMetaStore;

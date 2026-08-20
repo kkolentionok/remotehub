@@ -269,7 +269,7 @@ export function AppShell() {
             if (!tab) return;
             const key = tab.focusKey ?? tab.activePaneKey;
             const sess = st.sessions.find((s) => s.key === key);
-            if (!sess || sess.protocol === "rdp" || sess.sftp) return;
+            if (!sess || sess.protocol === "rdp" || sess.sftp || sess.notes) return;
             e.preventDefault();
             e.stopImmediatePropagation();
             openSessionSearch(key);

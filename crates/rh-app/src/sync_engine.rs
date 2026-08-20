@@ -18,6 +18,7 @@
 //! updates `AppState::sync_status` and emits a `sync:status` event so the UI
 //! can surface a quiet status indicator.
 
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -29,9 +30,16 @@ use crate::sync_remote::{self, SyncConfig};
 
 /// Periodic pull cadence — catches edits made on other devices.
 const PERIODIC_SECS: u64 = 30;
+/// Tight cadence used while the Notes screen is open (`AppState::notes_fast`).
+/// Notes are a live scratchpad shared across devices, so half a minute of lag
+/// is unusable; a pass is cheap (one small blob in, one out).
+const FAST_SECS: u64 = 3;
 /// After a local edit wakes us, wait this long (collapsing further edits)
 /// before pushing, so rapid successive saves become one sync.
 const DEBOUNCE_MS: u64 = 1_500;
+/// Push debounce while in fast mode — short enough that a typed line lands on
+/// the other device quickly, long enough that a burst of keystrokes is one pass.
+const FAST_DEBOUNCE_MS: u64 = 400;
 
 /// Name of the Tauri event carrying [`SyncStatusSnapshot`] to the frontend.
 pub const STATUS_EVENT: &str = "sync:status";
@@ -50,6 +58,7 @@ pub struct SyncStatusSnapshot {
     pub groups: u32,
     pub credentials: u32,
     pub snippets: u32,
+    pub notes: u32,
     pub deleted: u32,
 }
 
@@ -64,6 +73,7 @@ impl Default for SyncStatusSnapshot {
             groups: 0,
             credentials: 0,
             snippets: 0,
+            notes: 0,
             deleted: 0,
         }
     }
@@ -138,6 +148,7 @@ async fn run_pass(app: &AppHandle, state: &AppState) {
                     groups: resp.groups,
                     credentials: resp.credentials,
                     snippets: resp.snippets,
+                    notes: resp.notes,
                     deleted: resp.deleted,
                 },
             )
@@ -164,16 +175,20 @@ async fn run_pass(app: &AppHandle, state: &AppState) {
 /// The actor loop. Spawned once from `main.rs` setup with a clone of the
 /// managed [`AppState`] and the app handle. Never returns.
 pub async fn run_loop(app: AppHandle, state: AppState) {
-    let mut ticker = tokio::time::interval(Duration::from_secs(PERIODIC_SECS));
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Startup pass first, then wait-then-pass forever. The cadence is read at
+    // the top of each wait so `notes_fast` takes effect on the next cycle.
+    run_pass(&app, &state).await;
 
     loop {
+        let fast = state.notes_fast.load(Ordering::Relaxed);
+        let period = if fast { FAST_SECS } else { PERIODIC_SECS };
+        let debounce = if fast { FAST_DEBOUNCE_MS } else { DEBOUNCE_MS };
+
         tokio::select! {
-            // First tick fires immediately → startup sync. Then every cadence.
-            _ = ticker.tick() => {}
+            _ = tokio::time::sleep(Duration::from_secs(period)) => {}
             // A local edit happened. Debounce so a burst collapses into one pass.
             _ = state.sync_wake.notified() => {
-                tokio::time::sleep(Duration::from_millis(DEBOUNCE_MS)).await;
+                tokio::time::sleep(Duration::from_millis(debounce)).await;
             }
         }
         run_pass(&app, &state).await;

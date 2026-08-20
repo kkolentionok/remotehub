@@ -271,6 +271,7 @@ export interface SyncNowResponse {
     groups: number;
     credentials: number;
     snippets: number;
+    notes: number;
     deleted: number;
 }
 
@@ -286,6 +287,7 @@ export interface SyncStatus {
     groups: number;
     credentials: number;
     snippets: number;
+    notes: number;
     deleted: number;
 }
 
@@ -713,6 +715,15 @@ export interface SshIdAvailableKey {
 // =====================================================================
 // Snippets (Tools › Snippets). Mirrors rh-core Snippet.
 // =====================================================================
+
+/** A free-form note (Tools › Notes). Mirrors rh-core Note. */
+export interface Note {
+    id: string;
+    title: string;
+    body: string;
+    created_at: string;
+    updated_at: string;
+}
 
 export interface Snippet {
     id: string;

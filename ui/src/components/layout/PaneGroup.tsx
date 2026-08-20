@@ -4,6 +4,7 @@ import { useSessionsStore } from "../../store";
 import type { PaneNode } from "../../lib/paneTree";
 import { hasLeaf } from "../../lib/paneTree";
 import { SessionView } from "../session/SessionView";
+import { NotesPane } from "./NotesManager";
 import { SftpView } from "../sftp/SftpView";
 import styles from "./PaneGroup.module.css";
 
@@ -172,7 +173,9 @@ function PaneLeaf({ sessionKey, ctx }: { sessionKey: string; ctx: Ctx }) {
                 if (!focused) setActivePane(ctx.tabId, sessionKey);
             }}
         >
-            {session.sftp ? (
+            {session.notes ? (
+                <NotesPane />
+            ) : session.sftp ? (
                 <SftpView session={session} visible={ctx.tabVisible} />
             ) : (
                 <SessionView

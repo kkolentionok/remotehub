@@ -15,10 +15,10 @@
 use async_trait::async_trait;
 
 use crate::error::{SecretError, StorageError};
-use crate::id::{CredentialId, ForwardId, GroupId, HostId, SnippetId};
+use crate::id::{CredentialId, ForwardId, GroupId, HostId, NoteId, SnippetId};
 use crate::secret::{RevealedSecret, SecretValue};
 use crate::settings::Settings;
-use crate::types::{Credential, Host, HostGroup, Protocol, SavedForward, Snippet};
+use crate::types::{Credential, Host, HostGroup, Note, Protocol, SavedForward, Snippet};
 
 /// Filter passed to [`HostStore::list`]. All fields are optional; `None`
 /// means "don't filter on this dimension". Combining multiple fields
@@ -88,6 +88,16 @@ pub trait SnippetStore: Send + Sync {
     async fn create(&self, snippet: &Snippet) -> Result<(), StorageError>;
     async fn update(&self, snippet: &Snippet) -> Result<(), StorageError>;
     async fn delete(&self, id: &SnippetId) -> Result<(), StorageError>;
+}
+
+/// Free-form notes (Tools → Notes). Plain CRUD; the UI orders by
+/// `updated_at` descending so the most recently touched note is on top.
+#[async_trait]
+pub trait NoteStore: Send + Sync {
+    async fn list(&self) -> Result<Vec<Note>, StorageError>;
+    async fn create(&self, note: &Note) -> Result<(), StorageError>;
+    async fn update(&self, note: &Note) -> Result<(), StorageError>;
+    async fn delete(&self, id: &NoteId) -> Result<(), StorageError>;
 }
 
 #[async_trait]

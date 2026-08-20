@@ -13,6 +13,7 @@ import {
     HardDrive,
     KeyRound,
     Lock,
+    NotebookPen,
     Pencil,
     Search,
     Server,
@@ -106,6 +107,7 @@ export function ToolsView() {
     const hosts = useHostsStore((s) => s.items);
     const openLocalTerminal = useSessionsStore((s) => s.openLocalTerminal);
     const openSftp = useSessionsStore((s) => s.openSftp);
+    const openNotes = useSessionsStore((s) => s.openNotes);
     const { links, ready } = useCredentialLinks(hosts);
     // Only credentials actually attached to a host. Orphans left behind when
     // a host's password is cleared / auth method switched never show here.
@@ -142,6 +144,10 @@ export function ToolsView() {
         openSftp(t("storage.quick.sftp"));
         toast(t("tools.toast.opened"));
     };
+    const openNotesTab = () => {
+        openNotes(t("tools.section.notes"));
+        toast(t("tools.toast.opened"));
+    };
 
     return (
         <div className={styles.split}>
@@ -154,6 +160,14 @@ export function ToolsView() {
                         <span className={styles.launchTx}>
                             <span className={styles.launchT}>{t("storage.quick.terminal")}</span>
                             <span className={styles.launchS}>{t("storage.quick.terminalSub")}</span>
+                        </span>
+                        <ArrowUpRight size={14} className={styles.launchGo} />
+                    </button>
+                    <button type="button" className={styles.launch} onClick={openNotesTab}>
+                        <span className={styles.launchIc}><NotebookPen size={16} /></span>
+                        <span className={styles.launchTx}>
+                            <span className={styles.launchT}>{t("tools.section.notes")}</span>
+                            <span className={styles.launchS}>{t("tools.notes.sub")}</span>
                         </span>
                         <ArrowUpRight size={14} className={styles.launchGo} />
                     </button>

@@ -23,7 +23,8 @@ use tracing::{error, info};
 
 use rh_core::{CredentialStore, GroupStore, HostStore, KnownHostsStore, RdpCertStore, SettingsStore};
 use rh_storage::{
-    Db, OsKeychain, SqliteCredentialStore, SqliteForwardStore, SqliteGroupStore, SqliteHostStore, SqliteSnippetStore,
+    Db, OsKeychain, SqliteCredentialStore, SqliteForwardStore, SqliteGroupStore, SqliteHostStore,
+    SqliteNoteStore, SqliteSnippetStore,
     SqliteKnownHostsStore, SqliteRdpCertStore, SqliteSettingsStore, SqliteSyncMetaStore,
 };
 
@@ -304,6 +305,11 @@ fn main() {
             api::ssh_id::ssh_id_delete_key,
             api::ssh_id::ssh_id_update_label,
             api::ssh_id::ssh_id_available_keys,
+            api::notes::note_list,
+            api::notes::note_create,
+            api::notes::note_update,
+            api::notes::note_delete,
+            api::notes::note_set_fast_sync,
             api::snippets::snippet_list,
             api::snippets::snippet_create,
             api::snippets::snippet_update,
@@ -410,11 +416,13 @@ async fn build_state(_app: &tauri::AppHandle) -> Result<AppState, String> {
     let rdp_certs: Arc<dyn RdpCertStore> = Arc::new(SqliteRdpCertStore::new(db.clone()));
     let sync_meta: Arc<dyn rh_core::SyncMetaStore> = Arc::new(SqliteSyncMetaStore::new(db.clone()));
     let snippets: Arc<dyn rh_core::SnippetStore> = Arc::new(SqliteSnippetStore::new(db.clone()));
+    let notes: Arc<dyn rh_core::NoteStore> = Arc::new(SqliteNoteStore::new(db.clone()));
     let forward_defs: Arc<dyn rh_core::ForwardStore> = Arc::new(SqliteForwardStore::new(db));
     let sync = Arc::new(crate::sync_clock::SyncClock::load_or_init(&data_dir));
 
     Ok(AppState::new(
-        hosts, groups, snippets, credentials, settings, known_hosts, rdp_certs, sync_meta, sync,
+        hosts, groups, snippets, notes, credentials, settings, known_hosts, rdp_certs, sync_meta,
+        sync,
         forward_defs,
     ))
 }

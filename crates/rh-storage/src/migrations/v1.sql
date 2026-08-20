@@ -24,7 +24,7 @@ CREATE TABLE schema_meta (
     value   TEXT NOT NULL
 );
 
-INSERT INTO schema_meta (key, value) VALUES ('version', '11');
+INSERT INTO schema_meta (key, value) VALUES ('version', '13');
 
 -- ---------------------------------------------------------------------
 -- Host groups (hierarchical folders).
@@ -174,6 +174,14 @@ CREATE TABLE snippets (
     id         TEXT PRIMARY KEY NOT NULL,
     name       TEXT NOT NULL,
     command    TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE notes (
+    id         TEXT PRIMARY KEY NOT NULL,
+    title      TEXT NOT NULL DEFAULT '',
+    body       TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

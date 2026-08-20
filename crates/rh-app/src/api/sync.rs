@@ -59,6 +59,7 @@ pub struct SyncNowResponse {
     pub groups: u32,
     pub credentials: u32,
     pub snippets: u32,
+    pub notes: u32,
     pub deleted: u32,
 }
 
@@ -258,6 +259,7 @@ pub(crate) async fn run_sync_core(
         groups: counts.groups,
         credentials: counts.credentials,
         snippets: counts.snippets,
+        notes: counts.notes,
         deleted: counts.deleted,
     })
 }

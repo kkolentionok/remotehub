@@ -487,6 +487,8 @@ export interface SessionTab {
     local?: boolean;
     /** True for an SFTP file-browser tab (SftpView manages its own backend). */
     sftp?: boolean;
+    /** True for a Notes tab (NotesPane owns its own IPC; no backend session). */
+    notes?: boolean;
     /** Host's auto-detected OS (e.g. "Ubuntu 22.04"), shown in the tab tooltip.
      *  Null for local/SFTP tabs or before detection. */
     detectedOs?: string | null;
@@ -687,6 +689,8 @@ interface SessionsStore {
     openLocalTerminal: (title: string) => void;
     /** Open an SFTP file-browser tab. `title` is i18n'd by the caller. */
     openSftp: (title: string) => void;
+    /** Open the shared notes scratchpad in its own tab. */
+    openNotes: (title: string) => void;
     /** Split the active tab's focused pane, opening `host` in the new pane. */
     splitActivePane: (host: HostDto, dir: SplitDir) => void;
     /** Arm a split and open the launcher to choose the host for it. */
@@ -1094,6 +1098,34 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
             }));
         },
 
+        openNotes: (title) => {
+            // Notes tab: a session-shaped container, same trick as SFTP —
+            // NotesPane owns its own IPC, the tab just holds it in the pane
+            // system. No backend session opened here.
+            const key = genId();
+            const tab: SessionTab = {
+                key,
+                sessionId: null,
+                hostId: "__notes__",
+                title,
+                protocol: "ssh",
+                state: "ready",
+                message: null,
+                hostKey: null,
+                notes: true,
+            };
+            sessionOutput.set(key, { buffer: [], writer: null });
+            const id = genId();
+            set((s) => ({
+                sessions: [...s.sessions, tab],
+                tabs: [
+                    ...s.tabs,
+                    { id, root: { t: "leaf", key }, activePaneKey: key },
+                ],
+                activeTabId: id,
+            }));
+        },
+
         openSftp: (title) => {
             // SFTP tab: a session-shaped container. SftpView owns the actual
             // local/remote browsing + backend connection; the tab just holds
@@ -1232,6 +1264,10 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
                 get().openSftp(sess.title);
                 return;
             }
+            if (sess.notes) {
+                get().openNotes(sess.title);
+                return;
+            }
             // SSH/RDP: reopen the same host (open() routes by host.protocol).
             const host = useHostsStore.getState().items.find((h) => h.id === sess.hostId);
             if (host) void get().open(host);
@@ -1243,7 +1279,7 @@ export const useSessionsStore = create<SessionsStore>((set, get) => {
             if (!tab) return;
             const key = tab.focusKey ?? tab.activePaneKey;
             const sess = s.sessions.find((x) => x.key === key);
-            if (!sess || sess.sftp) return; // SFTP manages its own connection
+            if (!sess || sess.sftp || sess.notes) return; // these own their own state
             const title = sess.title;
             const host = sess.local
                 ? null

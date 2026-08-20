@@ -43,6 +43,7 @@ import type {
     SshIdCheck,
     SshIdData,
     Snippet,
+    Note,
     HostUpdateRequest,
     KnownHostGetResponse,
     KnownHostsListResponse,
@@ -610,6 +611,18 @@ export const sshId = {
 // =====================================================================
 // Snippets (Tools → Snippets): reusable commands. Plain CRUD.
 // =====================================================================
+
+export const notes = {
+    list: (): Promise<Note[]> => invoke<Note[]>("note_list"),
+    create: (title: string, body: string): Promise<string> =>
+        invoke<string>("note_create", { title, body }),
+    update: (id: string, title: string, body: string): Promise<void> =>
+        invoke<void>("note_update", { id, title, body }),
+    delete: (id: string): Promise<void> => invoke<void>("note_delete", { id }),
+    /** Switch the background sync actor to its tight cadence while the Notes
+     *  screen is open, so edits from another device land within seconds. */
+    setFastSync: (on: boolean): Promise<void> => invoke<void>("note_set_fast_sync", { on }),
+};
 
 export const snippets = {
     list: (): Promise<Snippet[]> => invoke<Snippet[]>("snippet_list"),

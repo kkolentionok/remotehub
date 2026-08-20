@@ -53,6 +53,7 @@ export function SnippetsDock() {
         !!focusedSession &&
         focusedSession.protocol !== "rdp" &&
         !focusedSession.sftp &&
+        !focusedSession.notes &&
         focusedSession.state === "ready";
 
     const filtered = useMemo(() => {

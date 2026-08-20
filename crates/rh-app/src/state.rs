@@ -5,12 +5,12 @@
 //! tests can substitute mock implementations without changing handler
 //! signatures.
 
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 
 use rh_core::{
-    CredentialStore, ForwardStore, GroupStore, HostStore, KnownHostsStore, RdpCertStore, SnippetStore,
-    SettingsStore, StorageError, SyncMetaStore,
+    CredentialStore, ForwardStore, GroupStore, HostStore, KnownHostsStore, NoteStore, RdpCertStore,
+    SettingsStore, SnippetStore, StorageError, SyncMetaStore,
 };
 
 use tokio::sync::{Mutex, Notify};
@@ -34,6 +34,7 @@ pub struct AppState {
     pub hosts: Arc<dyn HostStore>,
     pub groups: Arc<dyn GroupStore>,
     pub snippets: Arc<dyn SnippetStore>,
+    pub notes: Arc<dyn NoteStore>,
     pub credentials: Arc<dyn CredentialStore>,
     pub settings: Arc<dyn SettingsStore>,
     pub known_hosts: Arc<dyn KnownHostsStore>,
@@ -72,6 +73,10 @@ pub struct AppState {
     /// when the user declined to persist it to the keychain ("remember on this
     /// device" unchecked). The background actor reads keychain-or-memory.
     pub sync_master_mem: Arc<Mutex<Option<String>>>,
+    /// Set while the Notes screen is open: the background sync actor then runs
+    /// a much tighter cadence (see `sync_engine::FAST_SECS`) so notes typed on
+    /// one device appear on another within seconds instead of half a minute.
+    pub notes_fast: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -80,6 +85,7 @@ impl std::fmt::Debug for AppState {
             .field("hosts", &"<dyn HostStore>")
             .field("groups", &"<dyn GroupStore>")
             .field("snippets", &"<dyn SnippetStore>")
+            .field("notes", &"<dyn NoteStore>")
             .field("credentials", &"<dyn CredentialStore>")
             .field("settings", &"<dyn SettingsStore>")
             .field("known_hosts", &"<dyn KnownHostsStore>")
@@ -105,6 +111,7 @@ impl AppState {
         hosts: Arc<dyn HostStore>,
         groups: Arc<dyn GroupStore>,
         snippets: Arc<dyn SnippetStore>,
+        notes: Arc<dyn NoteStore>,
         credentials: Arc<dyn CredentialStore>,
         settings: Arc<dyn SettingsStore>,
         known_hosts: Arc<dyn KnownHostsStore>,
@@ -117,6 +124,7 @@ impl AppState {
             hosts,
             groups,
             snippets,
+            notes,
             credentials,
             settings,
             known_hosts,
@@ -134,6 +142,7 @@ impl AppState {
             sync_inflight: Arc::new(Mutex::new(())),
             sync_status: Arc::new(Mutex::new(SyncStatusSnapshot::default())),
             sync_master_mem: Arc::new(Mutex::new(None)),
+            notes_fast: Arc::new(AtomicBool::new(false)),
         }
     }
 

@@ -36,14 +36,16 @@ pub mod types;
 // Convenience re-exports — keep this list short and stable. Anything
 // niche stays behind its module path.
 pub use error::{CoreError, SecretError, SessionError, StorageError};
-pub use id::{CredentialId, ForwardId, GroupId, HostId, KeychainRef, SessionId, SnippetId};
+pub use id::{
+    CredentialId, ForwardId, GroupId, HostId, KeychainRef, NoteId, SessionId, SnippetId,
+};
 pub use secret::{RevealedSecret, SecretValue};
 pub use settings::{Language, Settings, Theme};
 pub use store::{
-    CredentialStore, ForwardStore, GroupStore, HostFilter, HostStore, KnownHostsStore, RdpCertStore,
-    RevealError, SettingsStore, SnippetStore, SyncMetaStore, SyncStamp,
+    CredentialStore, ForwardStore, GroupStore, HostFilter, HostStore, KnownHostsStore, NoteStore,
+    RdpCertStore, RevealError, SettingsStore, SnippetStore, SyncMetaStore, SyncStamp,
 };
 pub use types::{
     Credential, CredentialKind, EnvVar, ForwardKind, Host, HostGroup, KnownHostEntry, KnownHostKey,
-    Protocol, RdpCertEntry, SavedForward, Snippet, TrustedCert,
+    Note, Protocol, RdpCertEntry, SavedForward, Snippet, TrustedCert,
 };

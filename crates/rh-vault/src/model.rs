@@ -30,7 +30,7 @@
 
 use std::collections::BTreeMap;
 
-use rh_core::{Credential, Host, HostGroup, Snippet};
+use rh_core::{Credential, Host, HostGroup, Note, Snippet};
 use serde::{Deserialize, Serialize};
 
 use crate::clock::{Hlc, NodeId};
@@ -49,6 +49,7 @@ pub enum EntityKind {
     Credential,
     Setting,
     Snippet,
+    Note,
 }
 
 /// Per-record sync metadata: the logical time of the last write, who
@@ -165,6 +166,16 @@ impl SyncRecord {
         })
     }
 
+    /// Build a live note record.
+    pub fn note(note: &Note, rev: Hlc, origin: NodeId) -> Result<Self, VaultError> {
+        Ok(Self {
+            kind: EntityKind::Note,
+            id: note.id.to_string(),
+            meta: RecordMeta::new(rev, origin),
+            data: Some(serde_json::to_value(note)?),
+        })
+    }
+
     /// Build a live setting record. `value` is the setting's JSON value.
     #[must_use]
     pub fn setting(key: &str, value: serde_json::Value, rev: Hlc, origin: NodeId) -> Self {
@@ -212,6 +223,11 @@ impl SyncRecord {
     /// Reconstruct a [`Snippet`] from a live snippet record.
     pub fn as_snippet(&self) -> Result<Snippet, VaultError> {
         self.decode(EntityKind::Snippet)
+    }
+
+    /// Reconstruct a [`Note`] from a live note record.
+    pub fn as_note(&self) -> Result<Note, VaultError> {
+        self.decode(EntityKind::Note)
     }
 
     /// The raw setting value of a live setting record.

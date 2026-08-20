@@ -122,6 +122,11 @@ ulid_newtype! {
     SnippetId
 }
 
+ulid_newtype! {
+    /// Identifier for a [`Note`](crate::Note) — a synced free-form note.
+    NoteId
+}
+
 /// Opaque reference to a secret stored in the OS keychain.
 ///
 /// This type **never** contains the secret itself, only the lookup key.

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Columns2, Copy, FolderOpen, HardDrive, Loader2, Lock, Monitor, PictureInPicture2, Plus, RefreshCw, Search, Server, Settings, ShieldAlert, Terminal, Users, Wrench, X } from "lucide-react";
+import { Check, ChevronDown, Columns2, Copy, FolderOpen, HardDrive, Loader2, Lock, Monitor,
+    NotebookPen, PictureInPicture2, Plus, RefreshCw, Search, Server, Settings, ShieldAlert, Terminal, Users, Wrench, X } from "lucide-react";
 
 import { useT } from "../../i18n";
 import { sync } from "../../lib/ipc";
@@ -127,13 +128,15 @@ export function TabBar() {
     const canSearch =
         !!focusedSession &&
         focusedSession.protocol !== "rdp" &&
-        !focusedSession.sftp;
+        !focusedSession.sftp &&
+        !focusedSession.notes;
     // A snippet runs into a live shell (SSH or local terminal). RDP takes no
     // text input this way and SFTP has no shell; those fall back to copy.
     const canRunSnippet =
         !!focusedSession &&
         focusedSession.protocol !== "rdp" &&
         !focusedSession.sftp &&
+        !focusedSession.notes &&
         focusedSession.state === "ready";
 
     return (
@@ -282,10 +285,10 @@ export function TabBar() {
                     sessions.find((s) => s.key === tab.activePaneKey) ??
                     sessions.find((s) => s.key === keys[0]);
                 const paneCount = keys.length;
-                const SessIco = focused?.sftp ? FolderOpen : focused?.local ? Terminal : focused?.protocol === "rdp" ? Monitor : Server;
+                const SessIco = focused?.notes ? NotebookPen : focused?.sftp ? FolderOpen : focused?.local ? Terminal : focused?.protocol === "rdp" ? Monitor : Server;
                 const transferCount = focused?.sftp ? (transferCounts[focused.key] ?? 0) : 0;
                 const tabTooltip =
-                    focused?.detectedOs && !focused.sftp && !focused.local
+                    focused?.detectedOs && !focused.sftp && !focused.local && !focused.notes
                         ? `${focused.title} · ${focused.detectedOs}`
                         : focused?.title;
                 const connecting =

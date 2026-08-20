@@ -21,6 +21,7 @@ pub const KIND_HOST: &str = "host";
 pub const KIND_GROUP: &str = "group";
 pub const KIND_CREDENTIAL: &str = "credential";
 pub const KIND_SNIPPET: &str = "snippet";
+pub const KIND_NOTE: &str = "note";
 // `KIND_SETTING` will return when settings replication lands (settings are not
 // yet part of the snapshot, so the constant would be dead code now).
 
