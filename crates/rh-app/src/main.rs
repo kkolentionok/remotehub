@@ -36,41 +36,57 @@ use crate::state::AppState;
 #[cfg(windows)]
 fn release_all_modifiers() {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_CONTROL,
-        VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT,
-        VK_RWIN, VK_SHIFT,
+        GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
+        KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN,
+        VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN,
     };
-    let vks = [
-        VK_LCONTROL, VK_RCONTROL, VK_CONTROL, VK_LMENU, VK_RMENU, VK_MENU, VK_LSHIFT, VK_RSHIFT,
-        VK_SHIFT, VK_LWIN, VK_RWIN,
+
+    // (virtual key, is-extended). Only the concrete L/R keys — NOT the generic
+    // VK_CONTROL/VK_MENU/VK_SHIFT: injecting a KEYUP for a key that is already
+    // up (or the ambiguous generic VK) confuses the OS keyboard state and can
+    // latch Shift into a caps-lock-like mode. Right Ctrl/Alt and both Win keys
+    // are extended-scancode keys.
+    let keys: [(u16, bool); 8] = [
+        (VK_LCONTROL, false),
+        (VK_RCONTROL, true),
+        (VK_LMENU, false),
+        (VK_RMENU, true),
+        (VK_LSHIFT, false),
+        (VK_RSHIFT, false),
+        (VK_LWIN, true),
+        (VK_RWIN, true),
     ];
-    let mut inputs: Vec<INPUT> = vks
+
+    // Release only keys the OS currently considers down — that catches a key
+    // genuinely stuck by another app while leaving untouched ones alone.
+    let mut inputs: Vec<INPUT> = keys
         .iter()
-        .map(|&vk| INPUT {
+        .filter(|(vk, _)| unsafe { (GetAsyncKeyState(*vk as i32) as u16 & 0x8000) != 0 })
+        .map(|&(vk, ext)| INPUT {
             r#type: INPUT_KEYBOARD,
             Anonymous: INPUT_0 {
                 ki: KEYBDINPUT {
                     wVk: vk,
                     wScan: 0,
-                    dwFlags: KEYEVENTF_KEYUP,
+                    dwFlags: KEYEVENTF_KEYUP | if ext { KEYEVENTF_EXTENDEDKEY } else { 0 },
                     time: 0,
                     dwExtraInfo: 0,
                 },
             },
         })
         .collect();
-    // SAFETY: `inputs` is a valid, correctly-sized slice of INPUT for its lifetime.
-    unsafe {
-        SendInput(
-            inputs.len() as u32,
-            inputs.as_mut_ptr(),
-            std::mem::size_of::<INPUT>() as i32,
-        );
+
+    let n = inputs.len();
+    if n > 0 {
+        // SAFETY: `inputs` is a valid, correctly-sized slice of INPUT.
+        unsafe {
+            SendInput(n as u32, inputs.as_mut_ptr(), std::mem::size_of::<INPUT>() as i32);
+        }
     }
     // Audible confirmation — plays even while another app (mstsc) is focused and
     // regardless of whether Pingie's window is hidden in the tray.
     beep();
-    info!("released all keyboard modifiers (unstick hotkey)");
+    info!(released = n, "unstick hotkey");
 }
 
 /// Short confirmation tone. `kernel32!Beep` is declared directly here because
