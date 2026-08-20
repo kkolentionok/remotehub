@@ -79,5 +79,61 @@ async fn init_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(pool)
     .await?;
 
+    // Notes live in their OWN blob, not inside `vaults`. That separation is
+    // the whole point: a paired device may read and write notes without ever
+    // being able to touch hosts or credentials, which is impossible when
+    // everything shares one opaque envelope.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS notes_blobs (
+            account_id  TEXT PRIMARY KEY NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            blob        TEXT NOT NULL,
+            rev         INTEGER NOT NULL,
+            updated_at  TEXT NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // A pending pairing. `code_hash` is computed CLIENT-side, so the server
+    // never learns the code itself; `wrapped_key` is the notes key sealed
+    // under a key derived from that code, so the server cannot unwrap it
+    // either. Single-use and short-lived: `claimed_at` is set on the first
+    // successful claim and any later attempt is rejected.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS pairings (
+            code_hash   TEXT PRIMARY KEY NOT NULL,
+            account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            wrapped_key TEXT NOT NULL,
+            expires_at  TEXT NOT NULL,
+            claimed_at  TEXT,
+            created_at  TEXT NOT NULL
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    // Devices paired by code. Revoking sets `revoked = 1`; the notes-scoped
+    // token extractor checks this row on every request, so revocation takes
+    // effect immediately rather than waiting for the token to expire.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS notes_devices (
+            id           TEXT PRIMARY KEY NOT NULL,
+            account_id   TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            label        TEXT NOT NULL,
+            created_at   TEXT NOT NULL,
+            last_seen_at TEXT,
+            revoked      INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_notes_devices_account
+         ON notes_devices(account_id)",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }

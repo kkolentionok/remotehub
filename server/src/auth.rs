@@ -57,6 +57,10 @@ pub struct Claims {
     /// only accepted by `/v1/refresh`.
     #[serde(default = "default_typ")]
     pub typ: String,
+    /// Device id, present only on `typ = "notes"` tokens (see
+    /// `crate::notes`). Lets revocation be checked per device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub did: Option<String>,
 }
 
 /// Mint a signed bearer (access) token for `account_id`.
@@ -66,6 +70,7 @@ pub fn issue_token(account_id: &str, secret: &str, ttl_hours: i64) -> Result<Str
         sub: account_id.to_string(),
         exp,
         typ: "access".to_string(),
+        did: None,
     };
     encode(
         &Header::default(),
@@ -84,6 +89,7 @@ pub fn issue_refresh(account_id: &str, secret: &str, ttl_days: i64) -> Result<St
         sub: account_id.to_string(),
         exp,
         typ: "refresh".to_string(),
+        did: None,
     };
     encode(
         &Header::default(),
@@ -91,6 +97,42 @@ pub fn issue_refresh(account_id: &str, secret: &str, ttl_days: i64) -> Result<St
         &EncodingKey::from_secret(secret.as_bytes()),
     )
     .map_err(|_| AppError::Internal)
+}
+
+/// Mint a **notes-scoped** token: it authenticates a device that was paired by
+/// code and is accepted only by the notes endpoints, never by the vault. It
+/// carries the device id so a revoked device is rejected at once.
+pub fn issue_notes_token(
+    account_id: &str,
+    device_id: &str,
+    secret: &str,
+    ttl_days: i64,
+) -> Result<String, AppError> {
+    let exp = (Utc::now() + chrono::Duration::days(ttl_days)).timestamp() as usize;
+    let claims = Claims {
+        sub: account_id.to_string(),
+        exp,
+        typ: "notes".to_string(),
+        did: Some(device_id.to_string()),
+    };
+    encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|_| AppError::Internal)
+}
+
+/// Decode any token and hand back its claims, without asserting a kind.
+/// Used by the notes extractor, which accepts two kinds.
+pub fn decode_claims(token: &str, secret: &str) -> Result<Claims, AppError> {
+    decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default(),
+    )
+    .map(|d| d.claims)
+    .map_err(|_| AppError::Unauthorized)
 }
 
 /// Validate a refresh token and return its account id. Rejects access tokens.

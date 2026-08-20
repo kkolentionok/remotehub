@@ -11,6 +11,7 @@ mod db;
 mod error;
 mod handles;
 mod oauth;
+mod notes;
 mod routes;
 
 use std::sync::Arc;
@@ -69,6 +70,16 @@ async fn main() {
         .route("/v1/refresh", post(routes::refresh))
         .route("/v1/vault", get(routes::get_vault).put(routes::put_vault))
         .route("/v1/me", get(routes::me))
+        // Notes: a separate blob so a code-paired device can reach these and
+        // nothing else.
+        .route("/v1/notes", get(notes::get_notes).put(notes::put_notes))
+        .route("/v1/pair", post(notes::pair_create))
+        .route("/v1/pair/claim", post(notes::pair_claim))
+        .route("/v1/pair/devices", get(notes::devices_list))
+        .route(
+            "/v1/pair/devices/:id",
+            axum::routing::delete(notes::device_revoke),
+        )
         .route("/v1/oauth/yandex/start", get(routes::oauth_yandex_start))
         .route("/v1/oauth/yandex/callback", get(routes::oauth_yandex_callback))
         .route("/v1/oauth/exchange", post(routes::oauth_exchange))

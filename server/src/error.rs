@@ -19,6 +19,8 @@ pub enum AppError {
     Conflict,
     #[error("vault already exists")]
     PreconditionFailed,
+    #[error("not found")]
+    NotFound,
     #[error("payload too large")]
     TooLarge,
     #[error("internal error")]
@@ -33,6 +35,7 @@ impl IntoResponse for AppError {
             AppError::Forbidden(_) => StatusCode::FORBIDDEN,
             AppError::Conflict => StatusCode::CONFLICT,
             AppError::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
+            AppError::NotFound => StatusCode::NOT_FOUND,
             AppError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         };
