@@ -68,6 +68,9 @@ pub async fn note_update(
         id,
         title: title.trim().to_string(),
         body,
+        // Ignored by the UPDATE (which touches title/body/updated_at only);
+        // the pin flag is owned by `note_set_pinned`.
+        pinned: false,
         created_at: now,
         updated_at: now,
     };
@@ -81,6 +84,20 @@ pub async fn note_update(
 pub async fn note_delete(state: State<'_, AppState>, id: NoteId) -> ApiResult<()> {
     state.notes.delete(&id).await?;
     state.stamp_deleted(KIND_NOTE, id.as_str()).await?;
+    Ok(())
+}
+
+/// Pin / unpin a note. Persists immediately (no debounce) like the other
+/// boolean toggles in the app.
+#[tauri::command]
+#[instrument(level = "debug", skip(state))]
+pub async fn note_set_pinned(
+    state: State<'_, AppState>,
+    id: NoteId,
+    pinned: bool,
+) -> ApiResult<()> {
+    state.notes.set_pinned(&id, pinned).await?;
+    state.stamp_live(KIND_NOTE, id.as_str()).await?;
     Ok(())
 }
 

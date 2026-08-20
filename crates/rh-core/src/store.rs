@@ -98,6 +98,9 @@ pub trait NoteStore: Send + Sync {
     async fn create(&self, note: &Note) -> Result<(), StorageError>;
     async fn update(&self, note: &Note) -> Result<(), StorageError>;
     async fn delete(&self, id: &NoteId) -> Result<(), StorageError>;
+    /// Toggle the pin flag without touching title/body/`updated_at`'s meaning
+    /// for the editor — the row still bumps `updated_at` so the change syncs.
+    async fn set_pinned(&self, id: &NoteId, pinned: bool) -> Result<(), StorageError>;
 }
 
 #[async_trait]

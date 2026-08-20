@@ -30,8 +30,8 @@ impl NoteStore for SqliteNoteStore {
     #[instrument(level = "debug", skip(self))]
     async fn list(&self) -> Result<Vec<Note>, StorageError> {
         let rows = sqlx::query(
-            "SELECT id, title, body, created_at, updated_at FROM notes
-             ORDER BY updated_at DESC",
+            "SELECT id, title, body, pinned, created_at, updated_at FROM notes
+             ORDER BY pinned DESC, updated_at DESC",
         )
         .fetch_all(self.db.pool())
         .await
@@ -42,12 +42,13 @@ impl NoteStore for SqliteNoteStore {
     #[instrument(level = "debug", skip(self, note), fields(note_id = %note.id))]
     async fn create(&self, note: &Note) -> Result<(), StorageError> {
         sqlx::query(
-            "INSERT INTO notes (id, title, body, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO notes (id, title, body, pinned, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(note.id.as_str())
         .bind(&note.title)
         .bind(&note.body)
+        .bind(i64::from(note.pinned))
         .bind(note.created_at.to_rfc3339())
         .bind(note.updated_at.to_rfc3339())
         .execute(self.db.pool())
@@ -76,6 +77,18 @@ impl NoteStore for SqliteNoteStore {
     }
 
     #[instrument(level = "debug", skip(self), fields(note_id = %id))]
+    async fn set_pinned(&self, id: &NoteId, pinned: bool) -> Result<(), StorageError> {
+        sqlx::query("UPDATE notes SET pinned = ?, updated_at = ? WHERE id = ?")
+            .bind(i64::from(pinned))
+            .bind(chrono::Utc::now().to_rfc3339())
+            .bind(id.as_str())
+            .execute(self.db.pool())
+            .await
+            .map_err(map_err)?;
+        Ok(())
+    }
+
+    #[instrument(level = "debug", skip(self), fields(note_id = %id))]
     async fn delete(&self, id: &NoteId) -> Result<(), StorageError> {
         sqlx::query("DELETE FROM notes WHERE id = ?")
             .bind(id.as_str())
@@ -96,6 +109,9 @@ fn row_to_note(row: &sqlx::sqlite::SqliteRow) -> Result<Note, StorageError> {
     let body: String = row
         .try_get("body")
         .map_err(|e| StorageError::Backend(format!("read body: {e}")))?;
+    let pinned: i64 = row
+        .try_get("pinned")
+        .map_err(|e| StorageError::Backend(format!("read pinned: {e}")))?;
     let created_at_s: String = row
         .try_get("created_at")
         .map_err(|e| StorageError::Backend(format!("read created_at: {e}")))?;
@@ -107,6 +123,7 @@ fn row_to_note(row: &sqlx::sqlite::SqliteRow) -> Result<Note, StorageError> {
         id: NoteId::from_raw(id),
         title,
         body,
+        pinned: pinned != 0,
         created_at: parse_datetime("notes.created_at", &created_at_s)?,
         updated_at: parse_datetime("notes.updated_at", &updated_at_s)?,
     })

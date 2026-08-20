@@ -296,6 +296,10 @@ pub struct Note {
     /// label from the first line of `body`.
     pub title: String,
     pub body: String,
+    /// Pinned notes sort to the top of the list, above the date groups.
+    /// `default` keeps snapshots written by an older client readable.
+    #[serde(default)]
+    pub pinned: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -308,6 +312,7 @@ impl Note {
             id: NoteId::new(),
             title: title.into(),
             body: body.into(),
+            pinned: false,
             created_at: now,
             updated_at: now,
         }

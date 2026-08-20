@@ -619,6 +619,8 @@ export const notes = {
     update: (id: string, title: string, body: string): Promise<void> =>
         invoke<void>("note_update", { id, title, body }),
     delete: (id: string): Promise<void> => invoke<void>("note_delete", { id }),
+    setPinned: (id: string, pinned: boolean): Promise<void> =>
+        invoke<void>("note_set_pinned", { id, pinned }),
     /** Switch the background sync actor to its tight cadence while the Notes
      *  screen is open, so edits from another device land within seconds. */
     setFastSync: (on: boolean): Promise<void> => invoke<void>("note_set_fast_sync", { on }),
