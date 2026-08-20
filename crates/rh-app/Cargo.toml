@@ -21,7 +21,15 @@ portable-pty = "0.8"
 
 # Sync client transport (slice 3b): HTTP to the rh-sync-server, bearer token in
 # the OS keychain. rustls so no native TLS toolchain is needed on Windows.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# `rustls-tls-native-roots`, NOT plain `rustls-tls`: the latter trusts only the
+# bundled Mozilla root list, so on a machine behind corporate TLS inspection
+# every HTTPS request fails at the handshake while the browser — which reads
+# the Windows certificate store — works fine. Native roots let us trust the
+# same CAs the OS does, which is what a desktop app should do anyway.
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls-native-roots",
+] }
 keyring.workspace = true
 # Yandex OAuth desktop flow (3b-oauth): open the system browser + a one-shot
 # loopback listener catches the redirected bearer token.

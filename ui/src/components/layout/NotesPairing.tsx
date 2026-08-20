@@ -231,7 +231,10 @@ export function ClaimScreen({ onPaired }: { onPaired: () => void }) {
             await notesApi.pairClaim(clean, label);
             onPaired();
         } catch (e) {
-            setError(formatApiError(e));
+            const msg = formatApiError(e);
+            // The backend flags an unreachable server distinctly; anything
+            // else is about the code itself and is already readable.
+            setError(msg.includes("unreachable") ? t("tools.notes.claim.offline") : msg);
         } finally {
             setBusy(false);
         }

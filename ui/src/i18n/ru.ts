@@ -214,6 +214,7 @@ export const messages: Partial<Record<keyof typeof enMessages, string>> = {
     "tools.notes.claim.body": "Сгенерируй код в Pingie, где ты авторизован, и введи его здесь. Это устройство увидит только заметки.",
     "tools.notes.claim.go": "Подключиться",
     "tools.notes.claim.busy": "Проверяем…",
+    "tools.notes.claim.offline": "Нет связи с сервером. Проверь сеть или корпоративный прокси, который перехватывает HTTPS.",
     "tools.notes.only": "Только заметки",
     "tools.notes.disconnect": "Отключить это устройство",
     "tools.notes.count": "{n} заметок",

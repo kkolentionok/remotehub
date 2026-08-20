@@ -219,6 +219,7 @@ export const messages = {
     "tools.notes.claim.body": "Generate a code in Pingie where you are signed in, then type it here. This device will see notes and nothing else.",
     "tools.notes.claim.go": "Connect",
     "tools.notes.claim.busy": "Checking…",
+    "tools.notes.claim.offline": "Can't reach the server. Check the network, or a corporate proxy that inspects HTTPS.",
     "tools.notes.only": "Notes only",
     "tools.notes.disconnect": "Disconnect this device",
     "tools.notes.count": "{n} notes",

@@ -212,10 +212,16 @@ async fn post_json(
     if let Some(t) = token {
         req = req.bearer_auth(t);
     }
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| format!("request failed: {e}"))?;
+    let resp = req.send().await.map_err(|e| {
+        // Distinguish "the server said no" from "we never reached it" — the
+        // two need completely different things from the user, and reqwest's
+        // own wording ("error sending request for url …") tells them neither.
+        if e.is_connect() || e.is_timeout() {
+            "unreachable".to_string()
+        } else {
+            format!("request failed: {e}")
+        }
+    })?;
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
