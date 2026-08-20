@@ -202,6 +202,108 @@ pub fn notes_token_clear() {
     }
 }
 
+/// Small JSON POST helper for the pairing endpoints.
+async fn post_json(
+    url: &str,
+    token: Option<&str>,
+    body: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let mut req = http_client().post(url).json(body);
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(match status.as_u16() {
+            401 => "code is wrong, already used, or expired".to_string(),
+            _ => format!("server returned {status}"),
+        });
+    }
+    if text.trim().is_empty() {
+        return Ok(serde_json::Value::Null);
+    }
+    serde_json::from_str(&text).map_err(|e| format!("bad response: {e}"))
+}
+
+/// `POST /v1/pair` — park a wrapped notes key under a code hash.
+pub async fn pair_create(
+    base_url: &str,
+    token: &str,
+    code_hash: &str,
+    wrapped_key_b64: &str,
+) -> Result<String, String> {
+    let v = post_json(
+        &format!("{base_url}/v1/pair"),
+        Some(token),
+        &serde_json::json!({ "code_hash": code_hash, "wrapped_key_b64": wrapped_key_b64 }),
+    )
+    .await?;
+    Ok(v.get("expires_at")
+        .and_then(|x| x.as_str())
+        .unwrap_or_default()
+        .to_string())
+}
+
+/// `POST /v1/pair/claim` — redeem a code. Unauthenticated: the code is the
+/// credential. Returns `(wrapped_key_b64, notes_token)`.
+pub async fn pair_claim(
+    base_url: &str,
+    code_hash: &str,
+    label: &str,
+) -> Result<(String, String), String> {
+    let v = post_json(
+        &format!("{base_url}/v1/pair/claim"),
+        None,
+        &serde_json::json!({ "code_hash": code_hash, "label": label }),
+    )
+    .await?;
+    let wrapped = v
+        .get("wrapped_key_b64")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "malformed claim response".to_string())?;
+    let token = v
+        .get("token")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "malformed claim response".to_string())?;
+    Ok((wrapped.to_string(), token.to_string()))
+}
+
+/// `GET /v1/pair/devices` — devices paired to this account.
+pub async fn pair_devices(base_url: &str, token: &str) -> Result<serde_json::Value, String> {
+    let resp = http_client()
+        .get(format!("{base_url}/v1/pair/devices"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("server returned {status}"));
+    }
+    serde_json::from_str(&text).map_err(|e| format!("bad response: {e}"))
+}
+
+/// `DELETE /v1/pair/devices/:id` — revoke a paired device.
+pub async fn pair_revoke(base_url: &str, token: &str, id: &str) -> Result<(), String> {
+    let resp = http_client()
+        .delete(format!("{base_url}/v1/pair/devices/{id}"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+    if resp.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("server returned {}", resp.status()))
+    }
+}
+
 /// `POST /v1/register`. Returns a human-readable error string on failure.
 pub async fn server_register(endpoint: &str, email: &str, password: &str) -> Result<(), String> {
     let resp = http_client()

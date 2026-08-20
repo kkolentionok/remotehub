@@ -716,6 +716,26 @@ export interface SshIdAvailableKey {
 // Snippets (Tools › Snippets). Mirrors rh-core Snippet.
 // =====================================================================
 
+/** A pairing code minted on the signed-in device. */
+export interface PairCode {
+    code: string;
+    expires_at: string;
+}
+
+/** A device that redeemed a code and can reach notes only. */
+export interface PairedDevice {
+    id: string;
+    label: string;
+    created_at: string;
+    last_seen_at: string | null;
+}
+
+/** Whether this device is limited to notes, and whether notes can sync. */
+export interface NotesMode {
+    notes_only: boolean;
+    connected: boolean;
+}
+
 /** A free-form note (Tools › Notes). Mirrors rh-core Note. */
 export interface Note {
     id: string;

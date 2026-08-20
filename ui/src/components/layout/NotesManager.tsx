@@ -21,8 +21,9 @@ import {
 
 import { useT } from "../../i18n";
 import { notes as notesApi, sync as syncApi } from "../../lib/ipc";
-import { formatApiError, type Note } from "../../lib/types";
+import { formatApiError, type Note, type NotesMode } from "../../lib/types";
 import { useDebouncedCallback } from "../../lib/useDebouncedCallback";
+import { AccessCodeButton, ClaimScreen } from "./NotesPairing";
 import styles from "./NotesManager.module.css";
 
 type SaveState = "idle" | "pending" | "saving" | "saved";
@@ -91,6 +92,7 @@ export function NotesPane() {
     const [save, setSave] = useState<SaveState>("idle");
     const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
     const [refreshing, setRefreshing] = useState(false);
+    const [mode, setMode] = useState<NotesMode | null>(null);
     // True between a keystroke and its save landing: the sync refetch must not
     // overwrite what the user is currently typing.
     const dirty = useRef(false);
@@ -128,6 +130,18 @@ export function NotesPane() {
     useEffect(() => {
         void load();
     }, [load]);
+
+    const loadMode = useCallback(async () => {
+        try {
+            setMode(await notesApi.mode());
+        } catch {
+            setMode({ notes_only: false, connected: false });
+        }
+    }, []);
+
+    useEffect(() => {
+        void loadMode();
+    }, [loadMode]);
 
     // Poll the list so edits pulled from another device show up. Cheap: one
     // local SQLite read. The open editor is left alone while it's dirty.
@@ -279,6 +293,19 @@ export function NotesPane() {
         [items, selectedId],
     );
 
+    if (mode && !mode.connected) {
+        return (
+            <div className={styles.pane}>
+                <ClaimScreen
+                    onPaired={() => {
+                        void loadMode();
+                        void load();
+                    }}
+                />
+            </div>
+        );
+    }
+
     return (
         <div className={styles.pane}>
             {/* ── list ── */}
@@ -288,7 +315,10 @@ export function NotesPane() {
                         <NotebookPen size={15} />
                         {t("tools.section.notes")}
                     </span>
-                    <span className={styles.count}>{items?.length ?? 0}</span>
+                    <span className={styles.count}>
+                        {mode?.notes_only ? t("tools.notes.only") : (items?.length ?? 0)}
+                    </span>
+                    {!mode?.notes_only && <AccessCodeButton onToast={toast} />}
                     <button
                         type="button"
                         className={styles.iconBtn}

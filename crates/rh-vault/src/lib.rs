@@ -55,7 +55,8 @@ pub use kdf::{derive_key, gen_salt, KdfAlgo, KdfParams, VaultKey, KEY_LEN, SALT_
 pub use merge::{merge, merge_as};
 pub use keycache::KeyCache;
 pub use notes_blob::{
-    gen_notes_key, open_notes, seal_notes, unwrap_notes_key, wrap_notes_key, NOTES_ENVELOPE_FORMAT,
+    code_hash, code_key, gen_notes_key, gen_pairing_code, normalize_code, open_notes, seal_notes,
+    unwrap_notes_key, wrap_notes_key, CODE_LEN, NOTES_ENVELOPE_FORMAT,
 };
 pub use model::{
     EntityKind, RecordMeta, SyncCredentialPayload, SyncRecord, SyncSnapshot, SNAPSHOT_FORMAT,

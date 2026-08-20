@@ -32,6 +32,10 @@ aes-gcm = "0.10"
 # OS CSPRNG for the KDF salt and the AEAD nonce.
 getrandom = "0.2"
 
+# SHA-256 for the pairing-code hash (the value the server stores as a lookup
+# key; it must be derivable identically on both devices from the code alone).
+sha2 = "0.10"
+
 # Base64 for the portable export envelope (binary -> text) and for secret bytes
 # inside the snapshot JSON.
 base64 = "0.22"

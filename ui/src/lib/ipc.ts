@@ -44,6 +44,9 @@ import type {
     SshIdData,
     Snippet,
     Note,
+    NotesMode,
+    PairCode,
+    PairedDevice,
     HostUpdateRequest,
     KnownHostGetResponse,
     KnownHostsListResponse,
@@ -623,6 +626,15 @@ export const notes = {
     delete: (id: string): Promise<void> => invoke<void>("note_delete", { id }),
     setPinned: (id: string, pinned: boolean): Promise<void> =>
         invoke<void>("note_set_pinned", { id, pinned }),
+    /** Mint an access code for a second device (signed-in devices only). */
+    pairCreate: (): Promise<PairCode> => invoke<PairCode>("notes_pair_create"),
+    /** Redeem a code on the second device. */
+    pairClaim: (code: string, label: string): Promise<void> =>
+        invoke<void>("notes_pair_claim", { code, label }),
+    pairDevices: (): Promise<PairedDevice[]> => invoke<PairedDevice[]>("notes_pair_devices"),
+    pairRevoke: (id: string): Promise<void> => invoke<void>("notes_pair_revoke", { id }),
+    mode: (): Promise<NotesMode> => invoke<NotesMode>("notes_mode"),
+    unpair: (): Promise<void> => invoke<void>("notes_unpair"),
     /** Switch the background sync actor to its tight cadence while the Notes
      *  screen is open, so edits from another device land within seconds. */
     setFastSync: (on: boolean): Promise<void> => invoke<void>("note_set_fast_sync", { on }),

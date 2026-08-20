@@ -109,3 +109,67 @@ pub fn unwrap_notes_key(wrapped: &str, code_key: &VaultKey) -> Result<VaultKey, 
     key.copy_from_slice(&raw);
     Ok(VaultKey::from_bytes(key))
 }
+
+// ── pairing codes ────────────────────────────────────────────────────────────
+
+/// Crockford base32 without I, L, O and U — the letters people misread or
+/// mistype when reading a code aloud.
+const CODE_ALPHABET: &[u8] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+/// 8 symbols over a 32-letter alphabet is 40 bits. Combined with a
+/// single-use, minutes-long window on the server, guessing is hopeless;
+/// making it longer would only make it harder to read out loud.
+pub const CODE_LEN: usize = 8;
+
+/// Generate a pairing code, e.g. `K7QDM2XR`.
+pub fn gen_pairing_code() -> Result<String, VaultError> {
+    let mut raw = [0u8; CODE_LEN];
+    getrandom::getrandom(&mut raw).map_err(|_| VaultError::Encrypt)?;
+    Ok(raw
+        .iter()
+        .map(|b| CODE_ALPHABET[(*b as usize) % CODE_ALPHABET.len()] as char)
+        .collect())
+}
+
+/// Strip formatting and fold to the canonical form, so `k7qd-m2xr`,
+/// `K7QD M2XR` and `K7QDM2XR` are the same code.
+#[must_use]
+pub fn normalize_code(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .collect()
+}
+
+/// The lookup value sent to the server. The server sees only this, never the
+/// code, so it cannot derive the key that opens the wrapped notes key.
+#[must_use]
+pub fn code_hash(code: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(b"pingie-pair-hash-v1");
+    h.update(normalize_code(code).as_bytes());
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Derive the wrapping key from the code. Both devices must land on the same
+/// key knowing only the code, so the salt is derived from the code too.
+/// Argon2id is deliberately kept: it is paid twice in a pairing's lifetime,
+/// and it is what makes a stolen `wrapped_key` expensive to attack offline.
+pub fn code_key(code: &str) -> Result<VaultKey, VaultError> {
+    use sha2::{Digest, Sha256};
+    let normalized = normalize_code(code);
+
+    let mut h = Sha256::new();
+    h.update(b"pingie-pair-salt-v1");
+    h.update(normalized.as_bytes());
+    let salt = h.finalize()[..crate::kdf::SALT_LEN].to_vec();
+
+    let params = crate::kdf::KdfParams {
+        algo: crate::kdf::KdfAlgo::Argon2id,
+        m_cost_kib: 64 * 1024,
+        t_cost: 3,
+        p_cost: 1,
+        salt,
+    };
+    crate::kdf::derive_key(normalized.as_bytes(), &params)
+}

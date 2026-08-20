@@ -1,0 +1,248 @@
+/* Access code: trigger, popover, and the claim screen on a paired device.
+   The popover is the one element here allowed a shadow. */
+
+.trigger {
+    width: 26px;
+    height: 26px;
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--text-4);
+    cursor: pointer;
+}
+.trigger:hover {
+    color: var(--color-accent);
+    background: var(--accent-soft);
+}
+
+.pop {
+    position: fixed;
+    z-index: 900;
+    width: 320px;
+    padding: 12px 14px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-elevated);
+    box-shadow: var(--shadow-pop);
+    font-family: var(--font-sans);
+    color: var(--text-1);
+}
+.popHead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+.popHead button {
+    display: flex;
+    border: none;
+    background: none;
+    padding: 0;
+    color: var(--text-4);
+    cursor: pointer;
+}
+.popHead button:hover {
+    color: var(--text-1);
+}
+
+.codeBox {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 52px;
+}
+.code {
+    border: none;
+    background: none;
+    padding: 0;
+    color: var(--text-1);
+    font-family: var(--font-mono);
+    font-size: 24px;
+    letter-spacing: 0.14em;
+    cursor: pointer;
+}
+.code:hover {
+    color: var(--color-accent);
+}
+.dead {
+    color: var(--text-4);
+    text-decoration: line-through;
+    cursor: default;
+}
+.dead:hover {
+    color: var(--text-4);
+}
+.spin {
+    color: var(--text-4);
+    animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+.hint {
+    margin: 0 0 4px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-4);
+    text-align: center;
+}
+.regen {
+    display: block;
+    width: 100%;
+    height: 28px;
+    margin-bottom: 6px;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 6px;
+    background: none;
+    color: var(--text-1);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+.regen:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+}
+
+.sect {
+    margin-top: 10px;
+    padding-top: 9px;
+    border-top: 1px solid var(--color-border);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-4);
+}
+.none {
+    padding: 8px 0 2px;
+    font-size: 12px;
+    color: var(--text-4);
+}
+.dev {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 0;
+    font-size: 12px;
+}
+.dev svg {
+    color: var(--text-4);
+}
+.devName {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.revoke,
+.confirm {
+    border: none;
+    background: none;
+    padding: 0;
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+.revoke {
+    color: var(--text-4);
+}
+.revoke:hover {
+    color: var(--color-danger);
+}
+.confirm {
+    color: var(--color-danger);
+    font-weight: 500;
+}
+
+/* ── claim screen ── */
+.claim {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 24px;
+    color: var(--text-4);
+    font-family: var(--font-sans);
+}
+.claim h2 {
+    margin: 4px 0 0;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text-1);
+}
+.claim p {
+    margin: 0;
+    max-width: 360px;
+    text-align: center;
+    font-size: 13px;
+    line-height: 1.55;
+}
+.claimInput {
+    margin-top: 6px;
+    width: 220px;
+    height: 42px;
+    text-align: center;
+    border: 1px solid var(--color-border-strong);
+    border-radius: 8px;
+    background: var(--color-surface);
+    color: var(--text-1);
+    font-family: var(--font-mono);
+    font-size: 20px;
+    letter-spacing: 0.14em;
+}
+.claimInput:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+.claimInput::placeholder {
+    color: var(--text-4);
+    letter-spacing: 0.1em;
+}
+.claimErr {
+    max-width: 320px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--color-danger);
+}
+.claimGo {
+    height: 32px;
+    padding: 0 18px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: var(--color-accent);
+    color: #fff;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+}
+.claimGo:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+/* mode chip */
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    font-size: 11px;
+    color: var(--text-4);
+}

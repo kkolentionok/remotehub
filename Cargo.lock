@@ -5722,7 +5722,7 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rh-app"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5760,7 +5760,7 @@ dependencies = [
 
 [[package]]
 name = "rh-core"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5773,7 +5773,7 @@ dependencies = [
 
 [[package]]
 name = "rh-rdp"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5800,7 +5800,7 @@ dependencies = [
 
 [[package]]
 name = "rh-ssh"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "aes 0.8.4",
  "argon2",
@@ -5825,7 +5825,7 @@ dependencies = [
 
 [[package]]
 name = "rh-storage"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5844,7 +5844,7 @@ dependencies = [
 
 [[package]]
 name = "rh-vault"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "aes-gcm 0.10.3",
  "argon2",
