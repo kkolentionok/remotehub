@@ -50,18 +50,13 @@ pub fn store_key(key: &VaultKey) -> Result<String, ApiError> {
     Ok(encoded)
 }
 
-/// The key to use, minting one if this account has never had a notes key.
-/// Minting is safe to race: `merge` resolves two freshly minted keys
-/// deterministically, and the loser's blob is simply replaced.
-pub fn key_or_create() -> ApiResult<VaultKey> {
-    if let Some(k) = key_from_keychain() {
-        return Ok(k);
-    }
+/// Mint a notes key and store it. Called from `build_snapshot` only, so every
+/// key reaches other devices through the vault merge that resolves collisions.
+pub fn mint_key() -> ApiResult<String> {
     let key = gen_notes_key().map_err(|e| ApiError::Internal {
         message: format!("notes key: {e}"),
     })?;
-    store_key(&key)?;
-    Ok(key)
+    store_key(&key)
 }
 
 /// Which credential this device syncs notes with: a paired device has only a
@@ -173,7 +168,13 @@ pub async fn run_pass(state: &AppState) -> ApiResult<u32> {
     let Some((token, refresh)) = token_for_notes() else {
         return Ok(0);
     };
-    let key = key_or_create()?;
+    // No key yet means the vault pass that mints and publishes one hasn't run
+    // here. Do nothing rather than seal a blob under a key nobody else has.
+    let Some(key) = key_from_keychain() else {
+        debug!("notes pass skipped: no notes key yet");
+        return Ok(0);
+    };
+    debug!("notes pass: key {}", b64().encode(&key.as_bytes()[..4]));
     let remote: Arc<dyn SyncRemote> = Arc::new(ServerRemote::new_notes(
         cfg.endpoint.clone(),
         token,
@@ -186,31 +187,42 @@ pub async fn run_pass(state: &AppState) -> ApiResult<u32> {
         message: format!("notes pull: {e}"),
     })?;
 
-    let (merged, expected) = match &pulled {
+    // Open the remote blob if we can. If we can't, we are holding a different
+    // key than whoever sealed it — recover by republishing our own notes under
+    // the current key instead of failing forever. Refusing to write here is
+    // what turned a first-run key race into a permanent dead end: the device
+    // could neither read nor push, so nothing ever reconciled.
+    let remote_snap = match &pulled {
         Some(blob) => {
             let text = String::from_utf8_lossy(&blob.bytes).to_string();
-            let remote_snap = open_notes(&text, &key).map_err(|e| ApiError::Internal {
-                message: format!("notes open: {e}"),
-            })?;
-            let merged = merge(&local, &remote_snap, state.sync.node().clone());
-            state.sync.observe(merged.generated).await;
-            (merged, Some(blob.version.clone()))
+            match open_notes(&text, &key) {
+                Ok(snap) => Some(snap),
+                Err(e) => {
+                    warn!("notes blob unreadable with the current key ({e}) — republishing");
+                    None
+                }
+            }
         }
-        None => (local.clone(), None),
+        None => None,
+    };
+
+    let expected = pulled.as_ref().map(|b| b.version.clone());
+    let merged = match &remote_snap {
+        Some(remote_snap) => {
+            let merged = merge(&local, remote_snap, state.sync.node().clone());
+            state.sync.observe(merged.generated).await;
+            merged
+        }
+        None => local.clone(),
     };
 
     // Push only when the merge actually differs from what the server holds —
     // an idle device must not churn the blob's rev, or every other device
     // would see a change and pull for nothing.
-    let remote_matches = match &pulled {
-        Some(blob) => {
-            let text = String::from_utf8_lossy(&blob.bytes).to_string();
-            open_notes(&text, &key)
-                .map(|r| records_equal(&r, &merged))
-                .unwrap_or(false)
-        }
-        None => false,
-    };
+    let remote_matches = remote_snap
+        .as_ref()
+        .map(|r| records_equal(r, &merged))
+        .unwrap_or(false);
 
     if !remote_matches {
         let sealed = seal_notes(&merged, &key).map_err(|e| ApiError::Internal {

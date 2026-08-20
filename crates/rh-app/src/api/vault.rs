@@ -152,7 +152,15 @@ pub(crate) async fn build_snapshot(state: &AppState) -> ApiResult<SyncSnapshot> 
     // Notes themselves live in their own blob now; what rides here is the key
     // that opens it, so a second signed-in device inherits notes access
     // without a second password.
-    snap.notes_key_b64 = crate::sync_remote::notes_key_get();
+    //
+    // The vault snapshot is also the ONLY place a key is minted. Letting the
+    // notes loop mint its own meant two devices could each invent one and then
+    // seal blobs the other couldn't read; minting here forces every key
+    // through `merge`, which converges before any notes traffic happens.
+    snap.notes_key_b64 = match crate::sync_remote::notes_key_get() {
+        Some(k) => Some(k),
+        None => crate::notes_sync::mint_key().ok(),
+    };
     Ok(snap)
 }
 
@@ -345,11 +353,18 @@ pub(crate) async fn apply_snapshot(state: &AppState, snap: &SyncSnapshot) -> Api
         c.snippets += 1;
     }
 
-    // Adopt the notes key if the account already had one and this device
-    // doesn't. Never overwrite: a device that already holds a key has handed
-    // it to paired devices, and swapping it would orphan them.
+    // Adopt the notes key from the merged snapshot, ALWAYS — it is the value
+    // every device has converged on, and disagreeing with it means being
+    // unable to open the shared notes blob at all.
+    //
+    // An earlier version refused to overwrite an existing local key, on the
+    // theory that swapping it would orphan paired devices. That was exactly
+    // backwards: two devices that each minted a key on their first pass then
+    // disagreed forever, one of them permanently unable to read the blob. The
+    // merged value is authoritative; pairing happens after convergence.
     if let Some(k) = snap.notes_key_b64.as_deref() {
-        if crate::sync_remote::notes_key_get().is_none() {
+        if crate::sync_remote::notes_key_get().as_deref() != Some(k) {
+            tracing::info!("adopting notes key from vault snapshot");
             let _ = crate::sync_remote::notes_key_set(k);
         }
     }

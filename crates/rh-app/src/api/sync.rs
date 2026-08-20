@@ -248,17 +248,22 @@ pub async fn sync_refresh(app: AppHandle, state: State<'_, AppState>) -> ApiResu
 /// same records fingerprint alike regardless of the order they were assembled
 /// in (`build_snapshot` appends by entity type, `merge` emits sorted), so an
 /// idle device produces a stable value pass after pass.
-fn fingerprint(records: &[rh_vault::SyncRecord]) -> u64 {
+fn fingerprint(snap: &rh_vault::SyncSnapshot) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    let mut parts: Vec<String> = records
+    let mut parts: Vec<String> = snap
+        .records
         .iter()
         .filter_map(|r| serde_json::to_string(r).ok())
         .collect();
     parts.sort_unstable();
     let mut h = DefaultHasher::new();
     parts.hash(&mut h);
+    // The notes key lives outside `records`; leaving it out of the
+    // fingerprint let a device skip the very pass that would have published
+    // or adopted it.
+    snap.notes_key_b64.hash(&mut h);
     h.finish()
 }
 
@@ -278,7 +283,7 @@ pub(crate) async fn run_sync_core(
     );
 
     let local = crate::api::vault::build_snapshot(state).await?;
-    let local_fp = fingerprint(&local.records);
+    let local_fp = fingerprint(&local);
 
     // Cheap idle path. A full pass costs two Argon2id derivations (64 MiB each)
     // plus a rewrite of every record — far too much to repeat every couple of
@@ -326,7 +331,7 @@ pub(crate) async fn run_sync_core(
     let counts = crate::api::vault::apply_snapshot(state, &report.merged).await?;
     {
         let mut seen = state.sync_seen.lock().await;
-        *seen = Some((report.version.clone(), fingerprint(&report.merged.records)));
+        *seen = Some((report.version.clone(), fingerprint(&report.merged)));
     }
     Ok(SyncNowResponse {
         had_remote: report.had_remote,
