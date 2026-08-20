@@ -40,7 +40,7 @@ pub enum KdfAlgo {
 /// (a sensible interactive-login target): 64 MiB memory, 3 iterations,
 /// 1 lane. Tunable later via the policy in `rh-app` without breaking old
 /// vaults, since each vault records the parameters it was sealed with.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KdfParams {
     pub algo: KdfAlgo,
     /// Memory cost in KiB (Argon2 `m_cost`). 65536 KiB = 64 MiB.

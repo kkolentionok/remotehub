@@ -33,13 +33,13 @@ const PERIODIC_SECS: u64 = 30;
 /// Tight cadence used while the Notes screen is open (`AppState::notes_fast`).
 /// Notes are a live scratchpad shared across devices, so half a minute of lag
 /// is unusable; a pass is cheap (one small blob in, one out).
-const FAST_SECS: u64 = 2;
+const FAST_SECS: u64 = 1;
 /// After a local edit wakes us, wait this long (collapsing further edits)
 /// before pushing, so rapid successive saves become one sync.
 const DEBOUNCE_MS: u64 = 1_500;
 /// Push debounce while in fast mode — short enough that a typed line lands on
 /// the other device quickly, long enough that a burst of keystrokes is one pass.
-const FAST_DEBOUNCE_MS: u64 = 400;
+const FAST_DEBOUNCE_MS: u64 = 250;
 
 /// Name of the Tauri event carrying [`SyncStatusSnapshot`] to the frontend.
 pub const STATUS_EVENT: &str = "sync:status";

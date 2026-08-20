@@ -24,7 +24,7 @@ use zeroize::Zeroizing;
 
 use crate::crypto::{self, NONCE_LEN_BYTES};
 use crate::error::VaultError;
-use crate::kdf::{derive_key, KdfParams};
+use crate::kdf::{derive_key, KdfParams, VaultKey};
 use crate::model::SyncSnapshot;
 
 /// Bump when the envelope wire shape changes incompatibly.
@@ -73,13 +73,29 @@ pub fn seal_snapshot_with(
     password: &[u8],
     kdf: KdfParams,
 ) -> Result<VaultEnvelope, VaultError> {
+    let key = derive_key(password, &kdf)?;
+    seal_snapshot_with_key(snapshot, kdf, &key)
+}
+
+/// Seal with an already-derived key.
+///
+/// Exists so a caller that syncs repeatedly can derive once and reuse
+/// (Argon2id at 64 MiB is ~a quarter second — unaffordable per pass). Safe
+/// because the nonce is still freshly random for every seal; only the KDF
+/// salt is held stable, which is exactly how a vault's own salt is meant to
+/// behave. `kdf` MUST be the params `key` was derived from — they are written
+/// into the envelope header and bound into the AAD.
+pub fn seal_snapshot_with_key(
+    snapshot: &SyncSnapshot,
+    kdf: KdfParams,
+    key: &VaultKey,
+) -> Result<VaultEnvelope, VaultError> {
     // Serialize the plaintext snapshot; keep it in a zeroizing buffer so
     // the cleartext (which includes secret bytes) is wiped after sealing.
     let plaintext = Zeroizing::new(serde_json::to_vec(snapshot)?);
 
-    let key = derive_key(password, &kdf)?;
     let aad = VaultEnvelope::aad_of(ENVELOPE_FORMAT, &kdf)?;
-    let sealed = crypto::seal(&key, &plaintext, &aad)?;
+    let sealed = crypto::seal(key, &plaintext, &aad)?;
 
     Ok(VaultEnvelope {
         format: ENVELOPE_FORMAT,
@@ -95,6 +111,16 @@ pub fn seal_snapshot_with(
 /// — the AEAD tag will not verify. An unknown format is
 /// [`VaultError::UnsupportedFormat`].
 pub fn open_envelope(envelope: &VaultEnvelope, password: &[u8]) -> Result<SyncSnapshot, VaultError> {
+    let key = derive_key(password, &envelope.kdf)?;
+    open_envelope_with_key(envelope, &key)
+}
+
+/// Open with an already-derived key — the counterpart of
+/// [`seal_snapshot_with_key`]. `key` must come from `envelope.kdf`.
+pub fn open_envelope_with_key(
+    envelope: &VaultEnvelope,
+    key: &VaultKey,
+) -> Result<SyncSnapshot, VaultError> {
     if envelope.format != ENVELOPE_FORMAT {
         return Err(VaultError::UnsupportedFormat(envelope.format));
     }
@@ -108,9 +134,8 @@ pub fn open_envelope(envelope: &VaultEnvelope, password: &[u8]) -> Result<SyncSn
     let mut nonce = [0u8; NONCE_LEN_BYTES];
     nonce.copy_from_slice(&envelope.nonce);
 
-    let key = derive_key(password, &envelope.kdf)?;
     let aad = envelope.aad()?;
-    let plaintext = Zeroizing::new(crypto::open(&key, &nonce, &envelope.ciphertext, &aad)?);
+    let plaintext = Zeroizing::new(crypto::open(key, &nonce, &envelope.ciphertext, &aad)?);
 
     let snapshot: SyncSnapshot = serde_json::from_slice(&plaintext)?;
     snapshot.check_format()?;

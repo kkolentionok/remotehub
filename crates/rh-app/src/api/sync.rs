@@ -174,6 +174,10 @@ pub async fn sync_logout(app: AppHandle, state: State<'_, AppState>) -> ApiResul
     sync_remote::refresh_clear();
     sync_remote::vault_key_clear();
     *state.sync_master_mem.lock().await = None;
+    // The derived key and the idle-pass cache are account-scoped: neither may
+    // survive into the next login.
+    state.vault_keys.clear();
+    *state.sync_seen.lock().await = None;
 
     // Forget the account email so the UI returns cleanly to signed-out.
     let mut cfg = SyncConfig::load();
@@ -303,7 +307,13 @@ pub(crate) async fn run_sync_core(
 
     let seed = state.sync.last().await;
     let mut clock = HlcGenerator::new(seed);
-    let report = rh_vault::sync_once(&remote, master.as_bytes(), &local, &mut clock)
+    let report = rh_vault::sync_once_cached(
+        &remote,
+        master.as_bytes(),
+        &local,
+        &mut clock,
+        &state.vault_keys,
+    )
         .await
         .map_err(|e| ApiError::Internal {
             message: e.to_string(),
@@ -346,6 +356,10 @@ pub async fn sync_set_master(
     }
     let token =
         sync_remote::token_get().ok_or_else(|| ApiError::validation("sync", "not logged in"))?;
+
+    // A different password derives a different key — drop any cached one
+    // before probing, or the probe would silently reuse the old key.
+    state.vault_keys.clear();
 
     // Serialize with the background actor so the validation pass can't race a
     // periodic one (held only for this single pass).

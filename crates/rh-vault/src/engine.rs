@@ -18,7 +18,11 @@
 //! on records), retrying always makes progress.
 
 use crate::clock::HlcGenerator;
-use crate::envelope::{from_export_string, open_envelope, seal_snapshot, to_export_string};
+use crate::envelope::{
+    from_export_string, open_envelope_with_key, seal_snapshot_with_key, to_export_string,
+};
+use crate::kdf::KdfParams;
+use crate::keycache::KeyCache;
 use crate::error::VaultError;
 use crate::merge::merge;
 use crate::model::SyncSnapshot;
@@ -59,14 +63,38 @@ pub async fn sync_once(
     local: &SyncSnapshot,
     clock: &mut HlcGenerator,
 ) -> Result<SyncReport, VaultError> {
+    sync_once_cached(remote, password, local, clock, &KeyCache::new()).await
+}
+
+/// [`sync_once`] with a caller-owned key cache.
+///
+/// Two things make repeated passes cheap. The key is derived once and reused
+/// (see [`KeyCache`]), and — critically — a re-seal keeps the KDF parameters
+/// the pulled blob already carried instead of minting a fresh salt. A fresh
+/// salt would change the key on *every* push, forcing every other device to
+/// re-derive on every edit, which is precisely what made a two-second cadence
+/// feel slow. Nonces stay random per seal, so this changes nothing about
+/// AES-GCM's requirements.
+pub async fn sync_once_cached(
+    remote: &dyn SyncRemote,
+    password: &[u8],
+    local: &SyncSnapshot,
+    clock: &mut HlcGenerator,
+    cache: &KeyCache,
+) -> Result<SyncReport, VaultError> {
     for attempt in 1..=MAX_PUSH_ATTEMPTS {
         let pulled = remote.pull().await?;
+        // The KDF params to seal under: whatever the remote already uses, so
+        // the derived key stays valid across pushes.
+        let mut seal_kdf: Option<KdfParams> = None;
         let (merged, expected, had_remote) = match &pulled {
             Some(blob) => {
                 let text = std::str::from_utf8(&blob.bytes)
                     .map_err(|_| VaultError::Transport("remote blob is not valid UTF-8".into()))?;
                 let envelope = from_export_string(text)?;
-                let remote_snap = open_envelope(&envelope, password)?;
+                let key = cache.key_for(password, &envelope.kdf)?;
+                let remote_snap = open_envelope_with_key(&envelope, &key)?;
+                seal_kdf = Some(envelope.kdf.clone());
                 // Fold remote logical time in before stamping anything new.
                 clock.observe(remote_snap.generated);
                 let merged = merge(local, &remote_snap, local.node.clone());
@@ -89,7 +117,9 @@ pub async fn sync_once(
             None => (local.clone(), None, false),
         };
 
-        let sealed = seal_snapshot(&merged, password)?;
+        let kdf = seal_kdf.unwrap_or_else(KdfParams::new_default);
+        let key = cache.key_for(password, &kdf)?;
+        let sealed = seal_snapshot_with_key(&merged, kdf, &key)?;
         let bytes = to_export_string(&sealed)?.into_bytes();
         match remote.push(&bytes, expected.as_deref()).await {
             Ok(version) => {

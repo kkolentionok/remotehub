@@ -81,6 +81,9 @@ pub struct AppState {
     /// records)`. Lets a pass bail out after a single cheap GET when neither
     /// side moved — see `api::sync::run_sync_core`.
     pub sync_seen: Arc<Mutex<Option<(String, u64)>>>,
+    /// Derived vault key, reused across passes. Cleared on logout and on a
+    /// master-password change.
+    pub vault_keys: Arc<rh_vault::KeyCache>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -148,6 +151,7 @@ impl AppState {
             sync_master_mem: Arc::new(Mutex::new(None)),
             notes_fast: Arc::new(AtomicBool::new(false)),
             sync_seen: Arc::new(Mutex::new(None)),
+            vault_keys: Arc::new(rh_vault::KeyCache::new()),
         }
     }
 

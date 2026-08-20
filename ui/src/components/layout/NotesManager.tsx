@@ -95,6 +95,9 @@ export function NotesPane() {
     // overwrite what the user is currently typing.
     const dirty = useRef(false);
     const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Typing after a lull means the user is about to hand something over —
+    // pull once right away so the other side's latest is already merged in.
+    const lastNudge = useRef(0);
 
     const toast = useCallback((text: string) => {
         const id = Date.now() + Math.random();
@@ -171,6 +174,10 @@ export function NotesPane() {
         setTitle(nextTitle);
         setBody(nextBody);
         if (!selectedId) return;
+        if (Date.now() - lastNudge.current > 10_000) {
+            lastNudge.current = Date.now();
+            void syncApi.refresh().catch(() => undefined);
+        }
         dirty.current = true;
         setSave("pending");
         debouncedSave.call(selectedId, nextTitle, nextBody);
