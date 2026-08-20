@@ -84,6 +84,8 @@ pub struct AppState {
     /// Derived vault key, reused across passes. Cleared on logout and on a
     /// master-password change.
     pub vault_keys: Arc<rh_vault::KeyCache>,
+    /// Nudges the notes loop after a local note edit.
+    pub notes_wake: Arc<Notify>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -152,6 +154,7 @@ impl AppState {
             notes_fast: Arc::new(AtomicBool::new(false)),
             sync_seen: Arc::new(Mutex::new(None)),
             vault_keys: Arc::new(rh_vault::KeyCache::new()),
+            notes_wake: Arc::new(Notify::new()),
         }
     }
 

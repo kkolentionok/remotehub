@@ -35,7 +35,7 @@ use crate::api::dto::{
 };
 use crate::api::error::{ApiError, ApiResult};
 use crate::state::AppState;
-use crate::sync_clock::{KIND_CREDENTIAL, KIND_GROUP, KIND_HOST, KIND_NOTE, KIND_SNIPPET};
+use crate::sync_clock::{KIND_CREDENTIAL, KIND_GROUP, KIND_HOST, KIND_SNIPPET};
 
 /// On-disk form of the per-device sync identity now lives in
 /// `crate::sync_clock::SyncClock` (shared, process-wide, in `AppState`).
@@ -52,7 +52,7 @@ fn vault_err(e: VaultError) -> ApiError {
 /// into `sync_meta` on apply so a rebuilt snapshot keeps the *merged*
 /// provenance (not a fresh local stamp), which is what lets the merge stay
 /// convergent across repeated syncs.
-fn stamp_from(rec: &SyncRecord) -> SyncStamp {
+pub(crate) fn stamp_from(rec: &SyncRecord) -> SyncStamp {
     SyncStamp {
         rev_wall: rec.meta.rev.wall_ms,
         rev_counter: rec.meta.rev.counter,
@@ -132,17 +132,6 @@ pub(crate) async fn build_snapshot(state: &AppState) -> ApiResult<SyncSnapshot> 
         records.push(SyncRecord::snippet(&snippet, rev, origin).map_err(vault_err)?);
     }
 
-    for note in state.notes.list().await? {
-        let (rev, origin) = rev_for(
-            state,
-            KIND_NOTE,
-            note.id.as_str(),
-            note.updated_at.timestamp_millis(),
-        )
-        .await?;
-        records.push(SyncRecord::note(&note, rev, origin).map_err(vault_err)?);
-    }
-
     // Tombstones — deletions that must keep propagating until every replica
     // has applied them.
     for (kind, id, stamp) in state.sync_meta.tombstones().await? {
@@ -151,7 +140,6 @@ pub(crate) async fn build_snapshot(state: &AppState) -> ApiResult<SyncSnapshot> 
             KIND_GROUP => EntityKind::Group,
             KIND_CREDENTIAL => EntityKind::Credential,
             KIND_SNIPPET => EntityKind::Snippet,
-            KIND_NOTE => EntityKind::Note,
             _ => continue,
         };
         let rev = Hlc::new(stamp.rev_wall, stamp.rev_counter);
@@ -160,7 +148,12 @@ pub(crate) async fn build_snapshot(state: &AppState) -> ApiResult<SyncSnapshot> 
 
     // The snapshot's own clock = the next stamp from the shared generator.
     let generated = state.sync.next().await;
-    Ok(SyncSnapshot::new(node, generated, records))
+    let mut snap = SyncSnapshot::new(node, generated, records);
+    // Notes themselves live in their own blob now; what rides here is the key
+    // that opens it, so a second signed-in device inherits notes access
+    // without a second password.
+    snap.notes_key_b64 = crate::sync_remote::notes_key_get();
+    Ok(snap)
 }
 
 /// Export local state as a portable, E2E-encrypted vault string.
@@ -202,7 +195,7 @@ pub(crate) struct ImportCounts {
 ///   re-created the row *and* `bump()` cleared its tombstone, so the deletion
 ///   was lost permanently and the resurrected note was pushed back to every
 ///   device. Skipping leaves the tombstone intact; the next pass pushes it.
-async fn local_is_current(
+pub(crate) async fn local_is_current(
     state: &AppState,
     kind: &str,
     id: &str,
@@ -352,32 +345,13 @@ pub(crate) async fn apply_snapshot(state: &AppState, snap: &SyncSnapshot) -> Api
         c.snippets += 1;
     }
 
-    // Phase 3c — notes (no FK deps; simple upsert).
-    let existing_notes: std::collections::HashSet<String> = state
-        .notes
-        .list()
-        .await?
-        .into_iter()
-        .map(|n| n.id.to_string())
-        .collect();
-    for rec in &snap.records {
-        if rec.kind != EntityKind::Note || rec.is_deleted() {
-            continue;
+    // Adopt the notes key if the account already had one and this device
+    // doesn't. Never overwrite: a device that already holds a key has handed
+    // it to paired devices, and swapping it would orphan them.
+    if let Some(k) = snap.notes_key_b64.as_deref() {
+        if crate::sync_remote::notes_key_get().is_none() {
+            let _ = crate::sync_remote::notes_key_set(k);
         }
-        if local_is_current(state, KIND_NOTE, &rec.id, rec).await? {
-            continue;
-        }
-        let n: Note = rec.as_note().map_err(vault_err)?;
-        if existing_notes.contains(&n.id.to_string()) {
-            state.notes.update(&n).await?;
-        } else {
-            state.notes.create(&n).await?;
-        }
-        state
-            .sync_meta
-            .bump(KIND_NOTE, n.id.as_str(), &stamp_from(rec))
-            .await?;
-        c.notes += 1;
     }
 
     // Phase 4 — deletions, reverse FK order (hosts → credentials → groups).
@@ -416,20 +390,6 @@ pub(crate) async fn apply_snapshot(state: &AppState, snap: &SyncSnapshot) -> Api
             state
                 .sync_meta
                 .tombstone(KIND_SNIPPET, &rec.id, &stamp_from(rec))
-                .await?;
-            c.deleted += 1;
-        }
-    }
-    for rec in &snap.records {
-        if rec.kind == EntityKind::Note && rec.is_deleted() {
-            if local_is_current(state, KIND_NOTE, &rec.id, rec).await? {
-                continue;
-            }
-            let id = NoteId::from_raw(rec.id.clone());
-            let _ = state.notes.delete(&id).await;
-            state
-                .sync_meta
-                .tombstone(KIND_NOTE, &rec.id, &stamp_from(rec))
                 .await?;
             c.deleted += 1;
         }
@@ -519,6 +479,9 @@ pub(crate) async fn wipe_local(state: &AppState) -> ApiResult<()> {
     for n in state.notes.list().await? {
         let _ = state.notes.delete(&n.id).await;
     }
+    // Notes access is account-scoped like everything else here.
+    crate::sync_remote::notes_key_clear();
+    crate::sync_remote::notes_token_clear();
     // Drop all provenance too, so stale stamps for the wiped entities can't
     // resurface as phantom live records in the next snapshot.
     state.sync_meta.clear_all().await?;

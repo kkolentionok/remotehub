@@ -58,7 +58,17 @@ pub fn merge(local: &SyncSnapshot, remote: &SyncSnapshot, local_node: NodeId) ->
 
     let generated = local.generated.max(remote.generated);
     let records = winners.into_values().collect();
-    SyncSnapshot::new(local_node, generated, records)
+    let mut merged = SyncSnapshot::new(local_node, generated, records);
+    // The notes key is create-once, never edited, so there is no revision to
+    // compare — first one to exist wins. When both sides somehow minted one,
+    // take the smaller string: an arbitrary but *deterministic* rule, so two
+    // devices that raced converge on the same choice instead of flip-flopping.
+    merged.notes_key_b64 = match (&local.notes_key_b64, &remote.notes_key_b64) {
+        (Some(a), Some(b)) => Some(a.min(b).clone()),
+        (Some(a), None) => Some(a.clone()),
+        (None, b) => b.clone(),
+    };
+    merged
 }
 
 /// Merge two snapshots that were both produced remotely (neither is the

@@ -38,6 +38,7 @@ pub mod envelope;
 pub mod error;
 pub mod kdf;
 pub mod keycache;
+pub mod notes_blob;
 pub mod merge;
 pub mod model;
 pub mod opt_b64;
@@ -53,6 +54,9 @@ pub use error::VaultError;
 pub use kdf::{derive_key, gen_salt, KdfAlgo, KdfParams, VaultKey, KEY_LEN, SALT_LEN};
 pub use merge::{merge, merge_as};
 pub use keycache::KeyCache;
+pub use notes_blob::{
+    gen_notes_key, open_notes, seal_notes, unwrap_notes_key, wrap_notes_key, NOTES_ENVELOPE_FORMAT,
+};
 pub use model::{
     EntityKind, RecordMeta, SyncCredentialPayload, SyncRecord, SyncSnapshot, SNAPSHOT_FORMAT,
 };

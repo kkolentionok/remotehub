@@ -92,6 +92,16 @@ impl VaultKey {
     pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
         &self.0
     }
+
+    /// Wrap raw key material.
+    ///
+    /// The vault key comes from a password via [`derive_key`], but the notes
+    /// blob is sealed under a *random* key that is stored and transported
+    /// rather than derived — no password, and so no Argon2 on its path.
+    #[must_use]
+    pub fn from_bytes(raw: [u8; KEY_LEN]) -> Self {
+        Self(Zeroizing::new(raw))
+    }
 }
 
 impl std::fmt::Debug for VaultKey {

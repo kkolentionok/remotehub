@@ -30,16 +30,20 @@ use crate::sync_remote::{self, SyncConfig};
 
 /// Periodic pull cadence — catches edits made on other devices.
 const PERIODIC_SECS: u64 = 30;
-/// Tight cadence used while the Notes screen is open (`AppState::notes_fast`).
-/// Notes are a live scratchpad shared across devices, so half a minute of lag
-/// is unusable; a pass is cheap (one small blob in, one out).
-const FAST_SECS: u64 = 1;
+/// Notes cadence while their screen is open (`AppState::notes_fast`). This is
+/// the *notes* loop, not the vault one: a notes pass is a small GET plus one
+/// AES-GCM open, with no Argon2 and no keychain sweep, which is what makes a
+/// one-second tick reasonable.
+const NOTES_FAST_SECS: u64 = 1;
+/// Notes cadence when their screen is closed — still worth pulling, since a
+/// note may arrive while the user is elsewhere in the app, just not eagerly.
+const NOTES_IDLE_SECS: u64 = 15;
 /// After a local edit wakes us, wait this long (collapsing further edits)
 /// before pushing, so rapid successive saves become one sync.
 const DEBOUNCE_MS: u64 = 1_500;
-/// Push debounce while in fast mode — short enough that a typed line lands on
-/// the other device quickly, long enough that a burst of keystrokes is one pass.
-const FAST_DEBOUNCE_MS: u64 = 250;
+/// Debounce after a note edit: long enough that a burst of keystrokes is one
+/// pass, short enough to feel immediate.
+const NOTES_DEBOUNCE_MS: u64 = 250;
 
 /// Name of the Tauri event carrying [`SyncStatusSnapshot`] to the frontend.
 pub const STATUS_EVENT: &str = "sync:status";
@@ -175,22 +179,42 @@ pub(crate) async fn run_pass(app: &AppHandle, state: &AppState) {
 /// The actor loop. Spawned once from `main.rs` setup with a clone of the
 /// managed [`AppState`] and the app handle. Never returns.
 pub async fn run_loop(app: AppHandle, state: AppState) {
-    // Startup pass first, then wait-then-pass forever. The cadence is read at
-    // the top of each wait so `notes_fast` takes effect on the next cycle.
+    // Startup pass first, then wait-then-pass forever.
     run_pass(&app, &state).await;
 
     loop {
-        let fast = state.notes_fast.load(Ordering::Relaxed);
-        let period = if fast { FAST_SECS } else { PERIODIC_SECS };
-        let debounce = if fast { FAST_DEBOUNCE_MS } else { DEBOUNCE_MS };
-
         tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(period)) => {}
+            _ = tokio::time::sleep(Duration::from_secs(PERIODIC_SECS)) => {}
             // A local edit happened. Debounce so a burst collapses into one pass.
             _ = state.sync_wake.notified() => {
-                tokio::time::sleep(Duration::from_millis(debounce)).await;
+                tokio::time::sleep(Duration::from_millis(DEBOUNCE_MS)).await;
             }
         }
         run_pass(&app, &state).await;
+    }
+}
+
+/// The notes loop, deliberately separate from the vault one.
+///
+/// Coupling them was the mistake that made notes feel slow: to deliver a note
+/// in a second, the whole vault had to be rebuilt, re-derived and re-applied
+/// every second. Notes now have their own blob and their own cadence, and the
+/// vault is back to its unhurried thirty seconds.
+pub async fn run_notes_loop(state: AppState) {
+    loop {
+        let fast = state.notes_fast.load(Ordering::Relaxed);
+        let period = if fast {
+            NOTES_FAST_SECS
+        } else {
+            NOTES_IDLE_SECS
+        };
+
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(period)) => {}
+            _ = state.notes_wake.notified() => {
+                tokio::time::sleep(Duration::from_millis(NOTES_DEBOUNCE_MS)).await;
+            }
+        }
+        crate::notes_sync::run_pass_quiet(&state).await;
     }
 }

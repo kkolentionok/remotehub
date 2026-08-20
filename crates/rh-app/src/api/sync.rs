@@ -237,6 +237,9 @@ pub async fn sync_oauth_yandex() -> ApiResult<SyncConfigResponse> {
 #[tauri::command]
 #[instrument(level = "debug", skip(app, state))]
 pub async fn sync_refresh(app: AppHandle, state: State<'_, AppState>) -> ApiResult<()> {
+    // Notes first: the button that calls this lives on the notes screen, and
+    // that is what the user is waiting for.
+    crate::notes_sync::run_pass_quiet(&state).await;
     crate::sync_engine::run_pass(&app, &state).await;
     Ok(())
 }

@@ -12,6 +12,7 @@ mod forward_session;
 mod sftp_session;
 mod state;
 mod sync_clock;
+mod notes_sync;
 mod sync_engine;
 mod sync_remote;
 mod tray;
@@ -216,9 +217,12 @@ fn main() {
                     // the original. The actor idles until sync is configured.
                     let sync_state = s.clone();
                     let sync_app = app.handle().clone();
+                    let notes_state = s.clone();
                     let autostart_state = s.clone();
                     app.manage(s);
                     tauri::async_runtime::spawn(crate::sync_engine::run_loop(sync_app, sync_state));
+                    // Notes replicate on their own, much tighter, cadence.
+                    tauri::async_runtime::spawn(crate::sync_engine::run_notes_loop(notes_state));
                     // Bring up any forwards marked auto-start (best-effort).
                     tauri::async_runtime::spawn(async move {
                         crate::api::forwards::autostart_all(autostart_state).await;

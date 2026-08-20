@@ -49,6 +49,7 @@ pub async fn note_create(
     let id = note.id.clone();
     state.notes.create(&note).await?;
     state.stamp_live(KIND_NOTE, id.as_str()).await?;
+    state.notes_wake.notify_one();
     Ok(id)
 }
 
@@ -76,6 +77,7 @@ pub async fn note_update(
     };
     state.notes.update(&note).await?;
     state.stamp_live(KIND_NOTE, note.id.as_str()).await?;
+    state.notes_wake.notify_one();
     Ok(())
 }
 
@@ -84,6 +86,7 @@ pub async fn note_update(
 pub async fn note_delete(state: State<'_, AppState>, id: NoteId) -> ApiResult<()> {
     state.notes.delete(&id).await?;
     state.stamp_deleted(KIND_NOTE, id.as_str()).await?;
+    state.notes_wake.notify_one();
     Ok(())
 }
 
@@ -98,6 +101,7 @@ pub async fn note_set_pinned(
 ) -> ApiResult<()> {
     state.notes.set_pinned(&id, pinned).await?;
     state.stamp_live(KIND_NOTE, id.as_str()).await?;
+    state.notes_wake.notify_one();
     Ok(())
 }
 
@@ -109,7 +113,7 @@ pub async fn note_set_fast_sync(state: State<'_, AppState>, on: bool) -> ApiResu
     state.notes_fast.store(on, Ordering::Relaxed);
     if on {
         // Pull immediately so the screen opens with fresh content.
-        state.sync_wake.notify_one();
+        state.notes_wake.notify_one();
     }
     Ok(())
 }

@@ -27,6 +27,11 @@ const KEYCHAIN_REFRESH_KEY: &str = "sync-refresh";
 /// so the background actor can seal/open the E2E envelope without prompting.
 /// Cleared on logout.
 const KEYCHAIN_VAULT_KEY: &str = "sync-vault-key";
+/// Random key for the notes blob, base64. Separate from the vault key on
+/// purpose: this one is handed to paired devices, the vault key never is.
+const KEYCHAIN_NOTES_KEY: &str = "notes-key";
+/// Notes-scoped bearer token, present only on a device paired by code.
+const KEYCHAIN_NOTES_TOKEN: &str = "notes-token";
 const CONFIG_FILE: &str = "sync-config.json";
 
 /// The managed sync service, used by default on a fresh install. Self-hosters
@@ -153,6 +158,46 @@ pub fn vault_key_set(password: &str) -> Result<(), keyring::Error> {
 /// Forget the cached vault password. Idempotent. Called on logout.
 pub fn vault_key_clear() {
     if let Ok(entry) = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_VAULT_KEY) {
+        let _ = entry.delete_credential();
+    }
+}
+
+/// Read the stored notes key (base64), if this device has one.
+pub fn notes_key_get() -> Option<String> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_NOTES_KEY)
+        .ok()?
+        .get_password()
+        .ok()
+}
+
+/// Store the notes key (base64). Overwrites.
+pub fn notes_key_set(key_b64: &str) -> Result<(), keyring::Error> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_NOTES_KEY)?.set_password(key_b64)
+}
+
+/// Forget the notes key. Idempotent.
+pub fn notes_key_clear() {
+    if let Ok(entry) = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_NOTES_KEY) {
+        let _ = entry.delete_credential();
+    }
+}
+
+/// Read the notes-scoped token (set on a device paired by code).
+pub fn notes_token_get() -> Option<String> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_NOTES_TOKEN)
+        .ok()?
+        .get_password()
+        .ok()
+}
+
+/// Store the notes-scoped token. Overwrites.
+pub fn notes_token_set(token: &str) -> Result<(), keyring::Error> {
+    keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_NOTES_TOKEN)?.set_password(token)
+}
+
+/// Forget the notes-scoped token (unpair this device). Idempotent.
+pub fn notes_token_clear() {
+    if let Ok(entry) = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_NOTES_TOKEN) {
         let _ = entry.delete_credential();
     }
 }
@@ -448,6 +493,9 @@ pub async fn api_request(
 pub struct ServerRemote {
     client: reqwest::Client,
     base_url: String,
+    /// Resource path — `/v1/vault` or `/v1/notes`. Both speak the identical
+    /// blob+rev+If-Match protocol, so one transport covers them.
+    path: &'static str,
     /// Current access token. Swapped in place when refreshed, so `&self`
     /// methods (the `SyncRemote` trait) can renew it transparently.
     token: tokio::sync::Mutex<String>,
@@ -460,6 +508,20 @@ impl ServerRemote {
         Self {
             client: http_client(),
             base_url,
+            path: "/v1/vault",
+            token: tokio::sync::Mutex::new(token),
+            refresh,
+        }
+    }
+
+    /// Same transport pointed at the notes blob. `token` may be a full account
+    /// token or a notes-scoped one — the server accepts either here, and only
+    /// here.
+    pub fn new_notes(base_url: String, token: String, refresh: Option<String>) -> Self {
+        Self {
+            client: http_client(),
+            base_url,
+            path: "/v1/notes",
             token: tokio::sync::Mutex::new(token),
             refresh,
         }
@@ -500,7 +562,7 @@ struct PutResult {
 #[async_trait::async_trait]
 impl SyncRemote for ServerRemote {
     async fn pull(&self) -> Result<Option<RemoteBlob>, VaultError> {
-        let url = format!("{}/v1/vault", self.base_url);
+        let url = format!("{}{}", self.base_url, self.path);
         let token = self.current_token().await;
         let mut resp = self
             .client
@@ -546,7 +608,7 @@ impl SyncRemote for ServerRemote {
         let blob_b64 = std::str::from_utf8(bytes)
             .map_err(|_| VaultError::Transport("blob is not UTF-8".to_string()))?
             .to_string();
-        let url = format!("{}/v1/vault", self.base_url);
+        let url = format!("{}{}", self.base_url, self.path);
 
         // Build the PUT fresh each attempt (the body/headers are consumed on send).
         let build = |token: &str| {

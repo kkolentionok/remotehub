@@ -272,6 +272,13 @@ pub struct SyncSnapshot {
     /// snapshot. Lets a receiver fold it into its own clock.
     pub generated: Hlc,
     pub records: Vec<SyncRecord>,
+    /// Random key for the *notes* blob, base64. Rides inside the (already
+    /// sealed) vault snapshot so every signed-in device ends up with the same
+    /// one without a second password. `default` keeps older snapshots
+    /// readable; a client that predates notes simply drops the field, which is
+    /// why `merge` prefers whichever side actually has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes_key_b64: Option<String>,
 }
 
 impl SyncSnapshot {
@@ -282,6 +289,7 @@ impl SyncSnapshot {
             node,
             generated,
             records,
+            notes_key_b64: None,
         }
     }
 
