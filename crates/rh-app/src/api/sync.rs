@@ -9,7 +9,7 @@
 //! status for first paint. The master password seals/opens the E2E envelope and
 //! is cached only in the OS keychain; the bearer token comes from there too.
 
-use rh_vault::HlcGenerator;
+use rh_vault::{HlcGenerator, SyncRemote};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tracing::instrument;
@@ -225,6 +225,36 @@ pub async fn sync_oauth_yandex() -> ApiResult<SyncConfigResponse> {
     })
 }
 
+/// Run one sync pass right now and return when it has finished.
+///
+/// The engine is automatic; this exists for the moments it isn't fast enough —
+/// the user watching a note that hasn't arrived yet wants a button, not faith.
+/// Status events fire exactly as they do for a background pass.
+#[tauri::command]
+#[instrument(level = "debug", skip(app, state))]
+pub async fn sync_refresh(app: AppHandle, state: State<'_, AppState>) -> ApiResult<()> {
+    crate::sync_engine::run_pass(&app, &state).await;
+    Ok(())
+}
+
+/// Order-independent fingerprint of a record set. Two snapshots holding the
+/// same records fingerprint alike regardless of the order they were assembled
+/// in (`build_snapshot` appends by entity type, `merge` emits sorted), so an
+/// idle device produces a stable value pass after pass.
+fn fingerprint(records: &[rh_vault::SyncRecord]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut parts: Vec<String> = records
+        .iter()
+        .filter_map(|r| serde_json::to_string(r).ok())
+        .collect();
+    parts.sort_unstable();
+    let mut h = DefaultHasher::new();
+    parts.hash(&mut h);
+    h.finish()
+}
+
 /// Core sync pass, shared by the background actor and `sync_set_master`:
 /// build local snapshot → engine (pull/merge/seal/push, conflict-retry) →
 /// apply merged back to storage. Never holds the clock lock across network I/O.
@@ -241,6 +271,35 @@ pub(crate) async fn run_sync_core(
     );
 
     let local = crate::api::vault::build_snapshot(state).await?;
+    let local_fp = fingerprint(&local.records);
+
+    // Cheap idle path. A full pass costs two Argon2id derivations (64 MiB each)
+    // plus a rewrite of every record — far too much to repeat every couple of
+    // seconds while the notes screen polls. If our records are byte-identical
+    // to what we last applied AND the server is still on the version we last
+    // saw, there is provably nothing to do: bail out after one small GET,
+    // before any key derivation.
+    {
+        let seen = state.sync_seen.lock().await.clone();
+        if let Some((seen_version, seen_fp)) = seen {
+            if seen_fp == local_fp {
+                if let Ok(Some(blob)) = remote.pull().await {
+                    if blob.version == seen_version {
+                        return Ok(SyncNowResponse {
+                            had_remote: true,
+                            pushed_version: seen_version,
+                            hosts: 0,
+                            groups: 0,
+                            credentials: 0,
+                            snippets: 0,
+                            notes: 0,
+                            deleted: 0,
+                        });
+                    }
+                }
+            }
+        }
+    }
 
     let seed = state.sync.last().await;
     let mut clock = HlcGenerator::new(seed);
@@ -252,6 +311,10 @@ pub(crate) async fn run_sync_core(
     state.sync.observe(clock.last()).await;
 
     let counts = crate::api::vault::apply_snapshot(state, &report.merged).await?;
+    {
+        let mut seen = state.sync_seen.lock().await;
+        *seen = Some((report.version.clone(), fingerprint(&report.merged.records)));
+    }
     Ok(SyncNowResponse {
         had_remote: report.had_remote,
         pushed_version: report.version,

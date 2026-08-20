@@ -311,6 +311,7 @@ fn main() {
             api::notes::note_delete,
             api::notes::note_set_pinned,
             api::notes::note_set_fast_sync,
+            api::sync::sync_refresh,
             api::snippets::snippet_list,
             api::snippets::snippet_create,
             api::snippets::snippet_update,

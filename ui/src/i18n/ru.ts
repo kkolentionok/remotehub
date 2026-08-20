@@ -197,6 +197,7 @@ export const messages: Partial<Record<keyof typeof enMessages, string>> = {
     "tools.notes.desc": "Живой блокнот на всех устройствах с твоим аккаунтом — вставил команду здесь, забрал там.",
     "tools.notes.sub": "Общий блокнот, синхронный между устройствами",
     "tools.notes.search": "Поиск по заметкам",
+    "tools.notes.refresh": "Обновить сейчас",
     "tools.notes.count": "{n} заметок",
     "tools.notes.group.pinned": "Закреплённые",
     "tools.notes.group.today": "Сегодня",

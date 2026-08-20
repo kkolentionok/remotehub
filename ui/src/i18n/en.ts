@@ -202,6 +202,7 @@ export const messages = {
     "tools.notes.desc": "A live scratchpad shared across your signed-in devices — paste a command here, pick it up there.",
     "tools.notes.sub": "Shared scratchpad, synced across your devices",
     "tools.notes.search": "Search notes",
+    "tools.notes.refresh": "Refresh now",
     "tools.notes.count": "{n} notes",
     "tools.notes.group.pinned": "Pinned",
     "tools.notes.group.today": "Today",

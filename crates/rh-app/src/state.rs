@@ -77,6 +77,10 @@ pub struct AppState {
     /// a much tighter cadence (see `sync_engine::FAST_SECS`) so notes typed on
     /// one device appear on another within seconds instead of half a minute.
     pub notes_fast: Arc<AtomicBool>,
+    /// Last completed pass: `(remote version, fingerprint of the applied
+    /// records)`. Lets a pass bail out after a single cheap GET when neither
+    /// side moved — see `api::sync::run_sync_core`.
+    pub sync_seen: Arc<Mutex<Option<(String, u64)>>>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -143,6 +147,7 @@ impl AppState {
             sync_status: Arc::new(Mutex::new(SyncStatusSnapshot::default())),
             sync_master_mem: Arc::new(Mutex::new(None)),
             notes_fast: Arc::new(AtomicBool::new(false)),
+            sync_seen: Arc::new(Mutex::new(None)),
         }
     }
 

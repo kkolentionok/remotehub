@@ -33,7 +33,7 @@ const PERIODIC_SECS: u64 = 30;
 /// Tight cadence used while the Notes screen is open (`AppState::notes_fast`).
 /// Notes are a live scratchpad shared across devices, so half a minute of lag
 /// is unusable; a pass is cheap (one small blob in, one out).
-const FAST_SECS: u64 = 3;
+const FAST_SECS: u64 = 2;
 /// After a local edit wakes us, wait this long (collapsing further edits)
 /// before pushing, so rapid successive saves become one sync.
 const DEBOUNCE_MS: u64 = 1_500;
@@ -108,7 +108,7 @@ async fn ready(state: &AppState) -> Option<(String, String, String)> {
 
 /// Run one sync pass if configured and not already running. Silent + cheap when
 /// not configured (no event, status untouched).
-async fn run_pass(app: &AppHandle, state: &AppState) {
+pub(crate) async fn run_pass(app: &AppHandle, state: &AppState) {
     let Some((endpoint, token, master)) = ready(state).await else {
         return; // not signed in / no master yet — stay quiet
     };

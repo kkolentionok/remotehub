@@ -497,6 +497,8 @@ export const vault = {
 // =====================================================================
 
 export const sync = {
+    /** Run one sync pass now; resolves when it has finished. */
+    refresh: (): Promise<void> => call("sync_refresh"),
     /** Current endpoint/account + whether a bearer token is stored. */
     getConfig: (): Promise<SyncConfigResponse> => call("sync_get_config"),
     /** Set the server base URL. */

@@ -24,7 +24,7 @@ use rh_core::{
 };
 use rh_vault::{
     from_export_string, merge, open_envelope, seal_snapshot, to_export_string, EntityKind, Hlc,
-    NodeId, SyncCredentialPayload, SyncRecord, SyncSnapshot, VaultError,
+    NodeId, RecordMeta, SyncCredentialPayload, SyncRecord, SyncSnapshot, VaultError,
 };
 use tauri::State;
 use tracing::instrument;
@@ -188,6 +188,33 @@ pub(crate) struct ImportCounts {
     pub(crate) deleted: u32,
 }
 
+/// Whether local provenance for `(kind, id)` is already at least as new as
+/// `rec`, in which case the record must NOT be applied.
+///
+/// Two cases collapse into one rule:
+/// * **equal** — we applied this exact revision on an earlier pass; rewriting
+///   it would re-touch SQLite and (for credentials) the OS keychain on every
+///   single pass for no reason.
+/// * **local is newer** — an edit or a delete landed *after* this snapshot was
+///   built. That is not hypothetical: a pass reads the local snapshot, then
+///   spends network + Argon2 time before applying the merge, and at the notes
+///   cadence a delete lands inside that window regularly. Applying anyway
+///   re-created the row *and* `bump()` cleared its tombstone, so the deletion
+///   was lost permanently and the resurrected note was pushed back to every
+///   device. Skipping leaves the tombstone intact; the next pass pushes it.
+async fn local_is_current(
+    state: &AppState,
+    kind: &str,
+    id: &str,
+    rec: &SyncRecord,
+) -> ApiResult<bool> {
+    let Some(s) = state.sync_meta.stamp_of(kind, id).await? else {
+        return Ok(false);
+    };
+    let local = RecordMeta::new(Hlc::new(s.rev_wall, s.rev_counter), NodeId::new(s.origin));
+    Ok(!rec.meta.wins_over(&local))
+}
+
 /// Write a merged snapshot back into storage + keychain. See the module doc
 /// for the FK-safe ordering and v1 limitations. Deletions and link reconcile
 /// are best-effort (a single edge — a cycle, a missing FK target from a
@@ -199,6 +226,9 @@ pub(crate) async fn apply_snapshot(state: &AppState, snap: &SyncSnapshot) -> Api
     let mut group_parents: Vec<(GroupId, Option<GroupId>)> = Vec::new();
     for rec in &snap.records {
         if rec.kind != EntityKind::Group || rec.is_deleted() {
+            continue;
+        }
+        if local_is_current(state, KIND_GROUP, &rec.id, rec).await? {
             continue;
         }
         let g: HostGroup = rec.as_group().map_err(vault_err)?;
@@ -223,6 +253,9 @@ pub(crate) async fn apply_snapshot(state: &AppState, snap: &SyncSnapshot) -> Api
     // Phase 2 — credentials (+ secrets to keychain).
     for rec in &snap.records {
         if rec.kind != EntityKind::Credential || rec.is_deleted() {
+            continue;
+        }
+        if local_is_current(state, KIND_CREDENTIAL, &rec.id, rec).await? {
             continue;
         }
         let payload = rec.as_credential().map_err(vault_err)?;
@@ -256,6 +289,9 @@ pub(crate) async fn apply_snapshot(state: &AppState, snap: &SyncSnapshot) -> Api
     let mut host_links: Vec<(HostId, Option<CredentialId>, Option<HostId>)> = Vec::new();
     for rec in &snap.records {
         if rec.kind != EntityKind::Host || rec.is_deleted() {
+            continue;
+        }
+        if local_is_current(state, KIND_HOST, &rec.id, rec).await? {
             continue;
         }
         let h: Host = rec.as_host().map_err(vault_err)?;
@@ -300,6 +336,9 @@ pub(crate) async fn apply_snapshot(state: &AppState, snap: &SyncSnapshot) -> Api
         if rec.kind != EntityKind::Snippet || rec.is_deleted() {
             continue;
         }
+        if local_is_current(state, KIND_SNIPPET, &rec.id, rec).await? {
+            continue;
+        }
         let s: Snippet = rec.as_snippet().map_err(vault_err)?;
         if existing_snips.contains(&s.id.to_string()) {
             state.snippets.update(&s).await?;
@@ -325,6 +364,9 @@ pub(crate) async fn apply_snapshot(state: &AppState, snap: &SyncSnapshot) -> Api
         if rec.kind != EntityKind::Note || rec.is_deleted() {
             continue;
         }
+        if local_is_current(state, KIND_NOTE, &rec.id, rec).await? {
+            continue;
+        }
         let n: Note = rec.as_note().map_err(vault_err)?;
         if existing_notes.contains(&n.id.to_string()) {
             state.notes.update(&n).await?;
@@ -344,6 +386,9 @@ pub(crate) async fn apply_snapshot(state: &AppState, snap: &SyncSnapshot) -> Api
     // the entity-row delete itself is best-effort.
     for rec in &snap.records {
         if rec.kind == EntityKind::Host && rec.is_deleted() {
+            if local_is_current(state, KIND_HOST, &rec.id, rec).await? {
+                continue;
+            }
             let id = HostId::from_raw(rec.id.clone());
             let _ = state.hosts.delete(&id).await;
             state.sync_meta.tombstone(KIND_HOST, &rec.id, &stamp_from(rec)).await?;
@@ -352,6 +397,9 @@ pub(crate) async fn apply_snapshot(state: &AppState, snap: &SyncSnapshot) -> Api
     }
     for rec in &snap.records {
         if rec.kind == EntityKind::Credential && rec.is_deleted() {
+            if local_is_current(state, KIND_CREDENTIAL, &rec.id, rec).await? {
+                continue;
+            }
             let id = CredentialId::from_raw(rec.id.clone());
             let _ = state.credentials.delete(&id).await;
             state.sync_meta.tombstone(KIND_CREDENTIAL, &rec.id, &stamp_from(rec)).await?;
@@ -360,6 +408,9 @@ pub(crate) async fn apply_snapshot(state: &AppState, snap: &SyncSnapshot) -> Api
     }
     for rec in &snap.records {
         if rec.kind == EntityKind::Snippet && rec.is_deleted() {
+            if local_is_current(state, KIND_SNIPPET, &rec.id, rec).await? {
+                continue;
+            }
             let id = SnippetId::from_raw(rec.id.clone());
             let _ = state.snippets.delete(&id).await;
             state
@@ -371,6 +422,9 @@ pub(crate) async fn apply_snapshot(state: &AppState, snap: &SyncSnapshot) -> Api
     }
     for rec in &snap.records {
         if rec.kind == EntityKind::Note && rec.is_deleted() {
+            if local_is_current(state, KIND_NOTE, &rec.id, rec).await? {
+                continue;
+            }
             let id = NoteId::from_raw(rec.id.clone());
             let _ = state.notes.delete(&id).await;
             state
@@ -382,6 +436,9 @@ pub(crate) async fn apply_snapshot(state: &AppState, snap: &SyncSnapshot) -> Api
     }
     for rec in &snap.records {
         if rec.kind == EntityKind::Group && rec.is_deleted() {
+            if local_is_current(state, KIND_GROUP, &rec.id, rec).await? {
+                continue;
+            }
             let id = GroupId::from_raw(rec.id.clone());
             let _ = state.groups.delete(&id).await;
             state.sync_meta.tombstone(KIND_GROUP, &rec.id, &stamp_from(rec)).await?;

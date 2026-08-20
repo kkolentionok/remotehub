@@ -11,6 +11,7 @@ import {
     Paperclip,
     Pin,
     Plus,
+    RefreshCw,
     Search,
     Strikethrough,
     Trash2,
@@ -19,7 +20,7 @@ import {
 } from "lucide-react";
 
 import { useT } from "../../i18n";
-import { notes as notesApi } from "../../lib/ipc";
+import { notes as notesApi, sync as syncApi } from "../../lib/ipc";
 import { formatApiError, type Note } from "../../lib/types";
 import { useDebouncedCallback } from "../../lib/useDebouncedCallback";
 import styles from "./NotesManager.module.css";
@@ -89,6 +90,7 @@ export function NotesPane() {
     const [body, setBody] = useState("");
     const [save, setSave] = useState<SaveState>("idle");
     const [toasts, setToasts] = useState<{ id: number; text: string }[]>([]);
+    const [refreshing, setRefreshing] = useState(false);
     // True between a keystroke and its save landing: the sync refetch must not
     // overwrite what the user is currently typing.
     const dirty = useRef(false);
@@ -184,6 +186,27 @@ export function NotesPane() {
         setSave("idle");
     }
 
+    // Manual pull for when the automatic pass hasn't landed yet.
+    async function refresh() {
+        if (refreshing) return;
+        setRefreshing(true);
+        try {
+            await syncApi.refresh();
+            const list = await load();
+            if (!dirty.current && selectedId) {
+                const fresh = list.find((n) => n.id === selectedId);
+                if (fresh) {
+                    setTitle(fresh.title);
+                    setBody(fresh.body);
+                }
+            }
+        } catch (e) {
+            toast(formatApiError(e));
+        } finally {
+            setRefreshing(false);
+        }
+    }
+
     async function create() {
         debouncedSave.flush();
         try {
@@ -259,6 +282,15 @@ export function NotesPane() {
                         {t("tools.section.notes")}
                     </span>
                     <span className={styles.count}>{items?.length ?? 0}</span>
+                    <button
+                        type="button"
+                        className={styles.iconBtn}
+                        title={t("tools.notes.refresh")}
+                        onClick={() => void refresh()}
+                        disabled={refreshing}
+                    >
+                        <RefreshCw size={14} className={refreshing ? styles.spin : undefined} />
+                    </button>
                 </div>
 
                 <button type="button" className={styles.newBtn} onClick={() => void create()}>
